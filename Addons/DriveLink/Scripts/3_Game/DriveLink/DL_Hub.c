@@ -30,7 +30,8 @@ class DL_ArriveResp
 	string action;            // "transfer" | "redirect" | "normal"
 	string from;
 	string arrival;
-	ref DL_PlayerData payload;
+	string payloadJson;       // the player snapshot EXACTLY as the source server wrote it
+	ref DL_PlayerData payload; // filled from payloadJson by DL_Hub.ParsePayload
 	ref DL_ServerInfo target;
 }
 
@@ -132,6 +133,34 @@ class DL_Hub
 		if (!JsonFileLoader<DL_ArriveReq>.MakeData(q, json, err, false))
 			Print(DL_Const.LOG_TAG + "arrive json: " + err);
 		return json;
+	}
+
+	// M1 test 2026-10-13: arrival rebuilt only part of the gear and logged no "could not restore", i.e. the items
+	// were never in the parsed data. The hub used to hand back its re-ordered JSONB copy; now it returns the
+	// original text, parsed here with JsonFileLoader<T>.LoadData (vanilla 3_game/tools/jsonfileloader.c:69).
+	static DL_PlayerData ParsePayload(string json)
+	{
+		DL_PlayerData d;
+		string err;
+		if (!JsonFileLoader<DL_PlayerData>.LoadData(json, d, err) || !d)
+		{
+			Print(DL_Const.LOG_TAG + "payload unreadable: " + err);
+			return null;
+		}
+		return d;
+	}
+
+	static int CountItems(array<ref DL_ItemData> items)
+	{
+		int n = 0;
+		if (!items)
+			return 0;
+		foreach (DL_ItemData d : items)
+		{
+			if (d)
+				n += 1 + CountItems(d.children);
+		}
+		return n;
 	}
 
 	static string ConfirmJson(DL_ConfirmReq q)

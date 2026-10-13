@@ -341,8 +341,8 @@ func (h *hub) depart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
 		return
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO transfers(token,steam_id,from_server,to_server,arrival,payload,state)
-		VALUES($1,$2,$3,$4,$5,$6,'pending')`, token, q.SteamID, b.ServerID, q.To, q.Arrival, q.Payload); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO transfers(token,steam_id,from_server,to_server,arrival,payload,payload_text,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'pending')`, token, q.SteamID, b.ServerID, q.To, q.Arrival, q.Payload, string(q.Payload)); err != nil {
 		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
 		return
 	}
@@ -389,9 +389,10 @@ func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 
 	var token, from, to, arrival string
 	var payload json.RawMessage
-	err = tx.QueryRow(ctx, `SELECT token,from_server,to_server,arrival,payload FROM transfers
+	var payloadText *string
+	err = tx.QueryRow(ctx, `SELECT token,from_server,to_server,arrival,payload,payload_text FROM transfers
 		WHERE steam_id=$1 AND state='pending' ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, q.SteamID).
-		Scan(&token, &from, &to, &arrival, &payload)
+		Scan(&token, &from, &to, &arrival, &payload, &payloadText)
 	if err == nil {
 		if to != b.ServerID {
 			log.Printf("arrive %s on %s: travelling to %s, redirect", q.SteamID, b.ServerID, to)
@@ -403,7 +404,13 @@ func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 		// returns the same transfer.
 		tx.Rollback(ctx)
 		log.Printf("arrive %s on %s from %s (%s): transfer offered, waiting for confirm", q.SteamID, b.ServerID, from, arrival)
-		writeJSON(w, 200, map[string]any{"ok": true, "action": "transfer", "token": token, "from": from, "arrival": arrival, "payload": payload})
+		// payloadJson = the exact text the source server sent, as a string (the mod parses it with the same
+		// serializer that wrote it). Older rows without it fall back to the jsonb copy.
+		pt := string(payload)
+		if payloadText != nil {
+			pt = *payloadText
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "action": "transfer", "token": token, "from": from, "arrival": arrival, "payloadJson": pt})
 		return
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {

@@ -18,7 +18,8 @@ modded class MissionServer
 	protected ref DL_Config m_DL_Cfg;
 	protected ref map<string, ref DL_Pending> m_DL_Pending = new map<string, ref DL_Pending>;    // steamId -> hub answer
 	protected ref map<string, int> m_DL_InZoneSince = new map<string, int>;                     // steamId -> ms
-	protected ref map<string, bool> m_DL_Leaving = new map<string, bool>;                                   // steamIds being sent away
+	protected ref map<string, bool> m_DL_Leaving = new map<string, bool>;  // steamIds being sent away (zone check skips them)
+	protected ref map<PlayerBase, bool> m_DL_Doomed = new map<PlayerBase, bool>; // characters that live elsewhere now: delete + CharacterKill on logout
 	protected float m_DL_Tick;
 	protected ref DL_Snapshot m_DL_Snap = new DL_Snapshot();
 
@@ -123,6 +124,16 @@ modded class MissionServer
 			Print(DL_Const.LOG_TAG + "hub answer for " + sid + " unusable: " + err + " " + body.Substring(0, Math.Min(200, body.Length())));
 			return;
 		}
+		if (r.action == "transfer")
+		{
+			r.payload = DL_Hub.ParsePayload(r.payloadJson);
+			if (!r.payload)
+			{
+				p.action = "normal"; // unreadable snapshot: don't build a broken character, transfer stays pending on the hub
+				return;
+			}
+			Print(DL_Const.LOG_TAG + "transfer for " + sid + ": " + r.payloadJson.Length().ToString() + " bytes, " + DL_Hub.CountItems(r.payload.items).ToString() + " items in the snapshot");
+		}
 		p.resp = r;
 		p.action = r.action;
 		Print(DL_Const.LOG_TAG + "hub says " + r.action + " for " + sid);
@@ -193,6 +204,8 @@ modded class MissionServer
 		if (!identity)
 			return;
 		m_DL_Pending.Remove(identity.GetPlainId());
+		// M1 test 2026-10-13: a leaving-flag left from an earlier visit made the zone check skip him forever
+		m_DL_Leaving.Remove(identity.GetPlainId());
 		if (p && p.action == "redirect" && p.resp && p.resp.target)
 		{
 			Print(DL_Const.LOG_TAG + identity.GetPlainId() + " belongs on " + p.resp.target.name + ", redirecting");
@@ -201,7 +214,7 @@ modded class MissionServer
 			if (player)
 			{
 				player.SetAllowDamage(false);
-				m_DL_Leaving.Set(identity.GetPlainId(), true);
+				m_DL_Doomed.Set(player, true);
 			}
 		}
 	}
@@ -246,8 +259,9 @@ modded class MissionServer
 			player.SetAllowDamage(false);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, player);
 		}
+		m_DL_Leaving.Remove(identity.GetPlainId());
 		DL_Confirm(identity.GetPlainId(), r.token);
-		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + r.arrival + " " + pos.ToString() + ", " + made.ToString() + " items, health " + d.health.ToString() + ", cuffed " + d.restrained.ToString());
+		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + r.arrival + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored, health " + d.health.ToString() + ", cuffed " + d.restrained.ToString());
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
 		return player;
 	}
@@ -393,6 +407,7 @@ modded class MissionServer
 			return;
 		}
 		DL_SendRedirect(pb.GetIdentity(), r.target, "zone");
+		m_DL_Doomed.Set(pb, true);
 		Print(DL_Const.LOG_TAG + sid + " handed over to " + r.target.name + ", removing the character here");
 		// give the RPC a moment to reach the client, then remove the character WITHOUT killing it (nothing may
 		// stay behind: no body, no dropped gear)
@@ -401,7 +416,11 @@ modded class MissionServer
 
 	protected void DL_RemoveTraveller(string sid)
 	{
-		DL_Forget(DL_FindPlayer(sid));
+		PlayerBase pb = DL_FindPlayer(sid);
+		m_DL_Leaving.Remove(sid);
+		if (pb)
+			m_DL_Doomed.Remove(pb);
+		DL_Forget(pb);
 	}
 
 	// Remove a character that now lives on another server. It must also be marked dead in THIS server's own
@@ -418,10 +437,10 @@ modded class MissionServer
 
 	override void HandleBody(PlayerBase player)
 	{
-		if (player && player.GetIdentity() && m_DL_Leaving.Contains(player.GetIdentity().GetPlainId()))
+		if (player && m_DL_Doomed.Contains(player))
 		{
 			// travelling: never kill (vanilla kills cuffed/unconscious loggers-out) and never leave a body
-			m_DL_Leaving.Remove(player.GetIdentity().GetPlainId());
+			m_DL_Doomed.Remove(player);
 			DL_Forget(player);
 			return;
 		}

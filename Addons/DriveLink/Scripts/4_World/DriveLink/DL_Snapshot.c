@@ -150,7 +150,7 @@ class DL_Snapshot
 				e = CreateOn(parent, d);
 			if (!e)
 			{
-				Print(DL_Const.LOG_TAG + "could not restore " + d.type + " (" + d.slot + ") in " + parent.GetType());
+				Print(DL_Const.LOG_TAG + "could not restore " + d.type + " (" + d.slot + ") in " + parent.GetType() + ", " + DL_Hub.CountItems(d.children).ToString() + " items inside it lost too");
 				continue;
 			}
 			made++;
