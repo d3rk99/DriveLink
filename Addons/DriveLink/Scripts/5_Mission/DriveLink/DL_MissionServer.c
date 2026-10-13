@@ -143,20 +143,48 @@ modded class MissionServer
 		return player;
 	}
 
+	// M1 test 2026-10-13: he came back to a server where the game's OWN database still had an alive character for
+	// him (a copy from before he left, or one we failed to remove). The engine loads that one and sends
+	// ClientReadyEvent with it (missionserver.c:334-350, ClientReadyEventParams = Param2<PlayerIdentity, Man>,
+	// gameplay.c:422). A transfer must win: before vanilla handles the event, swap the loaded copy for the
+	// character built from the transfer, and remove + CharacterKill the copy so it is never loaded again.
+	override void OnEvent(EventType eventTypeId, Param params)
+	{
+		if (eventTypeId == ClientReadyEventTypeID && DL_On())
+		{
+			ClientReadyEventParams rp;
+			Class.CastTo(rp, params);
+			if (rp && rp.param1)
+			{
+				DL_Pending p = m_DL_Pending.Get(rp.param1.GetPlainId());
+				if (p && p.action == "transfer" && p.resp && p.resp.payload)
+				{
+					PlayerBase old = PlayerBase.Cast(rp.param2);
+					Print(DL_Const.LOG_TAG + rp.param1.GetPlainId() + " arrives by transfer; this server had an old character for him, replacing it");
+					m_DL_Pending.Remove(rp.param1.GetPlainId());
+					PlayerBase built = DL_BuildArrival(rp.param1, p.resp, old);
+					if (built)
+					{
+						// vanilla's ClientNew path, so the new character gets the normal connect handling
+						InvokeOnConnect(built, rp.param1);
+						SyncEvents.SendPlayerList();
+						ControlPersonalLight(built);
+						SyncGlobalLighting(built);
+						return;
+					}
+					Print(DL_Const.LOG_TAG + "could not build the transferred character, keeping the old one");
+				}
+			}
+		}
+		super.OnEvent(eventTypeId, params);
+	}
+
 	override void OnClientReadyEvent(PlayerIdentity identity, PlayerBase player)
 	{
 		super.OnClientReadyEvent(identity, player);
 		DL_Pending p;
 		if (DL_On() && identity)
 			p = m_DL_Pending.Get(identity.GetPlainId());
-		if (p && p.action == "transfer")
-		{
-			// He still had a character in this server's own database (e.g. he played here before) AND arrives by
-			// transfer. The transfer wins: remove the old one and send him through a fresh login.
-			// Should not happen any more: when a character leaves a server, DL_Forget marks it dead in that server's
-			// database. If it does (old data from before DriveLink), he keeps the old one and we say so loudly.
-			Print(DL_Const.LOG_TAG + "WARNING " + identity.GetPlainId() + " arrives by transfer but this server still had an ALIVE old character for him; the old one was loaded, the transfer is NOT applied");
-		}
 		DL_AfterLogin(identity, player, p);
 	}
 
@@ -178,7 +206,7 @@ modded class MissionServer
 		}
 	}
 
-	protected PlayerBase DL_BuildArrival(PlayerIdentity identity, DL_ArriveResp r)
+	protected PlayerBase DL_BuildArrival(PlayerIdentity identity, DL_ArriveResp r, PlayerBase oldChar = null)
 	{
 		DL_PlayerData d = r.payload;
 		DL_ArrivalPoint ap = m_DL_Cfg.FindArrival(r.arrival);
@@ -197,6 +225,13 @@ modded class MissionServer
 			yaw = m_DL_Cfg.arrivals[0].yaw;
 		}
 		pos[1] = g_Game.SurfaceY(pos[0], pos[2]);
+		if (oldChar)
+		{
+			// the stale copy must not live on in this server's database (or he gets it back next time)
+			if (GetHive())
+				GetHive().CharacterKill(oldChar);
+			oldChar.Delete();
+		}
 		// CreateCharacter (missionserver.c:486): CreatePlayer + SelectPlayer, same as a fresh spawn but his own body
 		PlayerBase player = CreateCharacter(identity, pos, null, d.charType);
 		if (!player)
@@ -211,9 +246,21 @@ modded class MissionServer
 			player.SetAllowDamage(false);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, player);
 		}
+		DL_Confirm(identity.GetPlainId(), r.token);
 		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + r.arrival + " " + pos.ToString() + ", " + made.ToString() + " items, health " + d.health.ToString() + ", cuffed " + d.restrained.ToString());
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
 		return player;
+	}
+
+	// Tell the hub the character exists here now (hub /api/confirm claims the transfer + sets the owner).
+	protected void DL_Confirm(string sid, string token)
+	{
+		DL_ConfirmReq c = new DL_ConfirmReq();
+		c.serverId = m_DL_Cfg.serverId;
+		c.key = m_DL_Cfg.hubKey;
+		c.steamId = sid;
+		c.token = token;
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/confirm?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ConfirmJson(c), new DL_ConfirmWaiter(sid), "OnAnswer", "confirm " + sid);
 	}
 
 	// Object.SetAllowDamage is proto native (3_game/entities/object.c:1192); call it from a script method for the queue.
@@ -415,6 +462,19 @@ class DL_HelloWaiter : Managed
 	protected MissionServer m_M;
 	void DL_HelloWaiter(MissionServer m) { m_M = m; }
 	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_OnHello(ok, body); }
+}
+
+class DL_ConfirmWaiter : Managed
+{
+	protected string m_Sid;
+	void DL_ConfirmWaiter(string sid) { m_Sid = sid; }
+	void OnAnswer(bool ok, string body)
+	{
+		if (ok)
+			Print(DL_Const.LOG_TAG + "hub confirmed arrival of " + m_Sid);
+		else
+			Print(DL_Const.LOG_TAG + "WARNING hub did NOT confirm arrival of " + m_Sid + " (see hub window)");
+	}
 }
 
 // These also carry the steam id along.

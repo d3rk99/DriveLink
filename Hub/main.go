@@ -398,14 +398,12 @@ func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, map[string]any{"ok": true, "action": "redirect", "target": toOut(h.cfg.server(to))})
 			return
 		}
-		tx.Exec(ctx, `UPDATE transfers SET state='claimed', claimed_at=now() WHERE token=$1`, token)
-		tx.Exec(ctx, `UPDATE characters SET owner_server=$2, updated_at=now() WHERE steam_id=$1`, q.SteamID, b.ServerID)
-		if err := tx.Commit(ctx); err != nil {
-			writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
-			return
-		}
-		log.Printf("arrive %s on %s from %s (%s): transfer claimed", q.SteamID, b.ServerID, from, arrival)
-		writeJSON(w, 200, map[string]any{"ok": true, "action": "transfer", "from": from, "arrival": arrival, "payload": payload})
+		// Two-phase (M1 test 2026-10-13: the hub claimed before the character existed). The transfer stays
+		// pending until the target server confirms it BUILT the character (/api/confirm). Asking again (reconnect)
+		// returns the same transfer.
+		tx.Rollback(ctx)
+		log.Printf("arrive %s on %s from %s (%s): transfer offered, waiting for confirm", q.SteamID, b.ServerID, from, arrival)
+		writeJSON(w, 200, map[string]any{"ok": true, "action": "transfer", "token": token, "from": from, "arrival": arrival, "payload": payload})
 		return
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -431,6 +429,50 @@ func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("arrive %s on %s: normal login, owner set", q.SteamID, b.ServerID)
 	writeJSON(w, 200, map[string]any{"ok": true, "action": "normal"})
+}
+
+type confirmReq struct {
+	baseReq
+	SteamID string `json:"steamId"`
+	Token   string `json:"token"`
+}
+
+// POST /api/confirm  the target server built the character from this transfer: claim it, it owns him now.
+func (h *hub) confirm(w http.ResponseWriter, r *http.Request) {
+	var b baseReq
+	var q confirmReq
+	if !h.decode(w, r, &q, &b) {
+		return
+	}
+	ctx := r.Context()
+	tx, err := h.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+		return
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE transfers SET state='claimed', claimed_at=now()
+		WHERE token=$1 AND steam_id=$2 AND to_server=$3 AND state='pending'`, q.Token, q.SteamID, b.ServerID)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+		return
+	}
+	if tag.RowsAffected() != 1 {
+		log.Printf("confirm REFUSED %s on %s: no pending transfer with that token", q.SteamID, b.ServerID)
+		writeJSON(w, 409, map[string]any{"ok": false, "error": "no pending transfer with that token"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO characters(steam_id,owner_server,updated_at) VALUES($1,$2,now())
+		ON CONFLICT (steam_id) DO UPDATE SET owner_server=$2, updated_at=now()`, q.SteamID, b.ServerID); err != nil {
+		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+		return
+	}
+	log.Printf("confirm %s on %s: transfer claimed, owner set", q.SteamID, b.ServerID)
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func main() {
@@ -478,6 +520,7 @@ func main() {
 	mux.HandleFunc("/api/hello", h.hello)
 	mux.HandleFunc("/api/depart", h.depart)
 	mux.HandleFunc("/api/arrive", h.arrive)
+	mux.HandleFunc("/api/confirm", h.confirm)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Ping(r.Context()); err != nil {
 			writeJSON(w, 503, map[string]any{"ok": false, "error": "database down"})

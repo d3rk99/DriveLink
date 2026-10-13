@@ -14,10 +14,19 @@ class DL_ArriveReq
 	string steamId;
 }
 
+class DL_ConfirmReq
+{
+	string serverId;
+	string key;
+	string steamId;
+	string token;
+}
+
 class DL_ArriveResp
 {
 	bool ok;
 	string error;
+	string token;             // transfer token, sent back in /api/confirm once the character is built
 	string action;            // "transfer" | "redirect" | "normal"
 	string from;
 	string arrival;
@@ -122,6 +131,15 @@ class DL_Hub
 		string err;
 		if (!JsonFileLoader<DL_ArriveReq>.MakeData(q, json, err, false))
 			Print(DL_Const.LOG_TAG + "arrive json: " + err);
+		return json;
+	}
+
+	static string ConfirmJson(DL_ConfirmReq q)
+	{
+		string json;
+		string err;
+		if (!JsonFileLoader<DL_ConfirmReq>.MakeData(q, json, err, false))
+			Print(DL_Const.LOG_TAG + "confirm json: " + err);
 		return json;
 	}
 
