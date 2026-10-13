@@ -49,3 +49,8 @@ never been compiled by DayZ. Expect compile errors on the first boot; send me th
 
 ## Report
 Pass/fail per step, all SCRIPT (E) lines (server + client logs), the hub window text, and the inventory screenshots.
+
+## JSON self test (after e37611b, debug)
+Copy the files from Tests\selftest\ into BOTH servers' <profiles>\DriveLink\selftest\ folder, restart the servers.
+Each server logs one line per file: `[DriveLink] SELFTEST t1_exact.json (N chars): 1/0, items N <error>`.
+They are variants of the snapshot that failed (t1 = exactly the failing text). Send all SELFTEST lines.
