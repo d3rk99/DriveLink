@@ -65,7 +65,7 @@ modded class MissionServer
 			DL_ArriveReq h = new DL_ArriveReq();
 			h.serverId = m_DL_Cfg.serverId;
 			h.key = m_DL_Cfg.hubKey;
-			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ToJson(h), this, "DL_OnHello", "hello");
+			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ToJson(h), new DL_HelloWaiter(this), "OnAnswer", "hello");
 		}
 		Print(DL_Const.LOG_TAG + "v0.1 server '" + m_DL_Cfg.serverId + "', hub " + m_DL_Cfg.hubUrl + ", " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points, key set " + (m_DL_Cfg.hubKey != "").ToString());
 	}
@@ -403,7 +403,16 @@ modded class MissionServer
 	}
 }
 
-// The hub callback hands back (ok, body); these carry the steam id along.
+// The hub callback target must be a Managed object (DL_Hub.Post); MissionServer is not one (8b74f1f compile error
+// "Types 'MissionServer' and 'Managed' are unrelated"), so these small helpers carry the answer back to it.
+class DL_HelloWaiter : Managed
+{
+	protected MissionServer m_M;
+	void DL_HelloWaiter(MissionServer m) { m_M = m; }
+	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_OnHello(ok, body); }
+}
+
+// These also carry the steam id along.
 class DL_ArriveWaiter : Managed
 {
 	protected MissionServer m_M;

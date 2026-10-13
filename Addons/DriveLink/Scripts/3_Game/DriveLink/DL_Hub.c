@@ -46,7 +46,7 @@ class DL_DepartResp
 // Calls back <target>.<fn>(bool ok, string body) once, on success, error or timeout.
 class DL_HubCallback : RestCallback
 {
-	protected Managed m_Target;
+	protected ref Managed m_Target;   // strong ref: the waiter objects are made inline and nothing else holds them
 	protected string m_Fn;
 	protected string m_What;
 	protected bool m_Done;
