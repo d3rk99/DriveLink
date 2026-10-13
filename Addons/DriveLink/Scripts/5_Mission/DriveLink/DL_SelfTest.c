@@ -36,7 +36,18 @@ modded class MissionServer
 			int n = -1;
 			if (ok && d)
 				n = DL_Hub.CountItems(d.items);
-			Print(DL_Const.LOG_TAG + "SELFTEST " + name + " (" + json.Length().ToString() + " chars): " + ok.ToString() + ", items " + n.ToString() + " " + err);
+			// also count without any recursion: top items + their direct children (ground truth for CountItems)
+			int flat = -1;
+			if (ok && d && d.items)
+			{
+				flat = d.items.Count();
+				for (int k = 0; k < d.items.Count(); k++)
+				{
+					if (d.items[k] && d.items[k].children)
+						flat += d.items[k].children.Count();
+				}
+			}
+			Print(DL_Const.LOG_TAG + "SELFTEST " + name + " (" + json.Length().ToString() + " chars): " + ok.ToString() + ", items " + n.ToString() + ", counted flat " + flat.ToString() + " " + err);
 			more = FindNextFile(h, name, attr);
 		}
 		CloseFindFile(h);

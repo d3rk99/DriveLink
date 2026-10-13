@@ -54,3 +54,4 @@ Pass/fail per step, all SCRIPT (E) lines (server + client logs), the hub window 
 Copy the files from Tests\selftest\ into BOTH servers' <profiles>\DriveLink\selftest\ folder, restart the servers.
 Each server logs one line per file: `[DriveLink] SELFTEST t1_exact.json (N chars): 1/0, items N <error>`.
 They are variants of the snapshot that failed (t1 = exactly the failing text). Send all SELFTEST lines.
+Expected after the foreach fix: t1-t6 items 11 (counted flat 11), t7 1, t8 4.

@@ -139,8 +139,12 @@ class DL_Snapshot
 		int made = 0;
 		if (!parent || !items)
 			return 0;
-		foreach (DL_ItemData d : items)
+		// Index loop, NOT foreach: foreach in this recursive function stopped after the first element (self test
+		// 0cd3377: 4 flat items -> 1), which is why arriving players lost most of their gear.
+		int count = items.Count();
+		for (int i = 0; i < count; i++)
 		{
+			DL_ItemData d = items[i];
 			if (!d)
 				continue;
 			EntityAI e;

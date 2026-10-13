@@ -155,8 +155,12 @@ class DL_Hub
 		int n = 0;
 		if (!items)
 			return 0;
-		foreach (DL_ItemData d : items)
+		// Index loop, NOT foreach: in the 0cd3377 self test a recursive function using foreach stopped after the
+		// first element (4 flat items counted as 1). Never use foreach in a function that calls itself.
+		int count = items.Count();
+		for (int i = 0; i < count; i++)
 		{
+			DL_ItemData d = items[i];
 			if (d)
 				n += 1 + CountItems(d.children);
 		}
