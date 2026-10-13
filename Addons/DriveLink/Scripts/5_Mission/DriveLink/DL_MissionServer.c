@@ -81,7 +81,7 @@ modded class MissionServer
 		q.serverId = m_DL_Cfg.serverId;
 		q.key = m_DL_Cfg.hubKey;
 		q.steamId = sid;
-		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/arrive", DL_Hub.ToJson(q), new DL_ArriveWaiter(this, sid), "OnAnswer", "arrive " + sid);
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/arrive?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ToJson(q), new DL_ArriveWaiter(this, sid), "OnAnswer", "arrive " + sid);
 		// the client keeps loading while we wait; give the hub time before the character is made
 		if (preloadTimeout < 10)
 			preloadTimeout = 10;
@@ -295,7 +295,7 @@ modded class MissionServer
 		q.arrival = z.arrival;
 		q.payload = m_DL_Snap.Capture(pb);
 		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " top items");
-		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart", DL_Hub.ToJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ToJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
 	}
 
 	void DL_OnDepartAnswer(string sid, bool ok, string body)

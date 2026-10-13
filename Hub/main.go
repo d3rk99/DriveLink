@@ -190,6 +190,21 @@ func toOut(s *ServerEntry) *serverOut {
 	return &serverOut{s.ID, s.Name, s.LanHost, s.PublicHost, s.Port, s.Password}
 }
 
+// First 160 bytes of a request body for the log, with any "key" value masked.
+func preview(b []byte) string {
+	s := string(b)
+	if i := strings.Index(s, `"key":"`); i >= 0 {
+		j := strings.Index(s[i+7:], `"`)
+		if j >= 0 {
+			s = s[:i+7] + "***" + s[i+7+j:]
+		}
+	}
+	if len(s) > 160 {
+		s = s[:160] + "..."
+	}
+	return s
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -208,11 +223,20 @@ func (h *hub) decode(w http.ResponseWriter, r *http.Request, v any, base *baseRe
 		return false
 	}
 	if err := json.Unmarshal(body, base); err != nil {
+		log.Printf("refused %s from %s: bad json (%v), body starts %q", r.URL.Path, r.RemoteAddr, err, preview(body))
 		writeJSON(w, 400, map[string]any{"ok": false, "error": "bad json"})
 		return false
 	}
+	// The DayZ mod also puts serverId + key in the URL (M1 retest 2026-10-13: the body's key never matched).
+	if base.Key == "" {
+		base.Key = r.URL.Query().Get("key")
+	}
+	if base.ServerID == "" {
+		base.ServerID = r.URL.Query().Get("serverId")
+	}
 	if subtle.ConstantTimeCompare([]byte(base.Key), []byte(h.cfg.ServerKey)) != 1 {
-		log.Printf("refused %s from %s: wrong key", r.URL.Path, r.RemoteAddr)
+		// never print the key itself, only enough to see what arrived
+		log.Printf("refused %s from %s: wrong key (got %d chars, serverId %q), body starts %q", r.URL.Path, r.RemoteAddr, len(base.Key), base.ServerID, preview(body))
 		writeJSON(w, 401, map[string]any{"ok": false, "error": "wrong key"})
 		return false
 	}

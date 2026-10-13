@@ -1,5 +1,12 @@
 # M1 - walk across (on foot), Chernarus 2302 <-> Livonia 2402, same PC
 
+## Retest after bdd4828 (commit with "wrong key" fix)
+Rebuild the HUB too (Tools\build-hub.ps1, restart it) AND the mod. The hub now also reads serverId/key from the URL
+and logs `wrong key (got N chars, serverId "...") body starts {...}` (key masked) if it still refuses.
+BattlEye kick: test with BattlEye OFF on both test servers (serverDZ.cfg BattlEye = 0;) and start the client WITHOUT
+BattlEye (DayZ_x64.exe, not DayZ_BE.exe) - our client mod reconnects by itself, which BattlEye may not like on an
+unsigned dev setup. Keep the server keys + signing as they are.
+
 Pull main. NOTHING here is tested in game yet: the scripts are written against the vanilla 1.29 sources but have
 never been compiled by DayZ. Expect compile errors on the first boot; send me the exact SCRIPT (E) lines.
 

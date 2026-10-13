@@ -4,14 +4,13 @@
 // which only sets Content-Type (:136-141) - so the hub key goes in the JSON body.
 // RestCallback: OnSuccess(data, size) / OnError(code) / OnTimeout() (:50-90).
 
-class DL_HubBase
+// M1 retest (2026-10-13): the hub got "wrong key" although both keys were equal. Suspect: DayZ's JsonSerializer
+// does not write fields inherited from a base class, so serverId/key were missing. Every request class is now flat
+// (no base class), and the key ALSO travels in the URL (?serverId=..&key=..), which the hub accepts as well.
+class DL_ArriveReq
 {
 	string serverId;
 	string key;
-}
-
-class DL_ArriveReq : DL_HubBase
-{
 	string steamId;
 }
 
@@ -26,8 +25,10 @@ class DL_ArriveResp
 	ref DL_ServerInfo target;
 }
 
-class DL_DepartReq : DL_HubBase
+class DL_DepartReq
 {
+	string serverId;
+	string key;
 	string steamId;
 	string to;
 	string arrival;
