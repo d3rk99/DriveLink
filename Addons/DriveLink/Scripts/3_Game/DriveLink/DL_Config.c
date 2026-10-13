@@ -53,33 +53,103 @@ class DL_Config
 	}
 }
 
-// One item, attachments + cargo nested (same shape as PersistentBodies' PB_ItemData, same author).
-class DL_ItemData
+// One round in a magazine / weapon (Magazine.GetCartridgeAtIndex, magazine.c:97; Weapon.GetCartridgeInfo, weapon.c:159).
+class DL_Round
 {
 	string type;
-	string slot;
-	float health01 = 1;
+	float dmg;
+}
+
+// One item. FLAT list on purpose: every item has an id, its parent's id (0 = on the player) and its exact place.
+// No nesting = no recursion anywhere (0cd3377/5e724b0: recursive code lost everything after the first element),
+// and parents always come before their children in the list (LEVELORDER, see DL_Snapshot).
+class DL_ItemData
+{
+	int id;
+	int parent;               // 0 = the player
+	string type;
+	string slot;              // attachment slot name, "#cargo", "#hands"
+	int cIdx = -1;            // cargo position (InventoryLocation.GetIdx/GetRow/GetCol/GetFlip, inventorylocation.c:77-95)
+	int cRow;
+	int cCol;
+	bool cFlip;
+	int quickbar = -1;        // PlayerBase.FindQuickBarEntityIndex (playerbase.c:2218)
+	float health = -1;        // absolute global health
 	float quantity = -1;
-	int ammo = -1;
-	float wet = 0;
-	int liquid = 0;
-	ref array<ref DL_ItemData> children = new array<ref DL_ItemData>;
+	float wet;
+	float temperature = -10000; // -10000 = not saved
+	int liquid;
+	int agents;
+	int cleanness;
+	float energy = -1;        // ComponentEnergyManager.GetEnergy (componentenergymanager.c:1259)
+	bool isOn;
+	int foodStage = -1;       // Edible_Base.GetFoodStageType (edible_base.c:531)
+	ref array<ref DL_Round> rounds;        // magazine contents, in order
+	ref array<ref DL_Round> chambers;      // weapon: per muzzle, "" = empty chamber
+	ref array<ref DL_Round> internalMag;   // weapon: internal magazine rounds (muzzle 0)
+	int muzzle = -1;
+	ref array<int> fireModes;
+}
+
+class DL_Modifier
+{
+	int id;
+	float time;
+}
+
+class DL_Bleeding
+{
+	int bit;
+	int time;
+	int type;
+}
+
+class DL_StomachItem
+{
+	string type;
+	float amount;
+	int stage;
+	int agents;
+	float temperature;
+}
+
+class DL_Zone_Health
+{
+	string zone;
+	float health;
 }
 
 // Everything that travels with a player.
 class DL_PlayerData
 {
-	int version = 1;
+	int version = 2;
 	string charType;          // character class (face/body), e.g. SurvivorM_Mirek
-	float health = 100;       // "" "Health"
-	float blood = 5000;       // "" "Blood"
-	float shock = 0;          // "" "Shock"
-	float water = 1800;       // GetStatWater
-	float energy = 1800;      // GetStatEnergy
+	float health = 100;
+	float blood = 5000;
+	float shock = 0;
+	ref array<ref DL_Zone_Health> zones = new array<ref DL_Zone_Health>;
+	float water = 1800;
+	float energy = 1800;
 	float heatComfort = 0;
-	bool restrained;          // handcuffed / tied (PlayerBase.IsRestrained)
-	string restrainItem;      // the locked restraint item in the hands, e.g. HandcuffsLocked
+	int bloodType = -1;
+	bool bloodTypeVisible;
+	int lifespan;             // beard
+	int lastShaved;
+	int bloodyHands;
+	int brokenLegs;
+	int persistentFlags;
+	float playtime;           // AnalyticsManagerServer stats
+	float killsPlayers;
+	float killsInfected;
+	float distance;
+	float longestShot;
+	bool restrained;
+	string restrainItem;
 	bool unconscious;
+	ref array<ref DL_Modifier> modifiers = new array<ref DL_Modifier>;
+	ref array<ref DL_Modifier> agentPool = new array<ref DL_Modifier>;   // id = agent, time = count
+	ref array<ref DL_Bleeding> bleeding = new array<ref DL_Bleeding>;
+	ref array<ref DL_StomachItem> stomach = new array<ref DL_StomachItem>;
 	ref array<ref DL_ItemData> items = new array<ref DL_ItemData>;
 }
 

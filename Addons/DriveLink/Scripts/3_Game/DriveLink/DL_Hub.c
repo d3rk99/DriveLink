@@ -150,34 +150,12 @@ class DL_Hub
 		return d;
 	}
 
-	// NO recursion here on purpose. 0cd3377 + 5e724b0 self tests on DayZ 1.29: the recursive version stopped after
-	// the first element (4 flat items -> 1, 11 -> 3) with foreach AND with an index loop, while counting without
-	// recursion gave the right numbers. Exact engine cause unknown; both broken functions did `x += Self(...)` inside
-	// their loop (DL_Snapshot's capture recursion, which doesn't, works). So: an explicit work list, front to back.
+	// Items are a flat list since v0.2 (DL_ItemData.parent), so counting is just the list length.
 	static int CountItems(array<ref DL_ItemData> items)
 	{
 		if (!items)
 			return 0;
-		array<DL_ItemData> todo = new array<DL_ItemData>;
-		int k;
-		for (k = 0; k < items.Count(); k++)
-			todo.Insert(items[k]);
-		int n = 0;
-		int pos = 0;
-		while (pos < todo.Count())
-		{
-			DL_ItemData d = todo[pos];
-			pos++;
-			if (!d)
-				continue;
-			n++;
-			if (d.children)
-			{
-				for (k = 0; k < d.children.Count(); k++)
-					todo.Insert(d.children[k]);
-			}
-		}
-		return n;
+		return items.Count();
 	}
 
 	static string ConfirmJson(DL_ConfirmReq q)

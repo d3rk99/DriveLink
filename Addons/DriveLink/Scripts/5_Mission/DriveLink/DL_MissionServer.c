@@ -253,7 +253,10 @@ modded class MissionServer
 			return null;
 		}
 		player.SetOrientation(Vector(yaw, 0, 0));
-		int made = m_DL_Snap.Apply(player, d);
+		int dropped;
+		int made = m_DL_Snap.Apply(player, d, dropped);
+		// weapons whose magazine was attached after them: refresh their state once everything exists
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(m_DL_Snap.FixWeapons, 500, false, player);
 		if (m_DL_Cfg.arrivalProtectSeconds > 0)
 		{
 			player.SetAllowDamage(false);
@@ -261,7 +264,7 @@ modded class MissionServer
 		}
 		m_DL_Leaving.Remove(identity.GetPlainId());
 		DL_Confirm(identity.GetPlainId(), r.token);
-		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + r.arrival + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored, health " + d.health.ToString() + ", cuffed " + d.restrained.ToString());
+		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + r.arrival + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString());
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
 		return player;
 	}
@@ -371,7 +374,7 @@ modded class MissionServer
 		q.to = z.to;
 		q.arrival = z.arrival;
 		q.payload = m_DL_Snap.Capture(pb);
-		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " top items");
+		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " items, " + q.payload.bleeding.Count().ToString() + " bleeding, " + q.payload.modifiers.Count().ToString() + " modifiers");
 		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.DepartJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
 	}
 
