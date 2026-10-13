@@ -7,6 +7,19 @@
 //   health zones "Health"/"Blood"/"Shock" (playerbase.c:1248-1301), IsRestrained/SetRestrained (playerbase.c:2049-2058),
 //   restraint = the locked tool in the hands + SetRestrained(true) (RestrainTargetPlayerLambda, actionrestraintarget.c:208-227).
 
+class DL_RestoreJob
+{
+	EntityAI parent;
+	DL_ItemData data;
+	bool onPlayer;
+	void DL_RestoreJob(EntityAI p, DL_ItemData d, bool isPlayer)
+	{
+		parent = p;
+		data = d;
+		onPlayer = isPlayer;
+	}
+}
+
 class DL_Snapshot
 {
 	protected int m_Count;
@@ -134,21 +147,28 @@ class DL_Snapshot
 		return made;
 	}
 
-	protected int RestoreList(EntityAI parent, array<ref DL_ItemData> items, bool isPlayer)
+	// NO recursion (see DL_Hub.CountItems): a work list of (parent, item). Parents are always handled before their
+	// children because children are only added after their parent was created.
+	protected int RestoreList(EntityAI root, array<ref DL_ItemData> items, bool isPlayer)
 	{
 		int made = 0;
-		if (!parent || !items)
+		if (!root || !items)
 			return 0;
-		// Index loop, NOT foreach: foreach in this recursive function stopped after the first element (self test
-		// 0cd3377: 4 flat items -> 1), which is why arriving players lost most of their gear.
-		int count = items.Count();
-		for (int i = 0; i < count; i++)
+		array<ref DL_RestoreJob> todo = new array<ref DL_RestoreJob>;
+		int k;
+		for (k = 0; k < items.Count(); k++)
+			todo.Insert(new DL_RestoreJob(root, items[k], isPlayer));
+		int pos = 0;
+		while (pos < todo.Count())
 		{
-			DL_ItemData d = items[i];
-			if (!d)
+			DL_RestoreJob job = todo[pos];
+			pos++;
+			DL_ItemData d = job.data;
+			EntityAI parent = job.parent;
+			if (!d || !parent)
 				continue;
 			EntityAI e;
-			if (isPlayer && d.slot == DL_Const.SLOT_HANDS)
+			if (job.onPlayer && d.slot == DL_Const.SLOT_HANDS)
 				e = PlayerBase.Cast(parent).GetHumanInventory().CreateInHands(d.type);
 			else
 				e = CreateOn(parent, d);
@@ -159,7 +179,11 @@ class DL_Snapshot
 			}
 			made++;
 			ApplyState(e, d);
-			made += RestoreList(e, d.children, false);
+			if (d.children)
+			{
+				for (k = 0; k < d.children.Count(); k++)
+					todo.Insert(new DL_RestoreJob(e, d.children[k], false));
+			}
 		}
 		return made;
 	}
