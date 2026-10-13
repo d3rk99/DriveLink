@@ -3,3 +3,4 @@ Hub/hub.json
 Hub/hub.log
 *.pbo
 *.biprivatekey
+Hub/last-payload.json

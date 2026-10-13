@@ -410,6 +410,7 @@ func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 		if payloadText != nil {
 			pt = *payloadText
 		}
+		pt = plainNumbers(pt)
 		writeJSON(w, 200, map[string]any{"ok": true, "action": "transfer", "token": token, "from": from, "arrival": arrival, "payloadJson": pt})
 		return
 	}
