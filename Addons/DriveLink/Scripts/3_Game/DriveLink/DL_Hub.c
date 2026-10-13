@@ -109,9 +109,9 @@ class DL_Hub
 
 	static string ToJson(Class data)
 	{
-		string out;
+		string json;
 		JsonSerializer js = new JsonSerializer();
-		js.WriteToString(data, false, out);
-		return out;
+		js.WriteToString(data, false, json);
+		return json;
 	}
 }

@@ -30,8 +30,8 @@ class DL_Net
 	{
 		if (!t)
 			return "";
-		bool local = IsLocalAddress(joinedVia) || (t.lanHost != "" && joinedVia == t.lanHost);
-		if (local && t.lanHost != "")
+		bool onLan = IsLocalAddress(joinedVia) || (t.lanHost != "" && joinedVia == t.lanHost);
+		if (onLan && t.lanHost != "")
 			return t.lanHost;
 		if (t.publicHost != "")
 			return t.publicHost;
