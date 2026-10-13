@@ -308,6 +308,7 @@ func (h *hub) depart(w http.ResponseWriter, r *http.Request) {
 	}
 	target := h.cfg.server(q.To)
 	if q.SteamID == "" || target == nil || q.To == b.ServerID || len(q.Payload) == 0 || !json.Valid(q.Payload) {
+		log.Printf("depart refused: steamId %q, to %q (known %v), from %q, payload %d bytes", q.SteamID, q.To, target != nil, b.ServerID, len(q.Payload))
 		writeJSON(w, 400, map[string]any{"ok": false, "error": "need steamId, a different known target server and a JSON payload"})
 		return
 	}
@@ -374,6 +375,7 @@ func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if q.SteamID == "" {
+		log.Printf("arrive refused: no steamId in the body")
 		writeJSON(w, 400, map[string]any{"ok": false, "error": "need steamId"})
 		return
 	}

@@ -65,7 +65,7 @@ modded class MissionServer
 			DL_ArriveReq h = new DL_ArriveReq();
 			h.serverId = m_DL_Cfg.serverId;
 			h.key = m_DL_Cfg.hubKey;
-			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ToJson(h), new DL_HelloWaiter(this), "OnAnswer", "hello");
+			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ArriveJson(h), new DL_HelloWaiter(this), "OnAnswer", "hello");
 		}
 		Print(DL_Const.LOG_TAG + "v0.1 server '" + m_DL_Cfg.serverId + "', hub " + m_DL_Cfg.hubUrl + ", " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points, key set " + (m_DL_Cfg.hubKey != "").ToString());
 	}
@@ -97,7 +97,7 @@ modded class MissionServer
 		q.serverId = m_DL_Cfg.serverId;
 		q.key = m_DL_Cfg.hubKey;
 		q.steamId = sid;
-		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/arrive?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ToJson(q), new DL_ArriveWaiter(this, sid), "OnAnswer", "arrive " + sid);
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/arrive?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ArriveJson(q), new DL_ArriveWaiter(this, sid), "OnAnswer", "arrive " + sid);
 		// the client keeps loading while we wait; give the hub time before the character is made
 		if (preloadTimeout < 10)
 			preloadTimeout = 10;
@@ -111,7 +111,7 @@ modded class MissionServer
 		if (!ok)
 		{
 			p.action = "normal"; // hub down: let the player play here rather than lock him out
-			Print(DL_Const.LOG_TAG + "hub unreachable for " + sid + ", normal login");
+			Print(DL_Const.LOG_TAG + "hub call failed for " + sid + " (refused or unreachable, see the hub window), normal login");
 			return;
 		}
 		DL_ArriveResp r;
@@ -311,7 +311,7 @@ modded class MissionServer
 		q.arrival = z.arrival;
 		q.payload = m_DL_Snap.Capture(pb);
 		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " top items");
-		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ToJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.DepartJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
 	}
 
 	void DL_OnDepartAnswer(string sid, bool ok, string body)
@@ -326,7 +326,8 @@ modded class MissionServer
 		{
 			// Nothing was handed over: he stays here with everything he has.
 			m_DL_Leaving.Remove(sid);
-			string why = "hub not reachable";
+			// RestApi gives the same OnError for "no connection" and "hub said no" (HTTP 4xx), so don't guess.
+			string why = "hub refused or unreachable (see the hub window)";
 			if (r && r.error != "")
 				why = r.error;
 			Print(DL_Const.LOG_TAG + sid + " NOT sent: " + why);
@@ -386,7 +387,11 @@ modded class MissionServer
 		r.target = target;
 		r.reason = reason;
 		ScriptRPC rpc = new ScriptRPC();
-		rpc.Write(DL_Hub.ToJson(r));
+		string json;
+		string err;
+		if (!JsonFileLoader<DL_Redirect>.MakeData(r, json, err, false))
+			Print(DL_Const.LOG_TAG + "redirect json: " + err);
+		rpc.Write(json);
 		rpc.Send(null, DL_Const.RPC_REDIRECT, true, id);
 	}
 

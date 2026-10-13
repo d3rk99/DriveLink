@@ -113,11 +113,25 @@ class DL_Hub
 		ctx.POST(cb, "", json);
 	}
 
-	static string ToJson(Class data)
+	// a8ae263 test: ToJson(Class data) sent "{}" (2 bytes): the serializer only sees the static type Class, which has
+	// no fields. Serialize with the REAL type instead: JsonFileLoader<T>.MakeData(T inputData, out string, out string err, bool pretty)
+	// (vanilla 3_game/tools/jsonfileloader.c:85-96).
+	static string ArriveJson(DL_ArriveReq q)
 	{
 		string json;
-		JsonSerializer js = new JsonSerializer();
-		js.WriteToString(data, false, json);
+		string err;
+		if (!JsonFileLoader<DL_ArriveReq>.MakeData(q, json, err, false))
+			Print(DL_Const.LOG_TAG + "arrive json: " + err);
 		return json;
 	}
+
+	static string DepartJson(DL_DepartReq q)
+	{
+		string json;
+		string err;
+		if (!JsonFileLoader<DL_DepartReq>.MakeData(q, json, err, false))
+			Print(DL_Const.LOG_TAG + "depart json: " + err);
+		return json;
+	}
+
 }
