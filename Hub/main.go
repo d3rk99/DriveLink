@@ -190,6 +190,24 @@ func toOut(s *ServerEntry) *serverOut {
 	return &serverOut{s.ID, s.Name, s.LanHost, s.PublicHost, s.Port, s.Password}
 }
 
+type statusWriter struct {
+	http.ResponseWriter
+	code int
+}
+
+func (s *statusWriter) WriteHeader(c int) { s.code = c; s.ResponseWriter.WriteHeader(c) }
+
+// Every request gets one log line (method, path WITHOUT the query - it can hold the key - status, time), so a
+// DayZ "error 5" can always be matched to what the hub saw, or to nothing (= never arrived).
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, code: 200}
+		next.ServeHTTP(sw, r)
+		log.Printf("%s %s %s -> %d (%d ms, %d bytes in, content-type %q)", r.RemoteAddr, r.Method, r.URL.Path, sw.code, time.Since(start).Milliseconds(), r.ContentLength, r.Header.Get("Content-Type"))
+	})
+}
+
 // First 160 bytes of a request body for the log, with any "key" value masked.
 func preview(b []byte) string {
 	s := string(b)
@@ -214,6 +232,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // decode reads the body into v and checks the key + server id. Returns false (and has answered) on failure.
 func (h *hub) decode(w http.ResponseWriter, r *http.Request, v any, base *baseReq) bool {
 	if r.Method != http.MethodPost {
+		log.Printf("refused %s: method %s", r.URL.Path, r.Method)
 		writeJSON(w, 405, map[string]any{"ok": false, "error": "POST only"})
 		return false
 	}
@@ -241,11 +260,13 @@ func (h *hub) decode(w http.ResponseWriter, r *http.Request, v any, base *baseRe
 		return false
 	}
 	if h.cfg.server(base.ServerID) == nil {
+		log.Printf("refused %s: unknown serverId %q", r.URL.Path, base.ServerID)
 		writeJSON(w, 400, map[string]any{"ok": false, "error": "unknown serverId " + base.ServerID + " (add it to hub.json)"})
 		return false
 	}
 	if v != nil {
 		if err := json.Unmarshal(body, v); err != nil {
+			log.Printf("refused %s: body does not fit (%v), starts %q", r.URL.Path, err, preview(body))
 			writeJSON(w, 400, map[string]any{"ok": false, "error": "bad json: " + err.Error()})
 			return false
 		}
@@ -462,7 +483,7 @@ func main() {
 		}
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
-	srv := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second}
+	srv := &http.Server{Addr: cfg.Listen, Handler: logRequests(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second}
 	log.Printf("DriveLink Hub listening on %s, %d servers", cfg.Listen, len(cfg.Servers))
 	log.Fatal(srv.ListenAndServe())
 }

@@ -59,7 +59,23 @@ modded class MissionServer
 			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
 			Print(DL_Const.LOG_TAG + "wrote example " + DL_Const.CONFIG + " - fill in hubKey, serverId, zones, arrivals");
 		}
+		if (m_DL_Cfg.hubKey != "")
+		{
+			// boot check: one /api/hello so the log says right away whether this server can reach the hub
+			DL_ArriveReq h = new DL_ArriveReq();
+			h.serverId = m_DL_Cfg.serverId;
+			h.key = m_DL_Cfg.hubKey;
+			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ToJson(h), this, "DL_OnHello", "hello");
+		}
 		Print(DL_Const.LOG_TAG + "v0.1 server '" + m_DL_Cfg.serverId + "', hub " + m_DL_Cfg.hubUrl + ", " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points, key set " + (m_DL_Cfg.hubKey != "").ToString());
+	}
+
+	void DL_OnHello(bool ok, string body)
+	{
+		if (ok)
+			Print(DL_Const.LOG_TAG + "hub hello OK: " + body.Substring(0, Math.Min(160, body.Length())));
+		else
+			Print(DL_Const.LOG_TAG + "hub hello FAILED - check hubUrl, that the hub runs, and the hub window/log");
 	}
 
 	protected bool DL_On()

@@ -1,7 +1,7 @@
 // DriveLink - talking to the DriveLink Hub over HTTP (server only).
 // Vanilla RestApi (3_game/http/restapi.c): CreateRestApi/GetRestApi (:181-183), RestApi.GetRestContext (:155),
 // RestApi.SetOption ERESTOPTION_* (:28-35, 3..120 s), RestContext.POST(cb, request, data) (:123) and SetHeader,
-// which only sets Content-Type (:136-141) - so the hub key goes in the JSON body.
+// (whose comment says Content-Type, :136-141, but UniversalApi uses it for its auth token). The key goes in the body + URL.
 // RestCallback: OnSuccess(data, size) / OnError(code) / OnTimeout() (:50-90).
 
 // M1 retest (2026-10-13): the hub got "wrong key" although both keys were equal. Suspect: DayZ's JsonSerializer
@@ -90,6 +90,10 @@ class DL_Hub
 {
 	protected static ref array<ref DL_HubCallback> s_Alive = new array<ref DL_HubCallback>;
 
+	// M1 retest 2 (2026-10-13): every call ended in OnError(5) = EREST_ERROR (restapi.c:16) and the hub logged
+	// nothing. Changed to the pattern a working mod uses (DaemonForge UniversalApi UniversalRest.c:14-22, read only):
+	// the WHOLE url goes into GetRestContext and the request part of POST stays "". No SetHeader call: the hub
+	// reads the body as JSON whatever the content type is.
 	static void Post(string baseUrl, string path, string json, Managed target, string fn, string what)
 	{
 		RestApi api = GetRestApi();
@@ -99,13 +103,14 @@ class DL_Hub
 			api.SetOption(ERestOption.ERESTOPTION_READOPERATION, 15);
 			api.SetOption(ERestOption.ERESTOPTION_CONNECTION, 5);
 		}
-		RestContext ctx = api.GetRestContext(baseUrl);
-		ctx.SetHeader("application/json");
+		string url = baseUrl + path;
+		RestContext ctx = api.GetRestContext(url);
 		DL_HubCallback cb = new DL_HubCallback(target, fn, what);
 		s_Alive.Insert(cb); // keep it alive until the engine calls it
 		if (s_Alive.Count() > 64)
 			s_Alive.RemoveOrdered(0);
-		ctx.POST(cb, path, json);
+		Print(DL_Const.LOG_TAG + "POST " + baseUrl + path.Substring(0, path.IndexOf("?")) + " (" + json.Length().ToString() + " bytes) for " + what);
+		ctx.POST(cb, "", json);
 	}
 
 	static string ToJson(Class data)
