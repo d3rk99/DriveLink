@@ -8,7 +8,7 @@ below is from the vanilla scripts (BohemiaInteractive/DayZ-Script-Diff).
   (4_world/entities/vehicles/carscript.c) -> e.g. CivilianSedan, OffroadHatchback, Hatchback_02, Sedan_02,
   Offroad_02, Truck_01_*, Van_01 (4_world/entities/vehicles/inheritedcars).
 - Fluids: Car.GetFluidCapacity(CarFluid) / GetFluidFraction(CarFluid) / Fill(CarFluid, amount) / LeakAll(CarFluid)
-  (car.c:20-37). CarFluid = FUEL, OIL, BRAKE, COOLANT, USER1, USER2 (car.c:18-26). Rebuild: LeakAll then Fill(fraction * capacity).
+  (car.c:359-376, re-checked 2026-10-18). CarFluid = FUEL, OIL, BRAKE, COOLANT, USER1, USER2 (car.c:18-26). Rebuild: LeakAll then Fill(fraction * capacity).
 - Health: the car has damage ZONES (Engine, FuelTank, Radiator, Front/Back etc.): DamageSystem.GetDamageZoneMap(car) +
   GetHealth(zone,"Health") / SetHealth - same as the player zones in v0.2.
 - Parts are ATTACHMENTS: wheels (incl. spare), doors, hood, trunk, battery (CarBattery/TruckBattery), radiator

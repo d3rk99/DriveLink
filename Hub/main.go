@@ -439,10 +439,12 @@ func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 		// Two-phase (M1 test 2026-10-13: the hub claimed before the character existed). The transfer stays
 		// pending until the target server confirms it BUILT the character (/api/confirm). Asking again (reconnect)
 		// returns the same transfer.
+		// The snapshot itself is NOT in this answer: the server fetches it from /api/payload, where it is the whole
+		// response body. As an escaped string inside this JSON (payloadJson, until 2026-10-18) DayZ could not read
+		// it back ("Miss fraction part in number"), while the identical text read from a file parsed fine.
+		// bytes = the exact length /api/payload will send, so the mod can log a truncated body.
 		log.Printf("arrive %s on %s from %s (%s): transfer offered, waiting for confirm", q.SteamID, b.ServerID, from, arrival)
-		// payloadJson = the exact text the source server sent, as a string (the mod parses it with the same
-		// serializer that wrote it).
-		writeJSON(w, 200, map[string]any{"ok": true, "action": "transfer", "token": token, "from": from, "arrival": arrival, "payloadJson": plainNumbers(payloadText)})
+		writeJSON(w, 200, map[string]any{"ok": true, "action": "transfer", "token": token, "from": from, "arrival": arrival, "bytes": len(plainNumbers(payloadText))})
 		return
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -515,12 +517,71 @@ func (h *hub) confirm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
+type tokenReq struct {
+	baseReq
+	SteamID string `json:"steamId"`
+	Token   string `json:"token"`
+	Reason  string `json:"reason"`
+}
+
+// POST /api/payload  {steamId, token} -> the pending transfer's snapshot, EXACTLY as the source server wrote it
+// (exponent numbers made plain, see numfix.go), as the whole response body. Only for the server it travels to.
+func (h *hub) payload(w http.ResponseWriter, r *http.Request) {
+	var b baseReq
+	var q tokenReq
+	if !h.decode(w, r, &q, &b) {
+		return
+	}
+	var text string
+	err := h.db.QueryRowContext(r.Context(), `SELECT payload_text FROM transfers
+		WHERE token=? AND steam_id=? AND to_server=? AND state='pending'`, q.Token, q.SteamID, b.ServerID).Scan(&text)
+	if errors.Is(err, sql.ErrNoRows) {
+		log.Printf("payload REFUSED %s on %s: no pending transfer with that token", q.SteamID, b.ServerID)
+		writeJSON(w, 409, map[string]any{"ok": false, "error": "no pending transfer with that token"})
+		return
+	}
+	if err != nil {
+		dbError(w, err)
+		return
+	}
+	out := plainNumbers(text)
+	log.Printf("payload %s to %s: %d bytes", q.SteamID, b.ServerID, len(out))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	io.WriteString(w, out)
+}
+
+// POST /api/fail  {steamId, token, reason}: the target server could not build the character. The transfer stays
+// pending (next join tries again, e.g. after an admin fixed the arrival point); the reason is kept for
+// "DriveLinkHub.exe transfers" and the admin can send him back with "DriveLinkHub.exe return <steamId>".
+func (h *hub) fail(w http.ResponseWriter, r *http.Request) {
+	var b baseReq
+	var q tokenReq
+	if !h.decode(w, r, &q, &b) {
+		return
+	}
+	res, err := h.db.ExecContext(r.Context(), `UPDATE transfers SET fail_count=fail_count+1, last_error=?
+		WHERE token=? AND steam_id=? AND to_server=? AND state='pending'`, q.Reason, q.Token, q.SteamID, b.ServerID)
+	if err != nil {
+		dbError(w, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		writeJSON(w, 409, map[string]any{"ok": false, "error": "no pending transfer with that token"})
+		return
+	}
+	log.Printf("FAILED arrival %s on %s: %s (transfer kept; 'DriveLinkHub.exe return %s' sends him back)", q.SteamID, b.ServerID, q.Reason, q.SteamID)
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
 func (h *hub) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/hello", h.hello)
 	mux.HandleFunc("/api/depart", h.depart)
 	mux.HandleFunc("/api/arrive", h.arrive)
 	mux.HandleFunc("/api/confirm", h.confirm)
+	mux.HandleFunc("/api/payload", h.payload)
+	mux.HandleFunc("/api/fail", h.fail)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := h.db.PingContext(r.Context()); err != nil {
 			writeJSON(w, 503, map[string]any{"ok": false, "error": "database down"})
@@ -531,8 +592,7 @@ func (h *hub) routes() http.Handler {
 	return logRequests(mux)
 }
 
-// "DriveLinkHub.exe dump [file]": write the newest pending transfer's snapshot to a file (default
-// last-payload.json next to the exe) for debugging. Replaces Tools\dump-payload.ps1 (psql).
+// "DriveLinkHub.exe dump [file]" (admin.go): write the newest pending transfer's snapshot to a file for debugging.
 func dump(db *sql.DB, out string) error {
 	var steamID, from, to, text string
 	err := db.QueryRow(`SELECT steam_id,from_server,to_server,payload_text FROM transfers WHERE state='pending'
@@ -592,13 +652,12 @@ func main() {
 	}
 	cancel()
 
-	if flag.Arg(0) == "dump" {
-		out := flag.Arg(1)
-		if out == "" {
-			out = filepath.Join(dir, "last-payload.json")
-		}
-		if err := dump(db, out); err != nil {
-			log.Fatal(err)
+	if flag.NArg() > 0 {
+		// admin command (admin.go): print to the console only, not into hub.log
+		log.SetOutput(os.Stderr)
+		if err := adminCommand(db, flag.Args(), dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
 		}
 		return
 	}

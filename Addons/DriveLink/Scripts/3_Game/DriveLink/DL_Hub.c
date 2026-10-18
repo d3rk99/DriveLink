@@ -14,24 +14,26 @@ class DL_ArriveReq
 	string steamId;
 }
 
-class DL_ConfirmReq
+// /api/payload, /api/confirm and /api/fail all name one transfer by its token.
+class DL_TokenReq
 {
 	string serverId;
 	string key;
 	string steamId;
 	string token;
+	string reason;            // /api/fail only: why the character could not be built
 }
 
 class DL_ArriveResp
 {
 	bool ok;
 	string error;
-	string token;             // transfer token, sent back in /api/confirm once the character is built
+	string token;             // transfer token: fetch the snapshot with it (/api/payload), then /api/confirm
 	string action;            // "transfer" | "redirect" | "normal"
 	string from;
 	string arrival;
-	string payloadJson;       // the player snapshot EXACTLY as the source server wrote it
-	ref DL_PlayerData payload; // filled from payloadJson by DL_Hub.ParsePayload
+	int bytes;                // length of the snapshot /api/payload will send (to spot a cut-off body)
+	ref DL_PlayerData payload; // NOT in the hub's JSON: filled from the /api/payload body by DL_Hub.ParsePayload
 	ref DL_ServerInfo target;
 }
 
@@ -135,16 +137,19 @@ class DL_Hub
 		return json;
 	}
 
-	// M1 test 2026-10-13: arrival rebuilt only part of the gear and logged no "could not restore", i.e. the items
-	// were never in the parsed data. The hub used to hand back its re-ordered JSONB copy; now it returns the
-	// original text, parsed here with JsonFileLoader<T>.LoadData (vanilla 3_game/tools/jsonfileloader.c:69).
-	static DL_PlayerData ParsePayload(string json)
+	// The snapshot is the WHOLE body of the hub's /api/payload answer, the exact text the source server wrote,
+	// parsed with JsonFileLoader<T>.LoadData (vanilla 3_game/tools/jsonfileloader.c:69).
+	// Why not inside the /api/arrive JSON as a string (payloadJson, 2f8669a..b6a23e5): DayZ failed on it every time
+	// ("Miss fraction part in number", e37611b + v0.2 test 2026-10-13) while the 0cd3377 self test parsed the SAME
+	// text read from a file without error. So the text was damaged on its way out of the escaped JSON string.
+	static DL_PlayerData ParsePayload(string json, out string err)
 	{
 		DL_PlayerData d;
-		string err;
 		if (!JsonFileLoader<DL_PlayerData>.LoadData(json, d, err) || !d)
 		{
 			Print(DL_Const.LOG_TAG + "payload unreadable: " + err);
+			if (err == "")
+				err = "payload unreadable";
 			return null;
 		}
 		return d;
@@ -158,12 +163,12 @@ class DL_Hub
 		return items.Count();
 	}
 
-	static string ConfirmJson(DL_ConfirmReq q)
+	static string TokenJson(DL_TokenReq q)
 	{
 		string json;
 		string err;
-		if (!JsonFileLoader<DL_ConfirmReq>.MakeData(q, json, err, false))
-			Print(DL_Const.LOG_TAG + "confirm json: " + err);
+		if (!JsonFileLoader<DL_TokenReq>.MakeData(q, json, err, false))
+			Print(DL_Const.LOG_TAG + "token request json: " + err);
 		return json;
 	}
 

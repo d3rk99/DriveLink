@@ -42,14 +42,44 @@ class DL_Net
 modded class DayZGame
 {
 	protected ref DL_ServerInfo m_DL_Next;
+	protected string m_DL_NoticeCaption;
+	protected string m_DL_Notice;    // shown as a dialog in the main menu after a RPC_KICK
 
 	bool DL_HasPending()
 	{
 		return m_DL_Next != null;
 	}
 
+	bool DL_HasNotice()
+	{
+		return m_DL_Notice != "";
+	}
+
+	// Called from the main menu (5_Mission DL_MainMenu). UIManager.ShowDialog (3_game/tools/uimanager.c:45),
+	// DBT_/DBB_/DMT_ constants are engine-defined (listed in 3_game/gameplay.c:617-633), used with a null handler
+	// the same way as ingamemenuxbox.c:306.
+	void DL_ShowNotice()
+	{
+		if (m_DL_Notice == "")
+			return;
+		GetUIManager().ShowDialog(m_DL_NoticeCaption, m_DL_Notice, 4810, DBT_OK, DBB_OK, DMT_INFO, null);
+		m_DL_Notice = "";
+	}
+
 	override void OnRPC(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
 	{
+		if (rpc_type == DL_Const.RPC_KICK && IsClient())
+		{
+			string caption;
+			string text;
+			if (!ctx.Read(caption) || !ctx.Read(text))
+				return;
+			Print(DL_Const.LOG_TAG + "server sends us away: " + text);
+			m_DL_NoticeCaption = caption;
+			m_DL_Notice = text;
+			GetCallQueue(CALL_CATEGORY_SYSTEM).Call(DisconnectSessionForce);
+			return;
+		}
 		if (rpc_type == DL_Const.RPC_REDIRECT && IsClient())
 		{
 			string json;

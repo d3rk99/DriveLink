@@ -3,11 +3,13 @@
 
 class DL_Const
 {
+	static const string VERSION = "0.3";
 	static const string LOG_TAG = "[DriveLink] ";
 	static const string DIR = "$profile:DriveLink";
 	static const string CONFIG = "$profile:DriveLink/config.json";
 	static const int RPC_REDIRECT = 4810001;   // server -> client: go to this server
 	static const int RPC_COUNTDOWN = 4810002;  // server -> client: leaving in N s (0 = cancelled)
+	static const int RPC_KICK = 4810003;       // server -> client: show this message (caption, text) and leave the server
 	static const string SLOT_CARGO = "#cargo";
 	static const string SLOT_HANDS = "#hands";
 	static const int MAX_ITEMS = 600;

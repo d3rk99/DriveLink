@@ -18,7 +18,7 @@ class CfgMods
 		dir = "DriveLink";
 		name = "DriveLink";
 		author = "Derk";
-		version = "0.1.0";
+		version = "0.3.0";
 		type = "mod";
 		dependencies[] = {"Game", "World", "Mission"};
 		class defs
