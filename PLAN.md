@@ -2,9 +2,11 @@
 
 ## Decisions
 1. Name: DriveLink (repo d3rk99/DriveLink, private like PersistentBodies).
-2. Backend: our own "DriveLink Hub" = HTTP API that every DayZ server talks to + PostgreSQL as the database.
+2. Backend: our own "DriveLink Hub" = HTTP API that every DayZ server talks to + its own database.
    (Derk: "make it a database as well as the API that talks to each server".) Hub language: Go (single exe).
-   Goal stays plug-and-play: hub installer sets up / checks Postgres, creates the DB + tables itself (migrations),
+   Database: SQLite (Derk 2026-10-18, was PostgreSQL until then): one file Hub\drivelink.db, created by the hub
+   itself, nothing to install. Pure-Go driver (modernc.org/sqlite), so the hub stays one exe.
+   Goal stays plug-and-play: the hub creates the DB + tables itself (migrations),
    writes hub config + a random server key, prints the lines to paste into each server's config.
 3. Same PC first, but the address problem is solved from day 1:
    - Each server entry has a LAN/local address AND a public address (+ game port, password).
@@ -24,7 +26,7 @@
   3_Game: config + data classes + RestApi client.  4_World: zone watcher, player/car snapshot + rebuild,
   seat restore (StartCommand_Vehicle, human.c:1492).  5_Mission: MissionServer hooks (arrival in the ClientNew
   event), client redirect (disconnect -> g_Game.Connect(menu, ip, port, pw), game.c:251).
-- `Hub/` - Go service: REST API + Postgres (migrations embedded), Windows service + Linux.
+- `Hub/` - Go service: REST API + SQLite file (migrations embedded), Windows service + Linux.
   Tables (first idea): servers, players(lock owner server, lease), transfers(token, state, payload), vehicles.
   Anti-dupe: one owner server per character/car; transfer token is single-use; source deletes only after the
   hub confirms; target spawns once per token.
@@ -32,7 +34,7 @@
 
 ## First milestone (M1, "walk across")
 On foot, same PC, 2 test servers (Chernarus 2302 + Livonia 2402): walk into an edge zone -> countdown -> arrive
-on the other map with the same gear + health. No cars yet. Hub with Postgres.
+on the other map with the same gear + health. No cars yet. Hub with its database.
 M2 = cars (driver only), M3 = whole crew, M4 = handcuffed/unconscious, M5 = different machines / public IP test.
 
 ## Open (can wait)

@@ -4,3 +4,5 @@ Hub/hub.log
 *.pbo
 *.biprivatekey
 Hub/last-payload.json
+Hub/drivelink.db
+Hub/drivelink.db-*

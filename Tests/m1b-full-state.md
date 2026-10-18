@@ -1,11 +1,13 @@
 # M1b - full state travel (v0.2 snapshot, b6a23e5)
 
-## 0. Clear the stuck v1 trip (its snapshot is the OLD format and can't be read by v0.2)
-psql -U drivelink -d drivelink -h localhost -c "UPDATE transfers SET state='expired' WHERE state='pending'" -c "UPDATE characters SET owner_server='livonia' WHERE owner_server IS NULL"
-(You are standing on Livonia with the old character; this makes Livonia his owner again.)
+## 0. Hub moved to SQLite (2026-10-18)
+Rebuild the hub (Tools\build-hub.ps1) and start it: it drops the old postgres line from hub.json, creates
+Hub\drivelink.db and starts EMPTY - the stuck trip from 2026-10-13 is gone with the old database, and your next
+login on any server is a normal login that makes that server the owner. PostgreSQL is no longer needed.
+Debug: `Hub\DriveLinkHub.exe dump` writes the newest pending snapshot to Hub\last-payload.json.
 
 ## 1. Build + start
-Pull, Tools\build-mod.ps1 (+ re-sign, copy to client). Hub unchanged. Remove the old Profiles\DriveLink\selftest folders.
+Pull, Tools\build-mod.ps1 (+ re-sign, copy to client). Remove the old Profiles\DriveLink\selftest folders.
 Restart both servers. No SCRIPT (E) lines expected; send them all if there are any.
 
 ## 2. Gear to carry (as many as possible, VPP spawn)

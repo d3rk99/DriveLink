@@ -13,7 +13,7 @@ never been compiled by DayZ. Expect compile errors on the first boot; send me th
 ## 1. Hub
 1. `powershell -ExecutionPolicy Bypass -File Tools\build-hub.ps1` -> Hub\DriveLinkHub.exe
 2. Run `Hub\DriveLinkHub.exe` once: it writes Hub\hub.json, prints a key and stops.
-3. Edit Hub\hub.json: database = `postgres://drivelink:<password from DriveLink-secrets.txt>@localhost:5432/drivelink`.
+3. Edit Hub\hub.json: database stays `drivelink.db` (SQLite file next to the exe, the hub makes it; nothing to install).
    Servers: chernarus 2302 + livonia 2402, lanHost 192.168.1.133, publicHost 136.46.143.240 (already the defaults
    except publicHost).
 4. Run it again (keep the window open). Expect `database: applied 001_init.sql` and `listening on 0.0.0.0:7290`.

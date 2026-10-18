@@ -1,19 +1,19 @@
--- DriveLink Hub schema v1 (M1: players on foot).
+-- DriveLink Hub schema v1 (SQLite, one file next to the hub: drivelink.db).
 -- A character is owned by exactly ONE server at a time (owner_server). A transfer moves ownership:
--- source server snapshots the player -> POST /transfer (token, payload) -> owner becomes "in transit" ->
--- target server claims it on login (single use) -> owner = target. Nothing is ever spawned twice per token.
-CREATE TABLE IF NOT EXISTS schema_version (version INT PRIMARY KEY);
+-- source server snapshots the player -> /api/depart (token, payload) -> owner becomes NULL = "in transit" ->
+-- target server builds the character and calls /api/confirm (single use) -> owner = target.
+-- Times are UTC text (CURRENT_TIMESTAMP, 'YYYY-MM-DD HH:MM:SS').
 
 CREATE TABLE IF NOT EXISTS servers (
   id           TEXT PRIMARY KEY,          -- short id from hub.json, e.g. "chernarus"
   name         TEXT NOT NULL,
-  last_seen    TIMESTAMPTZ
+  last_seen    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS characters (
   steam_id     TEXT PRIMARY KEY,          -- PlayerIdentity.GetPlainId()
   owner_server TEXT,                      -- server that owns the live character, NULL = in transit / none
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS transfers (
@@ -22,9 +22,9 @@ CREATE TABLE IF NOT EXISTS transfers (
   from_server  TEXT NOT NULL,
   to_server    TEXT NOT NULL,
   arrival      TEXT NOT NULL,             -- arrival point name on the target
-  payload      JSONB NOT NULL,            -- player snapshot from the mod
-  state        TEXT NOT NULL,             -- 'pending' -> 'claimed' | 'expired' | 'returned'
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  claimed_at   TIMESTAMPTZ
+  payload_text TEXT NOT NULL,             -- player snapshot EXACTLY as the source server wrote it (never re-encoded)
+  state        TEXT NOT NULL,             -- 'pending' -> 'claimed' | 'superseded' | 'expired' | 'returned'
+  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  claimed_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS transfers_pending ON transfers (steam_id) WHERE state = 'pending';

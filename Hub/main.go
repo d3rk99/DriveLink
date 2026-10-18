@@ -1,8 +1,8 @@
 // DriveLink Hub - the one program every DayZ server talks to (M1: players on foot).
 //
 // Plug-and-play: run it once -> it writes hub.json with a random server key and stops, telling you what to
-// fill in (database URL, your servers). Run it again -> it creates/updates the database tables itself and
-// serves the API. No Node, no Mongo, no certificate on a LAN.
+// fill in (your servers). Run it again -> it creates/updates its database (drivelink.db, SQLite, next to the
+// exe) itself and serves the API. Nothing to install: no Postgres, no Node, no Mongo, no certificate on a LAN.
 //
 // DayZ's script RestApi can only set the Content-Type header (vanilla 3_game/http/restapi.c:136-141,
 // RestContext.SetHeader "Set Content-Type header"), so the key travels in the JSON body, not a header.
@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"database/sql"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -27,14 +28,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "modernc.org/sqlite" // pure Go SQLite: the hub stays one exe, no C compiler, no DLL
 )
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
 const maxBody = 4 << 20 // 4 MB per request (a player snapshot is far smaller)
+
+const defaultDatabase = "drivelink.db"
 
 type ServerEntry struct {
 	ID         string `json:"id"`         // short id, also set in that DayZ server's DriveLink config
@@ -47,7 +49,7 @@ type ServerEntry struct {
 
 type Config struct {
 	Listen    string        `json:"listen"`    // e.g. "0.0.0.0:7290"
-	Database  string        `json:"database"`  // postgres://user:pass@host:5432/db
+	Database  string        `json:"database"`  // SQLite file, relative to hub.json's folder (default drivelink.db)
 	ServerKey string        `json:"serverKey"` // shared secret every DayZ server sends
 	Servers   []ServerEntry `json:"servers"`
 }
@@ -60,20 +62,24 @@ func randomKey() string {
 	return hex.EncodeToString(b)
 }
 
+func saveConfig(path string, c *Config) error {
+	out, _ := json.MarshalIndent(c, "", "  ")
+	return os.WriteFile(path, out, 0o600)
+}
+
 func loadOrCreateConfig(path string) (*Config, bool, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		c := &Config{
 			Listen:    "0.0.0.0:7290",
-			Database:  "postgres://drivelink:CHANGE_ME@localhost:5432/drivelink",
+			Database:  defaultDatabase,
 			ServerKey: randomKey(),
 			Servers: []ServerEntry{
 				{ID: "chernarus", Name: "Chernarus", LanHost: "192.168.1.133", PublicHost: "", Port: 2302},
 				{ID: "livonia", Name: "Livonia", LanHost: "192.168.1.133", PublicHost: "", Port: 2402},
 			},
 		}
-		out, _ := json.MarshalIndent(c, "", "  ")
-		if err := os.WriteFile(path, out, 0o600); err != nil {
+		if err := saveConfig(path, c); err != nil {
 			return nil, false, err
 		}
 		return c, true, nil
@@ -85,17 +91,20 @@ func loadOrCreateConfig(path string) (*Config, bool, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, false, fmt.Errorf("%s is not valid JSON: %w", path, err)
 	}
+	// hub.json from before the SQLite switch (v0.1/v0.2 used PostgreSQL): drop the old URL (it held a password)
+	if c.Database == "" || strings.HasPrefix(c.Database, "postgres://") || strings.HasPrefix(c.Database, "postgresql://") {
+		if c.Database != "" {
+			log.Printf("hub.json: the hub no longer uses PostgreSQL; database is now %s (SQLite, created automatically)", defaultDatabase)
+		}
+		c.Database = defaultDatabase
+		if err := saveConfig(path, &c); err != nil {
+			return nil, false, err
+		}
+	}
 	return &c, false, nil
 }
 
 func (c *Config) validate() error {
-	if !strings.HasPrefix(c.Database, "postgres://") && !strings.HasPrefix(c.Database, "postgresql://") {
-		// pgx silently falls back to libpq defaults on an unknown scheme; refuse instead.
-		return errors.New(`"database" must start with postgres://`)
-	}
-	if strings.Contains(c.Database, "CHANGE_ME") {
-		return errors.New(`put the real database password in "database" (replace CHANGE_ME)`)
-	}
 	if len(c.ServerKey) < 16 {
 		return errors.New(`"serverKey" is too short (16+ characters)`)
 	}
@@ -123,12 +132,30 @@ func (c *Config) server(id string) *ServerEntry {
 
 // ---------------- database ----------------
 
-func migrate(ctx context.Context, db *pgxpool.Pool) error {
-	if _, err := db.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_version (version INT PRIMARY KEY)`); err != nil {
+// openDB opens (or creates) the SQLite file. WAL = readers never block the writer and a crash can't leave a
+// half-written file; busy_timeout = wait instead of failing if the file is briefly locked (e.g. by a backup).
+// ONE connection: every transaction runs one after the other, so "read owner, then change it" can never race
+// (what SELECT ... FOR UPDATE did in PostgreSQL). Hub traffic is a few requests per login/trip; that's plenty.
+func openDB(path string) (*sql.DB, error) {
+	dsn := "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func migrate(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)`); err != nil {
 		return err
 	}
 	var have int
-	if err := db.QueryRow(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_version`).Scan(&have); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_version`).Scan(&have); err != nil {
 		return err
 	}
 	names, err := migrationFS.ReadDir("migrations")
@@ -142,19 +169,19 @@ func migrate(ctx context.Context, db *pgxpool.Pool) error {
 			continue
 		}
 		sqlText, _ := migrationFS.ReadFile("migrations/" + n.Name())
-		tx, err := db.Begin(ctx)
+		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, string(sqlText)); err != nil {
-			tx.Rollback(ctx)
+		if _, err := tx.ExecContext(ctx, string(sqlText)); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("migration %s: %w", n.Name(), err)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO schema_version(version) VALUES ($1)`, v); err != nil {
-			tx.Rollback(ctx)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_version(version) VALUES (?)`, v); err != nil {
+			tx.Rollback()
 			return err
 		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := tx.Commit(); err != nil {
 			return err
 		}
 		log.Printf("database: applied %s", n.Name())
@@ -166,7 +193,7 @@ func migrate(ctx context.Context, db *pgxpool.Pool) error {
 
 type hub struct {
 	cfg *Config
-	db  *pgxpool.Pool
+	db  *sql.DB
 }
 
 type baseReq struct {
@@ -229,6 +256,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+func dbError(w http.ResponseWriter, err error) {
+	log.Printf("database error: %v", err)
+	writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+}
+
 // decode reads the body into v and checks the key + server id. Returns false (and has answered) on failure.
 func (h *hub) decode(w http.ResponseWriter, r *http.Request, v any, base *baseReq) bool {
 	if r.Method != http.MethodPost {
@@ -271,8 +303,8 @@ func (h *hub) decode(w http.ResponseWriter, r *http.Request, v any, base *baseRe
 			return false
 		}
 	}
-	h.db.Exec(r.Context(), `INSERT INTO servers(id,name,last_seen) VALUES($1,$2,now())
-		ON CONFLICT (id) DO UPDATE SET last_seen = now()`, base.ServerID, h.cfg.server(base.ServerID).Name)
+	h.db.ExecContext(r.Context(), `INSERT INTO servers(id,name,last_seen) VALUES(?,?,CURRENT_TIMESTAMP)
+		ON CONFLICT (id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP`, base.ServerID, h.cfg.server(base.ServerID).Name)
 	return true
 }
 
@@ -298,6 +330,13 @@ type departReq struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// setOwner records which server holds the live character (nil = in transit).
+func setOwner(ctx context.Context, tx *sql.Tx, steamID string, owner *string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO characters(steam_id,owner_server,updated_at) VALUES(?,?,CURRENT_TIMESTAMP)
+		ON CONFLICT (steam_id) DO UPDATE SET owner_server=excluded.owner_server, updated_at=CURRENT_TIMESTAMP`, steamID, owner)
+	return err
+}
+
 // POST /api/depart  source server hands the player over.
 // Only the current owner (or a server for a player the hub has never seen) may send a player away.
 func (h *hub) depart(w http.ResponseWriter, r *http.Request) {
@@ -313,46 +352,45 @@ func (h *hub) depart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	tx, err := h.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	tx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+		dbError(w, err)
 		return
 	}
-	defer tx.Rollback(ctx)
-	var owner *string
-	err = tx.QueryRow(ctx, `SELECT owner_server FROM characters WHERE steam_id=$1 FOR UPDATE`, q.SteamID).Scan(&owner)
+	defer tx.Rollback()
+	var owner sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT owner_server FROM characters WHERE steam_id=?`, q.SteamID).Scan(&owner)
 	switch {
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
 		// first time the hub sees this player: the server he stands on owns him
 	case err != nil:
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+		dbError(w, err)
 		return
-	case owner == nil || *owner != b.ServerID:
+	case !owner.Valid || owner.String != b.ServerID:
 		cur := "nobody (in transit)"
-		if owner != nil {
-			cur = *owner
+		if owner.Valid {
+			cur = owner.String
 		}
 		log.Printf("depart REFUSED %s from %s: owned by %s", q.SteamID, b.ServerID, cur)
 		writeJSON(w, 409, map[string]any{"ok": false, "error": "this character is owned by " + cur})
 		return
 	}
 	token := randomKey()
-	if _, err := tx.Exec(ctx, `UPDATE transfers SET state='superseded' WHERE steam_id=$1 AND state='pending'`, q.SteamID); err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+	if _, err := tx.ExecContext(ctx, `UPDATE transfers SET state='superseded' WHERE steam_id=? AND state='pending'`, q.SteamID); err != nil {
+		dbError(w, err)
 		return
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO transfers(token,steam_id,from_server,to_server,arrival,payload,payload_text,state)
-		VALUES($1,$2,$3,$4,$5,$6,$7,'pending')`, token, q.SteamID, b.ServerID, q.To, q.Arrival, q.Payload, string(q.Payload)); err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+	if _, err := tx.ExecContext(ctx, `INSERT INTO transfers(token,steam_id,from_server,to_server,arrival,payload_text,state)
+		VALUES(?,?,?,?,?,?,'pending')`, token, q.SteamID, b.ServerID, q.To, q.Arrival, string(q.Payload)); err != nil {
+		dbError(w, err)
 		return
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO characters(steam_id,owner_server,updated_at) VALUES($1,NULL,now())
-		ON CONFLICT (steam_id) DO UPDATE SET owner_server=NULL, updated_at=now()`, q.SteamID); err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+	if err := setOwner(ctx, tx, q.SteamID, nil); err != nil {
+		dbError(w, err)
 		return
 	}
-	if err := tx.Commit(ctx); err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+	if err := tx.Commit(); err != nil {
+		dbError(w, err)
 		return
 	}
 	log.Printf("depart %s: %s -> %s (%s), %d bytes, token %s..", q.SteamID, b.ServerID, q.To, q.Arrival, len(q.Payload), token[:8])
@@ -365,9 +403,10 @@ type arriveReq struct {
 }
 
 // POST /api/arrive  called by every server when a player connects.
-//   {"action":"transfer", payload, arrival, from}  -> build this player from the payload (claimed, single use)
-//   {"action":"redirect", target}                  -> this player belongs to / is travelling to another server
-//   {"action":"normal"}                            -> normal login; this server owns the player from now on
+//
+//	{"action":"transfer", payload, arrival, from}  -> build this player from the payload (claimed, single use)
+//	{"action":"redirect", target}                  -> this player belongs to / is travelling to another server
+//	{"action":"normal"}                            -> normal login; this server owns the player from now on
 func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 	var b baseReq
 	var q arriveReq
@@ -380,19 +419,17 @@ func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	tx, err := h.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	tx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+		dbError(w, err)
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 
-	var token, from, to, arrival string
-	var payload json.RawMessage
-	var payloadText *string
-	err = tx.QueryRow(ctx, `SELECT token,from_server,to_server,arrival,payload,payload_text FROM transfers
-		WHERE steam_id=$1 AND state='pending' ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, q.SteamID).
-		Scan(&token, &from, &to, &arrival, &payload, &payloadText)
+	var token, from, to, arrival, payloadText string
+	err = tx.QueryRowContext(ctx, `SELECT token,from_server,to_server,arrival,payload_text FROM transfers
+		WHERE steam_id=? AND state='pending' ORDER BY created_at DESC, rowid DESC LIMIT 1`, q.SteamID).
+		Scan(&token, &from, &to, &arrival, &payloadText)
 	if err == nil {
 		if to != b.ServerID {
 			log.Printf("arrive %s on %s: travelling to %s, redirect", q.SteamID, b.ServerID, to)
@@ -402,37 +439,33 @@ func (h *hub) arrive(w http.ResponseWriter, r *http.Request) {
 		// Two-phase (M1 test 2026-10-13: the hub claimed before the character existed). The transfer stays
 		// pending until the target server confirms it BUILT the character (/api/confirm). Asking again (reconnect)
 		// returns the same transfer.
-		tx.Rollback(ctx)
 		log.Printf("arrive %s on %s from %s (%s): transfer offered, waiting for confirm", q.SteamID, b.ServerID, from, arrival)
 		// payloadJson = the exact text the source server sent, as a string (the mod parses it with the same
-		// serializer that wrote it). Older rows without it fall back to the jsonb copy.
-		pt := string(payload)
-		if payloadText != nil {
-			pt = *payloadText
-		}
-		pt = plainNumbers(pt)
-		writeJSON(w, 200, map[string]any{"ok": true, "action": "transfer", "token": token, "from": from, "arrival": arrival, "payloadJson": pt})
+		// serializer that wrote it).
+		writeJSON(w, 200, map[string]any{"ok": true, "action": "transfer", "token": token, "from": from, "arrival": arrival, "payloadJson": plainNumbers(payloadText)})
 		return
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+	if !errors.Is(err, sql.ErrNoRows) {
+		dbError(w, err)
 		return
 	}
-	var owner *string
-	err = tx.QueryRow(ctx, `SELECT owner_server FROM characters WHERE steam_id=$1 FOR UPDATE`, q.SteamID).Scan(&owner)
-	if err == nil && owner != nil && *owner != b.ServerID && h.cfg.server(*owner) != nil {
-		log.Printf("arrive %s on %s: owned by %s, redirect", q.SteamID, b.ServerID, *owner)
-		writeJSON(w, 200, map[string]any{"ok": true, "action": "redirect", "target": toOut(h.cfg.server(*owner))})
+	var owner sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT owner_server FROM characters WHERE steam_id=?`, q.SteamID).Scan(&owner)
+	if err == nil && owner.Valid && owner.String != b.ServerID && h.cfg.server(owner.String) != nil {
+		log.Printf("arrive %s on %s: owned by %s, redirect", q.SteamID, b.ServerID, owner.String)
+		writeJSON(w, 200, map[string]any{"ok": true, "action": "redirect", "target": toOut(h.cfg.server(owner.String))})
 		return
 	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		dbError(w, err)
 		return
 	}
-	tx.Exec(ctx, `INSERT INTO characters(steam_id,owner_server,updated_at) VALUES($1,$2,now())
-		ON CONFLICT (steam_id) DO UPDATE SET owner_server=$2, updated_at=now()`, q.SteamID, b.ServerID)
-	if err := tx.Commit(ctx); err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+	if err := setOwner(ctx, tx, q.SteamID, &b.ServerID); err != nil {
+		dbError(w, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		dbError(w, err)
 		return
 	}
 	log.Printf("arrive %s on %s: normal login, owner set", q.SteamID, b.ServerID)
@@ -453,34 +486,69 @@ func (h *hub) confirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	tx, err := h.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	tx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+		dbError(w, err)
 		return
 	}
-	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE transfers SET state='claimed', claimed_at=now()
-		WHERE token=$1 AND steam_id=$2 AND to_server=$3 AND state='pending'`, q.Token, q.SteamID, b.ServerID)
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE transfers SET state='claimed', claimed_at=CURRENT_TIMESTAMP
+		WHERE token=? AND steam_id=? AND to_server=? AND state='pending'`, q.Token, q.SteamID, b.ServerID)
 	if err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+		dbError(w, err)
 		return
 	}
-	if tag.RowsAffected() != 1 {
+	if n, _ := res.RowsAffected(); n != 1 {
 		log.Printf("confirm REFUSED %s on %s: no pending transfer with that token", q.SteamID, b.ServerID)
 		writeJSON(w, 409, map[string]any{"ok": false, "error": "no pending transfer with that token"})
 		return
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO characters(steam_id,owner_server,updated_at) VALUES($1,$2,now())
-		ON CONFLICT (steam_id) DO UPDATE SET owner_server=$2, updated_at=now()`, q.SteamID, b.ServerID); err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+	if err := setOwner(ctx, tx, q.SteamID, &b.ServerID); err != nil {
+		dbError(w, err)
 		return
 	}
-	if err := tx.Commit(ctx); err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": "database: " + err.Error()})
+	if err := tx.Commit(); err != nil {
+		dbError(w, err)
 		return
 	}
 	log.Printf("confirm %s on %s: transfer claimed, owner set", q.SteamID, b.ServerID)
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (h *hub) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/hello", h.hello)
+	mux.HandleFunc("/api/depart", h.depart)
+	mux.HandleFunc("/api/arrive", h.arrive)
+	mux.HandleFunc("/api/confirm", h.confirm)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if err := h.db.PingContext(r.Context()); err != nil {
+			writeJSON(w, 503, map[string]any{"ok": false, "error": "database down"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+	return logRequests(mux)
+}
+
+// "DriveLinkHub.exe dump [file]": write the newest pending transfer's snapshot to a file (default
+// last-payload.json next to the exe) for debugging. Replaces Tools\dump-payload.ps1 (psql).
+func dump(db *sql.DB, out string) error {
+	var steamID, from, to, text string
+	err := db.QueryRow(`SELECT steam_id,from_server,to_server,payload_text FROM transfers WHERE state='pending'
+		ORDER BY created_at DESC, rowid DESC LIMIT 1`).Scan(&steamID, &from, &to, &text)
+	if errors.Is(err, sql.ErrNoRows) {
+		fmt.Println("no pending transfer")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(out, []byte(text), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("pending %s: %s -> %s, wrote %s (%d bytes)\n", steamID, from, to, out, len(text))
+	return nil
 }
 
 func main() {
@@ -490,7 +558,8 @@ func main() {
 	if !filepath.IsAbs(*cfgPath) {
 		*cfgPath = filepath.Join(filepath.Dir(exe), *cfgPath)
 	}
-	if lf, err := os.OpenFile(filepath.Join(filepath.Dir(*cfgPath), "hub.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+	dir := filepath.Dir(*cfgPath)
+	if lf, err := os.OpenFile(filepath.Join(dir, "hub.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 		log.SetOutput(io.MultiWriter(os.Stdout, lf))
 	}
 	cfg, created, err := loadOrCreateConfig(*cfgPath)
@@ -499,9 +568,8 @@ func main() {
 	}
 	if created {
 		fmt.Printf("\nFirst start: wrote %s\n", *cfgPath)
-		fmt.Println("1. Put your database password in \"database\" (replace CHANGE_ME).")
-		fmt.Println("2. Check the \"servers\" list (id, lanHost, publicHost, port).")
-		fmt.Println("3. Put this in EVERY DayZ server's DriveLink config as hubKey:")
+		fmt.Println("1. Check the \"servers\" list (id, lanHost, publicHost, port).")
+		fmt.Println("2. Put this in EVERY DayZ server's DriveLink config as hubKey:")
 		fmt.Printf("     %s\n", cfg.ServerKey)
 		fmt.Println("Then start the hub again.")
 		return
@@ -509,34 +577,34 @@ func main() {
 	if err := cfg.validate(); err != nil {
 		log.Fatalf("hub.json: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	db, err := pgxpool.New(ctx, cfg.Database)
-	if err == nil {
-		err = db.Ping(ctx)
+	dbPath := cfg.Database
+	if !filepath.IsAbs(dbPath) {
+		dbPath = filepath.Join(dir, dbPath)
 	}
+	db, err := openDB(dbPath)
 	if err != nil {
-		cancel()
-		log.Fatalf("cannot reach the database (%v). Is PostgreSQL running and is the password in hub.json right?", err)
+		log.Fatalf("cannot open the database %s: %v", dbPath, err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := migrate(ctx, db); err != nil {
 		cancel()
 		log.Fatalf("database setup failed: %v", err)
 	}
 	cancel()
-	h := &hub{cfg: cfg, db: db}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/hello", h.hello)
-	mux.HandleFunc("/api/depart", h.depart)
-	mux.HandleFunc("/api/arrive", h.arrive)
-	mux.HandleFunc("/api/confirm", h.confirm)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		if err := db.Ping(r.Context()); err != nil {
-			writeJSON(w, 503, map[string]any{"ok": false, "error": "database down"})
-			return
+
+	if flag.Arg(0) == "dump" {
+		out := flag.Arg(1)
+		if out == "" {
+			out = filepath.Join(dir, "last-payload.json")
 		}
-		writeJSON(w, 200, map[string]any{"ok": true})
-	})
-	srv := &http.Server{Addr: cfg.Listen, Handler: logRequests(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second}
-	log.Printf("DriveLink Hub listening on %s, %d servers", cfg.Listen, len(cfg.Servers))
+		if err := dump(db, out); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	h := &hub{cfg: cfg, db: db}
+	srv := &http.Server{Addr: cfg.Listen, Handler: h.routes(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second}
+	log.Printf("DriveLink Hub listening on %s, %d servers, database %s", cfg.Listen, len(cfg.Servers), dbPath)
 	log.Fatal(srv.ListenAndServe())
 }
