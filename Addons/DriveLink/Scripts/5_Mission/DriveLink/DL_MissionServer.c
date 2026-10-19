@@ -27,6 +27,7 @@ class DL_CrewTrip
 	ref DL_Zone zone;
 	int waiting;                               // passenger answers still to come
 	int total;                                 // players in the car, driver included
+	ref DL_TravelPrice price;                  // what the trip costs each of them (null = free)
 	ref array<string> refused = new array<string>;
 }
 
@@ -1167,7 +1168,7 @@ modded class MissionServer
 				if (had)
 				{
 					m_DL_InZoneSince.Remove(sid);
-					DL_CrewCountdown(pb, 0, "");
+					DL_CrewCountdown(pb, 0, "", "");
 				}
 				continue;
 			}
@@ -1192,8 +1193,22 @@ modded class MissionServer
 			}
 			if (!had)
 			{
+				// travel cost (Research/travel-cost-design.md): the price goes on the countdown; in refuse mode a crew
+				// that can't pay doesn't get one
+				DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, DL_CarOf(pb) != null);
+				string missing = DL_TravelCost.Shortfall(price, DL_CrewOf(pb), DL_CarOf(pb));
+				if (missing != "" && DL_RefusesShortTrips())
+				{
+					m_DL_MustLeaveZone.Set(sid, true);
+					Print(DL_Const.LOG_TAG + sid + " can't pay the trip to " + z.to + " (" + price.Text() + "): " + missing);
+					DL_CrewNotify(pb, 12, "Not enough for " + z.name, price.Text() + ". Missing: " + missing + ". Step out of the zone and come back when you have it.");
+					continue;
+				}
+				string priceText = "";
+				if (price)
+					priceText = price.Text();
 				m_DL_InZoneSince.Set(sid, now);
-				DL_CrewCountdown(pb, m_DL_Cfg.countdownSeconds, z.name);
+				DL_CrewCountdown(pb, m_DL_Cfg.countdownSeconds, z.name, priceText);
 				continue;
 			}
 			if (now - since >= m_DL_Cfg.countdownSeconds * 1000)
@@ -1215,19 +1230,36 @@ modded class MissionServer
 			m_DL_InZoneSince.Remove(gone);
 			PlayerBase gpb = DL_FindPlayer(gone);
 			if (gpb)
-				DL_CrewCountdown(gpb, 0, "");
+				DL_CrewCountdown(gpb, 0, "", "");
 		}
 	}
 
 	// The countdown (or its cancel, seconds 0) goes to him and, at the wheel of a car, to everyone in it.
-	protected void DL_CrewCountdown(PlayerBase pb, int seconds, string zoneName)
+	protected void DL_CrewCountdown(PlayerBase pb, int seconds, string zoneName, string priceText)
 	{
 		array<PlayerBase> crew = DL_CrewOf(pb);
 		foreach (PlayerBase c : crew)
 		{
 			if (c && c.GetIdentity())
-				DL_Countdown(c.GetIdentity(), seconds, zoneName);
+				DL_Countdown(c.GetIdentity(), seconds, zoneName, priceText);
 		}
+	}
+
+	protected void DL_CrewNotify(PlayerBase pb, float seconds, string title, string text)
+	{
+		array<PlayerBase> crew = DL_CrewOf(pb);
+		foreach (PlayerBase c : crew)
+		{
+			if (c && c.GetIdentity())
+				NotificationSystem.SendNotificationToPlayerIdentityExtended(c.GetIdentity(), seconds, "DriveLink: " + title, text, "");
+		}
+	}
+
+	// travel rules: "refuse" (default) = a crew short of food/water/fuel can't leave; "weakened" = it can (step 4 adds
+	// the road events; until then the cost is simply taken, never below 0)
+	protected bool DL_RefusesShortTrips()
+	{
+		return !m_DL_Cfg.travel || m_DL_Cfg.travel.mode != "weakened";
 	}
 
 	// pb plus, when he drives a car, every other player in it (seat order)
@@ -1303,11 +1335,12 @@ modded class MissionServer
 		return null;
 	}
 
-	protected void DL_Countdown(PlayerIdentity id, int seconds, string zoneName)
+	protected void DL_Countdown(PlayerIdentity id, int seconds, string zoneName, string priceText)
 	{
 		ScriptRPC rpc = new ScriptRPC();
 		rpc.Write(seconds);
 		rpc.Write(zoneName);
+		rpc.Write(priceText); // older clients read only the first two
 		rpc.Send(null, DL_Const.RPC_COUNTDOWN, true, id);
 	}
 
@@ -1319,6 +1352,16 @@ modded class MissionServer
 		CarScript car = DL_CarOf(pb);
 		array<PlayerBase> crew = DL_CrewOf(pb);
 		string sid = pb.GetIdentity().GetPlainId();
+		// the price again: someone may have eaten, drunk or burnt fuel during the countdown
+		DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, car != null);
+		string missing = DL_TravelCost.Shortfall(price, crew, car);
+		if (missing != "" && DL_RefusesShortTrips())
+		{
+			m_DL_MustLeaveZone.Set(sid, true);
+			Print(DL_Const.LOG_TAG + sid + " can't pay the trip to " + z.to + " any more (" + price.Text() + "): " + missing);
+			DL_CrewNotify(pb, 12, "Not enough for " + z.name, price.Text() + ". Missing: " + missing + ".");
+			return;
+		}
 		m_DL_Leaving.Set(sid, true);
 		pb.SetAllowDamage(false);
 		if (car)
@@ -1334,7 +1377,7 @@ modded class MissionServer
 			int alone = 0;
 			if (car)
 				alone = 1;
-			DL_SendDepart(pb, z, car, "", -1, alone);
+			DL_SendDepart(pb, z, car, "", -1, alone, price);
 			return;
 		}
 		DL_CrewTrip trip = new DL_CrewTrip();
@@ -1342,6 +1385,7 @@ modded class MissionServer
 		trip.car = car;
 		trip.zone = z;
 		trip.total = crew.Count();
+		trip.price = price;
 		for (int i = 1; i < crew.Count(); i++)
 		{
 			PlayerBase m = crew[i];
@@ -1350,14 +1394,15 @@ modded class MissionServer
 			m.SetAllowDamage(false);
 			trip.waiting++;
 			m_DL_TripOf.Set(msid, trip);
-			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m), crew.Count());
+			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m), crew.Count(), price);
 		}
 		Print(DL_Const.LOG_TAG + sid + " drives " + car.GetType() + " to " + z.to + " with " + trip.waiting.ToString() + " passenger(s): their trips first, his own once all are taken");
 	}
 
 	// One player's trip. car = the car he drives (it goes inside his trip), carGroup/seat = a passenger's tag.
 	// crewCount = players in the car (driver included) for the target's waiting room, 0 = on foot.
-	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat, int crewCount)
+	// price = the trip's cost (null = free): taken off the snapshot that travels, never off the live character/car
+	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat, int crewCount, DL_TravelPrice price)
 	{
 		string sid = pb.GetIdentity().GetPlainId();
 		DL_DepartReq q = new DL_DepartReq();
@@ -1383,6 +1428,13 @@ modded class MissionServer
 			carText = "passenger in seat " + seat.ToString() + " of " + carGroup + "'s car";
 		}
 		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " items, " + q.payload.bleeding.Count().ToString() + " bleeding, " + q.payload.modifiers.Count().ToString() + " modifiers, " + carText);
+		if (price)
+		{
+			string paid = DL_TravelCost.ChargePlayer(q.payload, price);
+			if (car)
+				paid += "; car: " + DL_TravelCost.ChargeCar(q.payload.car, car, price);
+			Print(DL_Const.LOG_TAG + sid + " pays the trip (" + price.Text() + "): " + paid);
+		}
 		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.DepartJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
 	}
 
@@ -1397,7 +1449,7 @@ modded class MissionServer
 		PlayerBase driver = DL_FindPlayer(trip.driverSid);
 		if (trip.refused.Count() == 0 && driver && trip.car && DL_CarOf(driver) == trip.car)
 		{
-			DL_SendDepart(driver, trip.zone, trip.car, "", -1, trip.total);
+			DL_SendDepart(driver, trip.zone, trip.car, "", -1, trip.total, trip.price);
 			return;
 		}
 		string why = "a passenger could not travel";

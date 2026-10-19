@@ -59,8 +59,14 @@ modded class MissionGameplay
 		string zone;
 		if (!ctx.Read(seconds) || !ctx.Read(zone))
 			return;
+		string price;
+		if (!ctx.Read(price)) // an older server sends no price
+			price = "";
+		string costLine = "";
+		if (price != "")
+			costLine = "\nTrip: " + price + ".";
 		if (seconds > 0)
-			NotificationSystem.AddNotificationExtended(seconds, "DriveLink: " + zone, "Leaving in " + seconds.ToString() + " s. Step out of the zone to cancel.", "");
+			NotificationSystem.AddNotificationExtended(seconds, "DriveLink: " + zone, "Leaving in " + seconds.ToString() + " s. Step out of the zone to cancel." + costLine, "");
 		else
 			NotificationSystem.AddNotificationExtended(3, "DriveLink", "Travel cancelled.", "");
 	}
