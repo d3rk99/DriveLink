@@ -38,7 +38,8 @@ pub async fn list(State(h): State<Shared>, Query(q): Query<ListQ>) -> Response {
     let like = format!("%{}%", q.q.trim());
     let sql = "SELECT c.steam_id, c.name, c.owner_server, c.last_server, c.last_login, c.updated_at,
                       t.from_server, t.to_server, t.arrival, t.created_at, t.fail_count, t.last_error,
-                      (SELECT COUNT(*) FROM transfers x WHERE x.steam_id = c.steam_id AND x.state = 'claimed')
+                      (SELECT COUNT(*) FROM transfers x WHERE x.steam_id = c.steam_id AND x.state = 'claimed'),
+                      MAX(0, COALESCE(CAST(strftime('%s', t.ready_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER), 0))
                FROM characters c
                LEFT JOIN transfers t ON t.steam_id = c.steam_id AND t.state = 'pending'
                WHERE c.steam_id LIKE ?1 OR IFNULL(c.name, '') LIKE ?1
@@ -58,7 +59,8 @@ pub async fn list(State(h): State<Shared>, Query(q): Query<ListQ>) -> Response {
             "updatedAt": r.get::<_, String>(5)?,
             "pending": match pending_to {
                 Some(to) => json!({"from": r.get::<_, String>(6)?, "to": to, "arrival": r.get::<_, String>(8)?,
-                                   "since": r.get::<_, String>(9)?, "failCount": r.get::<_, i64>(10)?, "lastError": r.get::<_, Option<String>>(11)?}),
+                                   "since": r.get::<_, String>(9)?, "failCount": r.get::<_, i64>(10)?, "lastError": r.get::<_, Option<String>>(11)?,
+                                   "readyIn": r.get::<_, i64>(13)?}),
                 None => Value::Null,
             },
             "trips": r.get::<_, i64>(12)?,
@@ -114,13 +116,14 @@ pub async fn detail(State(h): State<Shared>, Path(sid): Path<String>) -> Respons
     };
     let mut trips = Vec::new();
     if let Ok(mut st) = db.prepare(
-        "SELECT from_server, to_server, arrival, state, created_at, claimed_at, fail_count, last_error, length(payload_text)
+        "SELECT from_server, to_server, arrival, state, created_at, claimed_at, fail_count, last_error, length(payload_text),
+                MAX(0, COALESCE(CAST(strftime('%s', ready_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER), 0))
          FROM transfers WHERE steam_id=?1 ORDER BY created_at DESC, rowid DESC LIMIT 30",
     ) {
         if let Ok(it) = st.query_map(params![sid], |r| {
             Ok(json!({"from": r.get::<_, String>(0)?, "to": r.get::<_, String>(1)?, "arrival": r.get::<_, String>(2)?, "state": r.get::<_, String>(3)?,
                       "at": r.get::<_, String>(4)?, "claimedAt": r.get::<_, Option<String>>(5)?, "failCount": r.get::<_, i64>(6)?,
-                      "lastError": r.get::<_, Option<String>>(7)?, "bytes": r.get::<_, i64>(8)?}))
+                      "lastError": r.get::<_, Option<String>>(7)?, "bytes": r.get::<_, i64>(8)?, "readyIn": r.get::<_, i64>(9)?}))
         }) {
             trips = it.filter_map(Result::ok).collect();
         }
@@ -226,6 +229,13 @@ pub async fn action(State(h): State<Shared>, Path(sid): Path<String>, body: Byte
                 return db_err(e);
             }
             format!("released (was on {}): next login anywhere is a normal login", known.clone().flatten().unwrap_or_else(|| "nobody".into()))
+        }
+        "arrive_now" => {
+            let Some((token, from, to)) = &pending else { return bad(StatusCode::CONFLICT, "no trip is waiting") };
+            if let Err(e) = tx.execute("UPDATE transfers SET ready_at=NULL WHERE token=?1", params![token]) {
+                return db_err(e);
+            }
+            format!("trip {from} -> {to}: arrives now (travel time skipped)")
         }
         "drop" => {
             let Some((token, from, to)) = &pending else { return bad(StatusCode::CONFLICT, "no trip is waiting") };

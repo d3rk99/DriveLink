@@ -648,6 +648,23 @@ modded class MissionServer
 			return;
 		}
 		m_DL_Pending.Remove(sid);
+		if (p && p.action == "wait")
+		{
+			string where = "the next server";
+			if (p.resp && p.resp.target)
+				where = p.resp.target.name;
+			int left = 0;
+			if (p.resp)
+				left = p.resp.seconds;
+			Print(DL_Const.LOG_TAG + identity.GetPlainId() + " is still on the road to " + where + " (" + left.ToString() + " s), sent back to the menu");
+			if (player)
+			{
+				player.SetAllowDamage(false);
+				m_DL_Doomed.Set(player, true); // his real character is on the road: nothing of this one may stay
+			}
+			DL_Kick(player, "You are still on the road to " + where + ": about " + DL_TravelCost.Duration(left) + " left. Join " + where + " after that.");
+			return;
+		}
 		if (p && p.action == "failed")
 		{
 			string text = "Your character could not be brought to this server (" + p.reason + "). It is safe on the DriveLink hub. Ask an admin, or try again later.";
@@ -1413,6 +1430,8 @@ modded class MissionServer
 		q.arrival = z.arrival;
 		q.payload = m_DL_Snap.Capture(pb);
 		q.payload.crewCount = crewCount;
+		if (price)
+			q.travelSeconds = price.seconds;
 		string carText = "on foot";
 		if (car)
 		{
@@ -1519,7 +1538,14 @@ modded class MissionServer
 			Print(DL_Const.LOG_TAG + sid + " left before the redirect; in transit to " + r.target.name);
 			return;
 		}
-		DL_SendRedirect(pb.GetIdentity(), r.target, "zone");
+		if (r.readyIn > 0)
+		{
+			// travel time: he is on the road. Back to the main menu with the time; every server refuses him until then
+			DL_SendKick(sid, "On the road to " + r.target.name + ": about " + DL_TravelCost.Duration(r.readyIn) + ". Join " + r.target.name + " when that time has passed (no server lets you in before).");
+			Print(DL_Const.LOG_TAG + sid + " is on the road to " + r.target.name + " for " + r.readyIn.ToString() + " s");
+		}
+		else
+			DL_SendRedirect(pb.GetIdentity(), r.target, "zone");
 		m_DL_Doomed.Set(pb, true);
 		Print(DL_Const.LOG_TAG + sid + " handed over to " + r.target.name + ", removing the character here");
 		// give the RPC a moment to reach the client, then remove the character WITHOUT killing it (nothing may

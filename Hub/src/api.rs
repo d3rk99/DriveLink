@@ -328,6 +328,9 @@ struct DepartReq {
     #[serde(default)]
     arrival: String,
     payload: Option<Box<RawValue>>, // kept as the exact text the source server wrote
+    /// travel time on: seconds on the road before the target may build him (0 = at once)
+    #[serde(default)]
+    travel_seconds: i64,
 }
 
 // POST /api/depart  the source server hands the player over (only the owner, or any server for a new player).
@@ -367,12 +370,14 @@ async fn depart(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
         }
     }
     let token = crate::config::random_key();
+    let travel = r.travel_seconds.clamp(0, 7 * 24 * 3600); // a week at most
     let res = tx
         .execute("UPDATE transfers SET state='superseded' WHERE steam_id=?1 AND state='pending'", params![r.steam_id])
         .and_then(|_| {
             tx.execute(
-                "INSERT INTO transfers(token,steam_id,from_server,to_server,arrival,payload_text,state) VALUES(?1,?2,?3,?4,?5,?6,'pending')",
-                params![token, r.steam_id, from, r.to, r.arrival, payload],
+                "INSERT INTO transfers(token,steam_id,from_server,to_server,arrival,payload_text,state,ready_at)
+                 VALUES(?1,?2,?3,?4,?5,?6,'pending', CASE WHEN ?7 > 0 THEN datetime('now', '+' || ?7 || ' seconds') END)",
+                params![token, r.steam_id, from, r.to, r.arrival, payload, travel],
             )
         })
         .and_then(|_| set_owner(&tx, &r.steam_id, None));
@@ -382,8 +387,8 @@ async fn depart(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
     if let Err(e) = tx.commit() {
         return db_error(e);
     }
-    crate::logf!("depart {}: {from} -> {} ({}), {} bytes, token {}..", r.steam_id, r.to, r.arrival, payload.len(), &token[..8]);
-    reply(StatusCode::OK, json!({"ok": true, "token": token, "target": server_out(&h, &r.to)}))
+    crate::logf!("depart {}: {from} -> {} ({}), {} bytes, token {}..{}", r.steam_id, r.to, r.arrival, payload.len(), &token[..8], if travel > 0 { format!(", on the road {travel} s") } else { String::new() });
+    reply(StatusCode::OK, json!({"ok": true, "token": token, "target": server_out(&h, &r.to), "readyIn": travel}))
 }
 
 #[derive(Deserialize, Default)]
@@ -426,18 +431,26 @@ async fn arrive(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
     if let Err(e) = touch(&tx, &r, &here) {
         return db_error(e);
     }
-    let pending: Option<(String, String, String, String, String)> = match tx
+    let pending: Option<(String, String, String, String, String, i64)> = match tx
         .query_row(
-            "SELECT token,from_server,to_server,arrival,payload_text FROM transfers WHERE steam_id=?1 AND state='pending' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            "SELECT token,from_server,to_server,arrival,payload_text,
+                    COALESCE(CAST(strftime('%s', ready_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER), 0)
+             FROM transfers WHERE steam_id=?1 AND state='pending' ORDER BY created_at DESC, rowid DESC LIMIT 1",
             params![r.steam_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
         )
         .optional()
     {
         Ok(p) => p,
         Err(e) => return db_error(e),
     };
-    if let Some((token, from, to, arrival, text)) = pending {
+    if let Some((token, from, to, arrival, text, left)) = pending {
+        // on the road: no server may have him yet (not even the one he left) - the "pseudo-ban"
+        if left > 0 {
+            let _ = tx.commit();
+            crate::logf!("arrive {} on {here}: on the road to {to}, {left} s left, refused", r.steam_id);
+            return reply(StatusCode::OK, json!({"ok": true, "action": "wait", "seconds": left, "target": server_out(&h, &to)}));
+        }
         if to != here {
             let _ = tx.commit();
             crate::logf!("arrive {} on {here}: travelling to {to}, redirect", r.steam_id);

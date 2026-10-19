@@ -599,11 +599,12 @@ let players = [], playerSel = null, playerQ = "";
 const srvName = id => { const s = S.servers.find(x => x.id === id); return s ? s.name : id; };
 const since = t => { if (!t) return ""; const d = (Date.now() - Date.parse(t.replace(" ", "T") + "Z")) / 1000; return d < 90 ? "just now" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : `${Math.round(d / 86400)} d ago`; };
 function whereText(p) {
-  if (p.pending) return `<span class="warn">travelling ${esc(srvName(p.pending.from))} → ${esc(srvName(p.pending.to))}</span>${p.pending.failCount ? ` <span class="badtxt">(failed ${p.pending.failCount}x)</span>` : ""}`;
+  if (p.pending) return `<span class="warn">${p.pending.readyIn > 0 ? "on the road" : "travelling"} ${esc(srvName(p.pending.from))} → ${esc(srvName(p.pending.to))}</span>${p.pending.readyIn > 0 ? ` <span class="hint">${leftText(p.pending.readyIn)} left</span>` : ""}${p.pending.failCount ? ` <span class="badtxt">(failed ${p.pending.failCount}x)</span>` : ""}`;
   if (p.owner) return `<span class="ok">${esc(srvName(p.owner))}</span>`;
   return `<span class="hint">not assigned (next login anywhere)</span>`;
 }
 
+const leftText = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : s >= 60 ? `${Math.round(s / 60)} min` : `${s} s`;
 async function loadPlayers() {
   const r = await fetch(`/admin/api/players?q=${encodeURIComponent(playerQ)}`, { cache: "no-store" });
   players = (await r.json()).players || [];
@@ -650,8 +651,8 @@ async function showPlayer(sid) {
   if (pend && pend.failCount) h += `<div class="badtxt" style="margin-top:8px">The target failed to build him ${pend.failCount}x: ${esc(pend.lastError || "")}</div>`;
   h += `<h2 style="margin-top:14px">Fix</h2>`;
   if (pend) {
-    h += `<div class="hint">A trip is waiting: his gear is in it. Send it to another server (he arrives there at its first arrival point next time he joins), or throw it away.</div>
-      <div class="btns"><select id="plSrv" style="width:auto">${opts}</select><button class="primary" id="plSend">Send the trip there</button><button class="danger" id="plDrop">Drop the trip</button></div>`;
+    h += `<div class="hint">A trip is waiting: his gear is in it. Send it to another server (he arrives there at its first arrival point next time he joins), or throw it away.${pend.readyIn > 0 ? ` <b>On the road: ${leftText(pend.readyIn)} left</b> - no server lets him in before that.` : ""}</div>
+      <div class="btns"><select id="plSrv" style="width:auto">${opts}</select><button class="primary" id="plSend">Send the trip there</button>${pend.readyIn > 0 ? `<button id="plNow">Arrive now</button>` : ""}<button class="danger" id="plDrop">Drop the trip</button></div>`;
   } else {
     h += `<div class="hint">Assign = that server holds his character from now on: joining any other server sends him there. Use it when his character really is on that server (its own save). Release = the hub forgets: his next login anywhere is a normal one there.</div>
       <div class="btns"><select id="plSrv" style="width:auto">${opts}</select><button class="primary" id="plAssign">Assign to this server</button><button id="plRelease">Release</button></div>`;
@@ -679,6 +680,7 @@ async function showPlayer(sid) {
   };
   const on = (id, f) => { const e = $(id); if (e) e.onclick = f; };
   on("plSend", () => act("send", "Send his waiting trip to {srv}? He arrives there (first arrival point) with the gear in the trip when he next joins."));
+  on("plNow", () => act("arrive_now", "Skip the rest of his travel time? He can join the target server right away."));
   on("plDrop", () => act("drop", "Drop the waiting trip? The gear in it is LOST: the character on the server he left was already removed."));
   on("plAssign", () => act("assign", "Assign him to {srv}? Joining any other server sends him there. If he is online somewhere else right now, he can't travel until he logs out."));
   on("plRelease", () => act("release", "Release him? His next login on ANY server is a normal login (that server's own save of him, or a fresh spawn)."));

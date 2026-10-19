@@ -128,6 +128,17 @@ has "travel: spare km saved" '"spareNeededKm":40'
 has "travel: flat chance clamped" '"flatPct":100'
 grep -q '"travel"' "$T/hub.json" && echo "ok   travel: saved in hub.json" || { echo "FAIL travel not in hub.json"; FAIL=1; }
 
+# Travel time: on the road = every server says wait, until ready or Arrive now
+P3=76561198000000077
+post /api/arrive "$(req chernarus ",\"steamId\":\"$P3\"")" >/dev/null
+expect "time: depart with 600 s" "$(post /api/depart "$(req chernarus ",\"steamId\":\"$P3\",\"to\":\"livonia\",\"arrival\":\"x\",\"travelSeconds\":600,\"payload\":$PAY")")" 200
+has "time: depart says readyIn" '"readyIn":600'
+post /api/arrive "$(req livonia ",\"steamId\":\"$P3\"")" >/dev/null; has "time: target says wait" '"action":"wait"'
+post /api/arrive "$(req chernarus ",\"steamId\":\"$P3\"")" >/dev/null; has "time: source says wait too" '"action":"wait"'
+curl -s -m 5 "$U/admin/api/players/$P3" > "$T/body"; has "time: players page time left" '"readyIn":59'
+expect "time: arrive now" "$(apost /admin/api/players/$P3/action '{"action":"arrive_now"}')" 200
+post /api/arrive "$(req livonia ",\"steamId\":\"$P3\"")" >/dev/null; has "time: after arrive now = transfer" '"action":"transfer"'
+
 # HTTPS (self-signed, so -k)
 code=$(curl -s -k -m 5 -o "$T/body" -w "%{http_code}" --data-binary "$(req chernarus "")" https://127.0.0.1:17291/api/hello)
 expect "HTTPS hello (self-signed)" "$code" 200

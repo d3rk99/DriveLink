@@ -71,7 +71,8 @@ class DL_ArriveResp
 	bool ok;
 	string error;
 	string token;             // transfer token: fetch the snapshot with it (/api/payload), then /api/confirm
-	string action;            // "transfer" | "redirect" | "normal"
+	string action;            // "transfer" | "redirect" | "normal" | "wait" (on the road, travel time)
+	int seconds;              // "wait": seconds until he arrives
 	string from;
 	string arrival;
 	int bytes;                // length of the snapshot /api/payload will send (to spot a cut-off body)
@@ -86,6 +87,7 @@ class DL_DepartReq
 	string steamId;
 	string to;
 	string arrival;
+	int travelSeconds;        // travel time on: on the road this long (0 = at once)
 	ref DL_PlayerData payload;
 }
 
@@ -94,6 +96,7 @@ class DL_DepartResp
 	bool ok;
 	string error;
 	string token;
+	int readyIn;              // seconds on the road (0 = he goes straight to the target)
 	ref DL_ServerInfo target;
 }
 
