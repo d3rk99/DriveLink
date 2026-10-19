@@ -5,6 +5,11 @@
 //   CGame.Connect(UIScriptedMenu parent, string ip, int port, string password)            3_game/global/game.c:251
 //   DayZGame.OnRPC(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext) 3_game/dayzgame.c:3104
 
+class DL_LanMemory
+{
+	ref array<string> hosts = new array<string>;
+}
+
 class DL_Net
 {
 	// Private / local addresses (RFC 1918 + loopback). A player who joined us on one of these is on our network.
@@ -25,12 +30,40 @@ class DL_Net
 		return false;
 	}
 
+	// LAN addresses this PC has joined a server on (kept in $profile:DriveLink_lan.json on the client). 2026-10-19:
+	// Derk went Chernarus (LAN) -> Livonia on another network -> back: joined via a public address, so he was sent to
+	// Chernarus's PUBLIC address, which his own router can't loop back to ("unreachable"). A LAN address this PC has
+	// reached before is on its network, whatever way it came in this time.
+	static const string LAN_FILE = "$profile:DriveLink_lan.json";
+	static ref DL_LanMemory s_Lan;
+
+	static DL_LanMemory Lan()
+	{
+		if (!s_Lan)
+		{
+			string err;
+			if (!FileExist(LAN_FILE) || !JsonFileLoader<DL_LanMemory>.LoadFile(LAN_FILE, s_Lan, err) || !s_Lan)
+				s_Lan = new DL_LanMemory();
+		}
+		return s_Lan;
+	}
+
+	static void RememberLan(string host)
+	{
+		if (!IsLocalAddress(host) || host == "" || host.IndexOf("127.") == 0 || Lan().hosts.Find(host) >= 0)
+			return;
+		Lan().hosts.Insert(host);
+		string err;
+		JsonFileLoader<DL_LanMemory>.SaveFile(LAN_FILE, Lan(), err);
+		Print(DL_Const.LOG_TAG + "remembered " + host + " as a LAN server address of this PC");
+	}
+
 	// Which address of the target this client should use, decided by how it reached the current server.
 	static string PickHost(DL_ServerInfo t, string joinedVia)
 	{
 		if (!t)
 			return "";
-		bool onLan = IsLocalAddress(joinedVia) || (t.lanHost != "" && joinedVia == t.lanHost);
+		bool onLan = IsLocalAddress(joinedVia) || (t.lanHost != "" && joinedVia == t.lanHost) || (t.lanHost != "" && Lan().hosts.Find(t.lanHost) >= 0);
 		if (onLan && t.lanHost != "")
 			return t.lanHost;
 		if (t.publicHost != "")
@@ -96,6 +129,7 @@ modded class DayZGame
 			string joinedVia;
 			int joinedPort;
 			GetHostAddress(joinedVia, joinedPort);
+			DL_Net.RememberLan(joinedVia);
 			string host = DL_Net.PickHost(r.target, joinedVia);
 			Print(DL_Const.LOG_TAG + "redirect to " + r.target.name + " (" + r.reason + "): joined via " + joinedVia + " -> using " + host + ":" + r.target.port.ToString());
 			if (host == "")
