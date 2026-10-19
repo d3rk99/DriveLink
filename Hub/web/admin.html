@@ -254,7 +254,7 @@ function drawLayout() {
 
 function renderLists() {
   const L1 = L_of(srv());
-  $("zlist").innerHTML = L1.zones.map((z, i) => `<div class="item ${sel && sel.kind === "zone" && sel.i === i ? "sel" : ""}" data-k="zone" data-i="${i}"><span><span class="dot" style="background:var(--zone)"></span>${esc(z.name)}</span><span class="hint">r ${Math.round(z.radius)} m → ${esc(z.to)}</span></div>`).join("") || `<div class="hint">none yet</div>`;
+  $("zlist").innerHTML = L1.zones.map((z, i) => `<div class="item ${sel && sel.kind === "zone" && sel.i === i ? "sel" : ""}" data-k="zone" data-i="${i}"><span><span class="dot" style="background:var(--zone)"></span>${esc(z.name)}</span><span class="hint">r ${Math.round(z.radius)} m → ${esc(z.to)}${z.distanceKm ? `, ${Math.round(z.distanceKm)} km` : ""}</span></div>`).join("") || `<div class="hint">none yet</div>`;
   $("alist").innerHTML = L1.arrivals.map((a, i) => `<div class="item ${sel && sel.kind === "arr" && sel.i === i ? "sel" : ""}" data-k="arr" data-i="${i}"><span><span class="dot" style="background:var(--arr)"></span>${esc(a.name)}</span><span class="hint">${Math.round(a.yaw)}°</span></div>`).join("") || `<div class="hint">none yet</div>`;
   document.querySelectorAll(".item").forEach(el => el.onclick = () => {
     sel = { kind: el.dataset.k, i: +el.dataset.i };
@@ -278,7 +278,9 @@ function renderEdit() {
     box.innerHTML = `<h2>Leaving zone</h2>
       <label>Name (shown to players)</label><input id="fName" value="${esc(z.name)}">
       <div class="row"><div><label>x</label><input id="fX" type="number" step="0.1" value="${z.center[0].toFixed(1)}"></div><div><label>z</label><input id="fZ" type="number" step="0.1" value="${z.center[2].toFixed(1)}"></div></div>
-      <label>Radius (m)</label><input id="fR" type="number" min="1" value="${Math.round(z.radius)}">
+      <div class="row"><div><label>Radius (m)</label><input id="fR" type="number" min="1" value="${Math.round(z.radius)}"></div>
+      <div><label>Trip distance (km, 0 = free + instant)</label><input id="fKm" type="number" min="0" step="1" value="${Math.round(z.distanceKm || 0)}"></div></div>
+      <div class="hint" id="fCost">${tripCost(z)}</div>
       <label>Sends players to</label><select id="fTo">${otherServers().map(s => `<option value="${esc(s.id)}" ${s.id === z.to ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>
       <label>Arrival point there</label><select id="fArr">${arrs.map(a => `<option ${a.name === z.arrival ? "selected" : ""}>${esc(a.name)}</option>`).join("")}${arrs.length ? "" : `<option value="">(that server has no arrival points yet)</option>`}</select>
       <div style="margin-top:10px"><button class="danger" id="fDel">Delete zone</button></div>`;
@@ -286,6 +288,7 @@ function renderEdit() {
     $("fX").onchange = e => { z.center[0] = +e.target.value; changed(true); };
     $("fZ").onchange = e => { z.center[2] = +e.target.value; changed(true); };
     $("fR").onchange = e => { z.radius = Math.max(1, +e.target.value); changed(true); };
+    $("fKm").onchange = e => { z.distanceKm = Math.max(0, +e.target.value || 0); $("fCost").innerHTML = tripCost(z); changed(); };
     $("fTo").onchange = e => { z.to = e.target.value; const t = S.servers.find(s => s.id === z.to); z.arrival = t && t.layout.arrivals[0] ? t.layout.arrivals[0].name : ""; changed(true); renderEdit(); };
     $("fArr").onchange = e => { z.arrival = e.target.value; changed(); };
     $("fDel").onclick = () => { L1.zones.splice(sel.i, 1); sel = null; changed(true); };
@@ -304,6 +307,16 @@ function renderEdit() {
     $("fYaw").onchange = e => { a.yaw = ((+e.target.value % 360) + 360) % 360; changed(true); };
     $("fDel").onclick = () => { L1.arrivals.splice(sel.i, 1); sel = null; changed(true); };
   }
+}
+
+// what a trip through this zone costs, by the rules of the server it starts on (Servers page, Travel)
+function tripCost(z) {
+  const km = z.distanceKm || 0, t = srv().travel;
+  if (!km) return "Free and instant (no distance set).";
+  if (!t) return "";
+  const k = km / 10, r = v => Math.round(v * k);
+  const time = mins => mins >= 60 ? `${Math.floor(mins / 60)} h ${Math.round(mins % 60)} min` : `${Math.round(mins)} min`;
+  return `On foot: ${r(t.foodFootPct)}% food, ${r(t.waterFootPct)}% water${t.timeEnabled ? `, ${time(km / t.speedFootKmh * 60)}` : ""}.<br>By car: ${r(t.foodCarPct)}% food, ${r(t.waterCarPct)}% water each, ${r(t.fuelLiters)} L fuel, wear engine ${r(t.wearEnginePct)}% / wheels ${r(t.wearWheelsPct)}%${t.timeEnabled ? `, ${time(km / t.speedCarKmh * 60)}` : ""}.<br><span class="hint">Rules: ${esc(srv().name)}'s Travel settings (Servers page), ${t.mode === "weakened" ? "arrive weakened" : "refuse when short"}. Not charged yet in game (next build step).</span>`;
 }
 
 // renaming an arrival point also fixes the zones on other servers that send players to it
@@ -418,6 +431,7 @@ function renderServers() {
       <div class="btns"><button class="primary" id="sSave">${claim ? "Approve" : "Save"}</button><button id="sCancel">Cancel</button>
       ${!isNew && !claim ? `<button class="danger" id="sDel">Remove server</button>` : ""}</div><div class="status" id="pageMsg"></div></div>`;
   }
+  if (editing && !editing.isNew && !editing.claim) h += travelBox(editing.f);
   h += `<div class="box"><h2>Connected to this hub</h2>`;
   if (!S.servers.length) h += `<div class="hint">No servers yet. Start a DayZ server with the DriveLink mod and this hub's address + key (see <a href="#" id="goSetup" style="color:var(--accent)">Setup</a>): it shows up above to approve. Or add one by hand.</div>`;
   else {
@@ -448,6 +462,7 @@ function renderServers() {
     if ($("sName")) $("sName").oninput = () => { if (editing.isNew || editing.claim) { const idEl = $("sId"); if (!idEl.dataset.touched) idEl.value = idFrom($("sName").value); } };
     if ($("sId")) $("sId").oninput = () => { $("sId").dataset.touched = "1"; };
     $("sCancel").onclick = () => { editing = null; renderServers(); };
+    if (!editing.isNew && !editing.claim) wireTravel(editing.f);
     $("sSave").onclick = async () => {
       const f = editing.link ? { id: editing.link, name: "x", port: 0, link: true } : readForm(!!editing.isNew);
       if (!f.link && !f.lanHost && !f.publicHost) return pageMsg("Fill in the LAN address, the public address, or both.", true);
@@ -465,6 +480,40 @@ function renderServers() {
       try { await post(`/admin/api/servers/${encodeURIComponent(editing.f.id)}/delete`); editing = null; await refresh(); renderServers(); } catch (e) { pageMsg(e.message, true); }
     };
   }
+}
+
+// ---------- Travel rules (per server, for trips that START there) ----------
+const TRAVEL_FIELDS = [
+  ["foodFootPct", "Food on foot", "% per 10 km"], ["waterFootPct", "Water on foot", "% per 10 km"],
+  ["foodCarPct", "Food by car", "% per 10 km, each person"], ["waterCarPct", "Water by car", "% per 10 km, each person"],
+  ["fuelLiters", "Fuel", "litres per 10 km"], ["wearEnginePct", "Engine wear", "% health per 10 km"], ["wearWheelsPct", "Wheel wear", "% health per 10 km, every wheel"],
+  ["speedFootKmh", "Speed on foot", "km/h (travel time)"], ["speedCarKmh", "Speed by car", "km/h (travel time)"],
+  ["luckGasPct", "Find fuel when out", "% chance (weakened)"], ["biteDeathPct", "Attack kills", "% of attacks (weakened)"],
+  ["bitePct", "Infected attack", "% per 10 km walked (weakened)"], ["starveDeathPct", "Starve / thirst kills", "% when over half short (weakened)"],
+];
+function travelBox(f) {
+  const t = f.travel || {};
+  return `<div class="box"><h2>Travel from ${esc(f.name)}</h2>
+    <div class="hint">Costs for trips that START on this server, per 10 km of the zone's distance (set on the Map page; 0 km = free + instant). Food and water are % of a full bar. <b>Saved now, charged in game from the next build step.</b></div>
+    <div class="grid2" style="margin-top:6px">
+      <div><label>When a player is short of food, water or fuel</label><select id="tMode"><option value="refuse" ${t.mode !== "weakened" ? "selected" : ""}>Refuse the trip</option><option value="weakened" ${t.mode === "weakened" ? "selected" : ""}>Travel anyway, arrive weakened (the road decides)</option></select></div>
+      <div><label>Travel time</label><select id="tTime"><option value="0" ${!t.timeEnabled ? "selected" : ""}>Off: arrive at once</option><option value="1" ${t.timeEnabled ? "selected" : ""}>On: on the road for distance / speed, no login anywhere meanwhile</option></select></div>
+    </div>
+    <div class="grid3">${TRAVEL_FIELDS.map(([k, label, unit]) => `<div><label>${label} <span class="hint">(${unit})</span></label><input id="t_${k}" type="number" step="0.5" min="0" value="${t[k] ?? 0}"></div>`).join("")}</div>
+    <div class="btns"><button class="primary" id="tSave">Save travel rules</button></div><div class="status" id="tMsg"></div></div>`;
+}
+function wireTravel(f) {
+  const b = $("tSave");
+  if (!b) return;
+  b.onclick = async () => {
+    const t = { mode: $("tMode").value, timeEnabled: $("tTime").value === "1" };
+    TRAVEL_FIELDS.forEach(([k]) => t[k] = +$("t_" + k).value);
+    try {
+      const out = await post(`/admin/api/servers/${encodeURIComponent(f.id)}/travel`, t);
+      f.travel = out.travel; await refresh();
+      const m = $("tMsg"); m.textContent = `Saved. ${f.name} picks it up within ~30 s.`; m.className = "status ok";
+    } catch (e) { const m = $("tMsg"); m.textContent = e.message; m.className = "status badtxt"; }
+  };
 }
 
 // ---------- Setup ----------

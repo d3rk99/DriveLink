@@ -105,6 +105,8 @@ modded class MissionServer
 		// a config.json from before a setting existed loads it as 0
 		if (m_DL_Cfg.crewWaitSeconds <= 0)
 			m_DL_Cfg.crewWaitSeconds = 120;
+		if (!m_DL_Cfg.travel)
+			m_DL_Cfg.travel = new DL_TravelRules();
 		if (m_DL_Cfg.joinId == "")
 		{
 			Math.Randomize(-1);
@@ -383,6 +385,8 @@ modded class MissionServer
 		m_DL_LayoutRev = l.rev;
 		m_DL_Cfg.zones = l.zones;
 		m_DL_Cfg.arrivals = l.arrivals;
+		if (l.travel && l.travel.mode != "") // an older hub sends none: keep what config.json has
+			m_DL_Cfg.travel = l.travel;
 		m_DL_InZoneSince.Clear(); // countdowns of zones that may be gone now
 		string err;
 		JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
@@ -390,13 +394,16 @@ modded class MissionServer
 		foreach (DL_Zone z : m_DL_Cfg.zones)
 		{
 			if (z)
-				Print(DL_Const.LOG_TAG + "  zone '" + z.name + "' " + z.center.ToString() + " r " + z.radius.ToString() + " -> " + z.to + " / " + z.arrival);
+				Print(DL_Const.LOG_TAG + "  zone '" + z.name + "' " + z.center.ToString() + " r " + z.radius.ToString() + " -> " + z.to + " / " + z.arrival + ", " + z.distanceKm.ToString() + " km");
 		}
 		foreach (DL_ArrivalPoint a : m_DL_Cfg.arrivals)
 		{
 			if (a)
 				Print(DL_Const.LOG_TAG + "  arrival '" + a.name + "' " + a.pos.ToString() + " yaw " + a.yaw.ToString());
 		}
+		DL_TravelRules t = m_DL_Cfg.travel;
+		if (t)
+			Print(DL_Const.LOG_TAG + "  travel rules: " + t.mode + ", per 10 km foot " + t.foodFootPct.ToString() + "/" + t.waterFootPct.ToString() + "% food/water, car " + t.foodCarPct.ToString() + "/" + t.waterCarPct.ToString() + "% + " + t.fuelLiters.ToString() + " L, wear " + t.wearEnginePct.ToString() + "/" + t.wearWheelsPct.ToString() + "%, time " + t.timeEnabled.ToString() + " (" + t.speedFootKmh.ToString() + "/" + t.speedCarKmh.ToString() + " km/h)");
 	}
 
 	protected bool DL_On()

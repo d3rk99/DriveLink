@@ -35,6 +35,7 @@ class DL_Layout
 	int rev;
 	string world; // "map" is a type name in Enforce
 	bool changed;
+	ref DL_TravelRules travel; // this server's travel rules (hub Servers page)
 	ref array<ref DL_Zone> zones;
 	ref array<ref DL_ArrivalPoint> arrivals;
 }

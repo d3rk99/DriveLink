@@ -23,6 +23,73 @@ pub struct ServerEntry {
     /// the join id the DayZ server made for itself before it had a serverId (approved in /admin)
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub claim: String,
+    /// rules for trips that START here (Research/travel-cost-design.md); sent to the server with its layout
+    #[serde(default)]
+    pub travel: TravelRules,
+}
+
+/// Travel cost + time for trips leaving one server. Costs are per 10 km of the zone's distance (0 km = free).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TravelRules {
+    /// "refuse" = not enough supplies, no trip; "weakened" = the trip goes and the road decides
+    pub mode: String,
+    pub food_foot_pct: f64,  // % of a full stomach (DayZ max 5000) per 10 km on foot
+    pub water_foot_pct: f64,
+    pub food_car_pct: f64,   // per person in a car
+    pub water_car_pct: f64,
+    pub fuel_liters: f64,    // from the car's tank
+    pub wear_engine_pct: f64, // engine health taken
+    pub wear_wheels_pct: f64, // every wheel
+    /// on = the character is "on the road" for distance / speed and can't log in anywhere until it arrives
+    pub time_enabled: bool,
+    pub speed_foot_kmh: f64,
+    pub speed_car_kmh: f64,
+    // weakened mode: the road's chances, in %
+    pub luck_gas_pct: f64,       // out of fuel: chance to find some and keep the car
+    pub bite_pct: f64,           // per 10 km walked: infected attack (bleeding)
+    pub bite_death_pct: f64,     // of those attacks: dies
+    pub starve_death_pct: f64,   // short more than half of the food or water cost: dies
+}
+
+impl Default for TravelRules {
+    fn default() -> Self {
+        TravelRules {
+            mode: "refuse".into(),
+            food_foot_pct: 15.0,
+            water_foot_pct: 15.0,
+            food_car_pct: 4.0,
+            water_car_pct: 5.0,
+            fuel_liters: 5.0,
+            wear_engine_pct: 2.0,
+            wear_wheels_pct: 3.0,
+            time_enabled: false,
+            speed_foot_kmh: 5.0,
+            speed_car_kmh: 40.0,
+            luck_gas_pct: 35.0,
+            bite_pct: 5.0,
+            bite_death_pct: 10.0,
+            starve_death_pct: 20.0,
+        }
+    }
+}
+
+impl TravelRules {
+    /// keep what the browser sent inside sane limits
+    pub fn clamped(mut self) -> Self {
+        if self.mode != "weakened" {
+            self.mode = "refuse".into();
+        }
+        let pct = |v: f64| if v.is_finite() { v.clamp(0.0, 100.0) } else { 0.0 };
+        for v in [&mut self.food_foot_pct, &mut self.water_foot_pct, &mut self.food_car_pct, &mut self.water_car_pct, &mut self.wear_engine_pct, &mut self.wear_wheels_pct,
+                  &mut self.luck_gas_pct, &mut self.bite_pct, &mut self.bite_death_pct, &mut self.starve_death_pct] {
+            *v = pct(*v);
+        }
+        self.fuel_liters = if self.fuel_liters.is_finite() { self.fuel_liters.clamp(0.0, 1000.0) } else { 0.0 };
+        self.speed_foot_kmh = if self.speed_foot_kmh.is_finite() { self.speed_foot_kmh.clamp(0.5, 1000.0) } else { 5.0 };
+        self.speed_car_kmh = if self.speed_car_kmh.is_finite() { self.speed_car_kmh.clamp(0.5, 1000.0) } else { 40.0 };
+        self
+    }
 }
 
 fn is_zero(v: &u16) -> bool {

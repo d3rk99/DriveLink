@@ -33,6 +33,7 @@ pub fn routes(h: Shared) -> Router<Shared> {
         .route("/admin/maps/{map}/{z}/{file}", get(tile))
         .route("/admin/api/servers", post(save_server))
         .route("/admin/api/servers/{id}/delete", post(delete_server))
+        .route("/admin/api/servers/{id}/travel", post(save_travel))
         .route("/admin/api/pending/{claim}/approve", post(approve))
         .route("/admin/api/pending/{claim}/dismiss", post(dismiss))
         .route("/admin/api/settings", post(save_settings))
@@ -116,7 +117,7 @@ async fn state(State(h): State<Shared>) -> Response {
         servers.push(json!({
             "id": s.id, "name": s.name, "lanHost": s.lan_host, "publicHost": s.public_host, "port": s.port,
             "queryPort": s.query_port, "password": s.password, "world": s.world, "map": map, "layout": layout,
-            "seenSecondsAgo": ago, "local": h.is_local_server(&s.id),
+            "seenSecondsAgo": ago, "local": h.is_local_server(&s.id), "travel": s.travel,
         }));
     }
     drop(db);
@@ -236,6 +237,28 @@ async fn save_server(State(h): State<Shared>, body: Bytes) -> Response {
         }
         Err(e) => bad(e),
     }
+}
+
+// travel rules for trips leaving this server; the DayZ server picks them up with its next layout poll (~30 s)
+async fn save_travel(State(h): State<Shared>, Path(id): Path<String>, body: Bytes) -> Response {
+    let t: crate::config::TravelRules = match serde_json::from_slice(&body) {
+        Ok(t) => t,
+        Err(e) => return bad(format!("bad travel rules: {e}")),
+    };
+    let t = t.clamped();
+    let res = h.update_cfg(|c| match c.servers.iter_mut().find(|s| s.id == id) {
+        Some(s) => {
+            s.travel = t.clone();
+            Ok(())
+        }
+        None => Err(format!("no server {id:?}")),
+    });
+    if let Err(e) = res {
+        return bad(e);
+    }
+    let rev = crate::layout::bump(&h.db.lock().unwrap(), &id).ok().flatten();
+    crate::logf!("servers page: travel rules of {id:?} saved (mode {}, time {}){}", t.mode, if t.time_enabled { "on" } else { "off" }, rev.map(|r| format!(", layout rev {r}")).unwrap_or_default());
+    Json(json!({"ok": true, "travel": t, "rev": rev})).into_response()
 }
 
 async fn delete_server(State(h): State<Shared>, Path(id): Path<String>) -> Response {

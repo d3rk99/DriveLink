@@ -42,6 +42,20 @@ pub fn save(c: &Connection, server: &str, zones: &str, arrivals: &str, map: Opti
     Ok(rev)
 }
 
+/// Something else the server gets with its layout changed (its travel rules): make it reload. No layout yet = nothing
+/// to do, its first hello gets everything.
+pub fn bump(c: &Connection, server: &str) -> rusqlite::Result<Option<i64>> {
+    c.execute("UPDATE layouts SET rev=rev+1, updated_at=CURRENT_TIMESTAMP WHERE server_id=?1", params![server])?;
+    Ok(get(c, server)?.map(|l| l.rev))
+}
+
+/// The layout as a DayZ server gets it, with that server's travel rules.
+pub fn for_server(l: &Layout, travel: &crate::config::TravelRules) -> Value {
+    let mut v = to_json(l);
+    v["travel"] = serde_json::to_value(travel).unwrap_or(Value::Null);
+    v
+}
+
 pub fn to_json(l: &Layout) -> Value {
     serde_json::json!({
         "rev": l.rev,
@@ -63,6 +77,8 @@ pub fn clean_zones(v: &Value) -> Value {
                     "radius": z.get("radius").and_then(Value::as_f64).unwrap_or(30.0).max(1.0),
                     "to": z.get("to").and_then(Value::as_str).unwrap_or(""),
                     "arrival": z.get("arrival").and_then(Value::as_str).unwrap_or(""),
+                    // travel cost/time scale with this (0 = free, instant)
+                    "distanceKm": z.get("distanceKm").and_then(Value::as_f64).filter(|d| d.is_finite()).unwrap_or(0.0).clamp(0.0, 100000.0),
                 })
             })
             .collect(),

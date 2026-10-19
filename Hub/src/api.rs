@@ -281,8 +281,9 @@ async fn hello(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body:
             Err(e) => return db_error(e),
         }
     }
+    let travel = h.cfg().server(&sid).map(|s| s.travel.clone()).unwrap_or_default();
     let layout = match crate::layout::get(&db, &sid) {
-        Ok(l) => l.map(|l| crate::layout::to_json(&l)).unwrap_or(Value::Null),
+        Ok(l) => l.map(|l| crate::layout::for_server(&l, &travel)).unwrap_or(Value::Null),
         Err(e) => return db_error(e),
     };
     crate::logf!("hello from {sid}");
@@ -306,7 +307,8 @@ async fn layout(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
     match crate::layout::get(&db, &sid) {
         Ok(Some(l)) if l.rev != r.rev => {
             crate::logf!("layout rev {} sent to {sid}", l.rev);
-            let mut out = crate::layout::to_json(&l);
+            let travel = h.cfg().server(&sid).map(|s| s.travel.clone()).unwrap_or_default();
+            let mut out = crate::layout::for_server(&l, &travel);
             out["ok"] = json!(true);
             out["changed"] = json!(true);
             reply(StatusCode::OK, out)

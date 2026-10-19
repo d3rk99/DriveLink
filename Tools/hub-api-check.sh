@@ -112,6 +112,19 @@ has "players: detail admin log" '"action":"send"'
 expect "players: drop" "$(apost /admin/api/players/$P2/action '{"action":"drop"}')" 200
 expect "players: unknown steam id" "$(apost /admin/api/players/1/action '{"action":"release"}')" 404
 
+# Travel rules + zone distance
+curl -s -m 5 "$U/admin/api/state" > "$T/body"; has "travel: defaults in state" '"mode":"refuse"'
+expect "travel: layout with a 60 km zone" "$(apost /admin/api/layout/chernarus '{"zones":[{"name":"To Livonia","center":[100,0,100],"radius":40,"to":"livonia","arrival":"a","distanceKm":60}],"arrivals":[{"name":"a","pos":[1,0,1],"yaw":0}]}')" 200
+expect "travel: save rules" "$(apost /admin/api/servers/chernarus/travel '{"mode":"weakened","foodFootPct":20,"timeEnabled":true,"speedCarKmh":9999,"fuelLiters":-3}')" 200
+has "travel: speed clamped" '"speedCarKmh":1000'
+has "travel: fuel clamped" '"fuelLiters":0'
+post /api/layout "$(req chernarus ",\"rev\":0")" >/dev/null; has "travel: layout carries rules" '"mode":"weakened"'
+has "travel: layout carries the distance" '"distanceKm":60'
+REV=$(grep -o '"rev":[0-9]*' "$T/body" | head -1 | cut -d: -f2)
+expect "travel: rules change bumps rev" "$(apost /admin/api/servers/chernarus/travel '{"mode":"refuse"}')" 200
+post /api/layout "$(req chernarus ",\"rev\":$REV")" >/dev/null; has "travel: server sees the change" '"changed":true'
+grep -q '"travel"' "$T/hub.json" && echo "ok   travel: saved in hub.json" || { echo "FAIL travel not in hub.json"; FAIL=1; }
+
 # HTTPS (self-signed, so -k)
 code=$(curl -s -k -m 5 -o "$T/body" -w "%{http_code}" --data-binary "$(req chernarus "")" https://127.0.0.1:17291/api/hello)
 expect "HTTPS hello (self-signed)" "$code" 200

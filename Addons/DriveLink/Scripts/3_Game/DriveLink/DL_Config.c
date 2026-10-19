@@ -27,6 +27,28 @@ class DL_Zone
 	float radius = 30;        // metres
 	string to;                // target server id (from the hub)
 	string arrival;           // arrival point name on the target
+	float distanceKm;         // trip length: travel cost/time scale with it (0 = free, instant)
+}
+
+// Travel cost + time for trips that START on this server (hub web app, Servers page, Travel). Costs are per 10 km of
+// the zone's distance. Research/travel-cost-design.md. Same field names as the hub's TravelRules.
+class DL_TravelRules
+{
+	string mode = "refuse";   // "refuse" = short of supplies, no trip; "weakened" = the trip goes, the road decides
+	float foodFootPct = 15;   // % of a full stomach (PlayerConstants.SL_ENERGY_MAX) per 10 km on foot
+	float waterFootPct = 15;
+	float foodCarPct = 4;     // per person in a car
+	float waterCarPct = 5;
+	float fuelLiters = 5;
+	float wearEnginePct = 2;
+	float wearWheelsPct = 3;
+	bool timeEnabled;         // on the road for distance / speed, no login anywhere meanwhile
+	float speedFootKmh = 5;
+	float speedCarKmh = 40;
+	float luckGasPct = 35;    // weakened mode chances, in %
+	float bitePct = 5;
+	float biteDeathPct = 10;
+	float starveDeathPct = 20;
 }
 
 // Where you come out when you arrive from another server.
@@ -54,6 +76,7 @@ class DL_Config
 	// M2: a car that left is moved here (ground height) until its seats are empty and it can be deleted, so nobody
 	// can loot its trunk in the meantime (those items would exist twice). Pick a spot far from players. "0 0 0" = off.
 	vector parkingSpot;
+	ref DL_TravelRules travel = new DL_TravelRules(); // from the hub with the layout
 	ref array<ref DL_Zone> zones = new array<ref DL_Zone>;
 	ref array<ref DL_ArrivalPoint> arrivals = new array<ref DL_ArrivalPoint>;
 
