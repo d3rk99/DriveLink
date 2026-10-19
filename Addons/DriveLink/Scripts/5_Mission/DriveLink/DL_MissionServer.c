@@ -102,6 +102,9 @@ modded class MissionServer
 			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
 			Print(DL_Const.LOG_TAG + "wrote " + DL_Const.CONFIG + " - put in hubUrl + hubKey (the hub's web app, Setup page shows both), restart, then approve this server on the hub's Servers page");
 		}
+		// a config.json from before a setting existed loads it as 0
+		if (m_DL_Cfg.crewWaitSeconds <= 0)
+			m_DL_Cfg.crewWaitSeconds = 120;
 		if (m_DL_Cfg.joinId == "")
 		{
 			Math.Randomize(-1);
@@ -284,7 +287,13 @@ modded class MissionServer
 		h.port = 2302;
 		if (g_Game.CommandlineGetParam("port", p) && p.ToInt() > 0)
 			h.port = p.ToInt();
-		h.queryPort = g_Game.ServerConfigGetInt("steamQueryPort");
+		// -steamQueryPort= on the command line wins over serverDZ.cfg steamQueryPort (2026-10-19: Livonia's 27017 was
+		// only on the command line and got reported as the 27016 default)
+		string qp;
+		if (g_Game.CommandlineGetParam("steamQueryPort", qp) && qp.ToInt() > 0)
+			h.queryPort = qp.ToInt();
+		else
+			h.queryPort = g_Game.ServerConfigGetInt("steamQueryPort");
 		if (h.queryPort <= 0)
 			h.queryPort = 27016; // DayZ's default
 		string world;
