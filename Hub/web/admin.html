@@ -490,6 +490,7 @@ const TRAVEL_FIELDS = [
   ["speedFootKmh", "Speed on foot", "km/h (travel time)"], ["speedCarKmh", "Speed by car", "km/h (travel time)"],
   ["luckGasPct", "Find fuel when out", "% chance (weakened)"], ["biteDeathPct", "Attack kills", "% of attacks (weakened)"],
   ["bitePct", "Infected attack", "% per 10 km walked (weakened)"], ["starveDeathPct", "Starve / thirst kills", "% when over half short (weakened)"],
+  ["spareNeededKm", "Spare wheel needed above", "km, 0 = off (refuse mode: spare wheel or tyre repair kit aboard)"], ["flatPct", "Flat tyre", "% per 10 km (weakened)"],
 ];
 function travelBox(f) {
   const t = f.travel || {};

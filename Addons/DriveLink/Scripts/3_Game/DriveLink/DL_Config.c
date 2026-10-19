@@ -49,6 +49,8 @@ class DL_TravelRules
 	float bitePct = 5;
 	float biteDeathPct = 10;
 	float starveDeathPct = 20;
+	float spareNeededKm;      // refuse mode: car trips longer than this need a spare wheel or a TireRepairKit (0 = off)
+	float flatPct = 3;        // weakened mode (step 4): flat tyre chance per 10 km
 }
 
 // Where you come out when you arrive from another server.

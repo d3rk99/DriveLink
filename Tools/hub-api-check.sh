@@ -123,6 +123,9 @@ has "travel: layout carries the distance" '"distanceKm":60'
 REV=$(grep -o '"rev":[0-9]*' "$T/body" | head -1 | cut -d: -f2)
 expect "travel: rules change bumps rev" "$(apost /admin/api/servers/chernarus/travel '{"mode":"refuse"}')" 200
 post /api/layout "$(req chernarus ",\"rev\":$REV")" >/dev/null; has "travel: server sees the change" '"changed":true'
+expect "travel: spare rule" "$(apost /admin/api/servers/chernarus/travel '{"mode":"refuse","spareNeededKm":40,"flatPct":250}')" 200
+has "travel: spare km saved" '"spareNeededKm":40'
+has "travel: flat chance clamped" '"flatPct":100'
 grep -q '"travel"' "$T/hub.json" && echo "ok   travel: saved in hub.json" || { echo "FAIL travel not in hub.json"; FAIL=1; }
 
 # HTTPS (self-signed, so -k)

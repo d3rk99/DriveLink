@@ -50,6 +50,10 @@ pub struct TravelRules {
     pub bite_pct: f64,           // per 10 km walked: infected attack (bleeding)
     pub bite_death_pct: f64,     // of those attacks: dies
     pub starve_death_pct: f64,   // short more than half of the food or water cost: dies
+    /// refuse mode: car trips longer than this need a spare wheel or a TireRepairKit aboard (0 = off)
+    pub spare_needed_km: f64,
+    /// weakened mode (step 4): chance of a flat tyre per 10 km, higher on worn wheels
+    pub flat_pct: f64,
 }
 
 impl Default for TravelRules {
@@ -70,6 +74,8 @@ impl Default for TravelRules {
             bite_pct: 5.0,
             bite_death_pct: 10.0,
             starve_death_pct: 20.0,
+            spare_needed_km: 0.0,
+            flat_pct: 3.0,
         }
     }
 }
@@ -82,9 +88,10 @@ impl TravelRules {
         }
         let pct = |v: f64| if v.is_finite() { v.clamp(0.0, 100.0) } else { 0.0 };
         for v in [&mut self.food_foot_pct, &mut self.water_foot_pct, &mut self.food_car_pct, &mut self.water_car_pct, &mut self.wear_engine_pct, &mut self.wear_wheels_pct,
-                  &mut self.luck_gas_pct, &mut self.bite_pct, &mut self.bite_death_pct, &mut self.starve_death_pct] {
+                  &mut self.luck_gas_pct, &mut self.bite_pct, &mut self.bite_death_pct, &mut self.starve_death_pct, &mut self.flat_pct] {
             *v = pct(*v);
         }
+        self.spare_needed_km = if self.spare_needed_km.is_finite() { self.spare_needed_km.clamp(0.0, 100000.0) } else { 0.0 };
         self.fuel_liters = if self.fuel_liters.is_finite() { self.fuel_liters.clamp(0.0, 1000.0) } else { 0.0 };
         self.speed_foot_kmh = if self.speed_foot_kmh.is_finite() { self.speed_foot_kmh.clamp(0.5, 1000.0) } else { 5.0 };
         self.speed_car_kmh = if self.speed_car_kmh.is_finite() { self.speed_car_kmh.clamp(0.5, 1000.0) } else { 40.0 };

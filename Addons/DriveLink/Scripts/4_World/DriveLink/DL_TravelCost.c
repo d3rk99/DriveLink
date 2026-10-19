@@ -15,6 +15,7 @@ class DL_TravelPrice
 	float engineWearPct;      // % of the engine's max health
 	float wheelWearPct;       // % of each wheel's max health
 	int seconds;              // on the road (travel time on), 0 = instant
+	float spareKm;            // > 0: this car trip needs a spare wheel or a tyre repair kit (refuse mode rule)
 
 	string Text()
 	{
@@ -23,6 +24,8 @@ class DL_TravelPrice
 			s += " each, " + Math.Round(fuelL).ToString() + " L fuel";
 		if (seconds > 0)
 			s += ", about " + DL_TravelCost.Duration(seconds);
+		if (spareKm > 0)
+			s += ", spare wheel or tyre repair kit needed";
 		return s;
 	}
 }
@@ -51,6 +54,8 @@ class DL_TravelCost
 			p.foodPct = t.foodFootPct * k;
 			p.waterPct = t.waterFootPct * k;
 		}
+		if (byCar && t.spareNeededKm > 0 && z.distanceKm > t.spareNeededKm)
+			p.spareKm = t.spareNeededKm;
 		if (t.timeEnabled)
 		{
 			float speed = t.speedFootKmh;
@@ -99,12 +104,14 @@ class DL_TravelCost
 		float needWater = p.waterPct / 100.0 * PlayerConstants.SL_WATER_MAX;
 		float canisters = 0;
 		array<string> miss = new array<string>;
+		array<ref DL_PlayerData> snaps = new array<ref DL_PlayerData>;
 		for (int i = 0; i < crew.Count(); i++)
 		{
 			PlayerBase pb = crew[i];
 			if (!pb)
 				continue;
 			DL_PlayerData d = snap.Capture(pb);
+			snaps.Insert(d);
 			DL_CarData trunk;
 			if (i == 0)
 				trunk = cd; // the driver eats from the trunk too (it travels in his snapshot)
@@ -133,6 +140,8 @@ class DL_TravelCost
 			float fuel = FuelLOf(car) + canisters;
 			if (fuel < p.fuelL)
 				miss.Insert("car: fuel " + Math.Floor(fuel).ToString() + " L of " + Math.Ceil(p.fuelL).ToString() + " L (tank + gasoline canisters)");
+			if (p.spareKm > 0 && !HasSpareOrKit(car, cd, snaps))
+				miss.Insert("car: a spare " + WheelTypeText(car) + " or a tyre repair kit (trips over " + Math.Round(p.spareKm).ToString() + " km)");
 		}
 		string res = "";
 		foreach (string ms : miss)
@@ -144,6 +153,63 @@ class DL_TravelCost
 		return res;
 	}
 
+
+	// ---------------- spare wheel / tyre repair kit ----------------
+
+	// the wheel types this car runs on (its CarWheel attachments), e.g. HatchbackWheel
+	static array<string> WheelTypes(CarScript car)
+	{
+		array<string> types = new array<string>;
+		for (int i = 0; i < car.GetInventory().AttachmentCount(); i++)
+		{
+			EntityAI a = car.GetInventory().GetAttachmentFromIndex(i);
+			if (a && a.IsInherited(CarWheel) && !a.IsInherited(CarWheel_Ruined) && types.Find(a.GetType()) < 0)
+				types.Insert(a.GetType());
+		}
+		return types;
+	}
+
+	static string WheelTypeText(CarScript car)
+	{
+		array<string> t = WheelTypes(car);
+		if (t.Count() == 0)
+			return "wheel";
+		return t[0];
+	}
+
+	// a spare = a wheel of one of those types that is NOT on the car (trunk cargo, or anywhere in the crew's gear);
+	// a kit = a TireRepairKit with uses left. Ruined wheels are other classes (..._Ruined), so they don't count.
+	static bool HasSpareOrKit(CarScript car, DL_CarData cd, array<ref DL_PlayerData> crew)
+	{
+		array<string> types = WheelTypes(car);
+		array<ref DL_ItemData> all = new array<ref DL_ItemData>;
+		if (cd)
+		{
+			foreach (DL_ItemData c : cd.items)
+			{
+				// parent 0 + a slot that isn't cargo = mounted on the car (its wheels, doors, battery...)
+				if (c && !(c.parent == 0 && c.slot != DL_Const.SLOT_CARGO))
+					all.Insert(c);
+			}
+		}
+		foreach (DL_PlayerData d : crew)
+		{
+			if (!d)
+				continue;
+			foreach (DL_ItemData pi : d.items)
+				all.Insert(pi);
+		}
+		foreach (DL_ItemData it : all)
+		{
+			if (!it)
+				continue;
+			if (types.Find(it.type) >= 0 && it.health != 0)
+				return true;
+			if (g_Game.IsKindOf(it.type, "TireRepairKit") && it.quantity != 0 && it.health != 0)
+				return true;
+		}
+		return false;
+	}
 
 	// ---------------- supplies: bars + stomach + carried food/drink, fuel tank + canisters ----------------
 	// Nutrition is per 100 units of quantity / stomach amount, like vanilla digestion (playerstomach.c:90-93:
