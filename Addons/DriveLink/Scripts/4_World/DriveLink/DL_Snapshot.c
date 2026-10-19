@@ -190,16 +190,32 @@ class DL_Snapshot
 	// CollectTree order = every parent is in the list before its children, so the rebuild can go straight down the list.
 	protected void CaptureItems(PlayerBase p, DL_PlayerData d)
 	{
-		array<EntityAI> all = new array<EntityAI>;
-		CollectTree(p, all);
-		map<EntityAI, int> ids = new map<EntityAI, int>;
-		ids.Set(p, 0);
+		EntityAI skip;
 		EntityAI inHands = p.GetHumanInventory().GetEntityInHands();
+		if (d.restrained && inHands)
+		{
+			d.restrainItem = inHands.GetType(); // the locked cuffs: rebuilt by the restraint itself
+			skip = inHands;
+		}
+		CaptureTree(p, p, skip, d.items);
+	}
+
+	// Everything under root (a player or a car) as a flat list: parent 0 = root. p = the player for hands/quickbar
+	// (null for a car), skip = one item not to save (locked cuffs).
+	void CaptureTree(EntityAI root, PlayerBase p, EntityAI skip, array<ref DL_ItemData> outItems)
+	{
+		array<EntityAI> all = new array<EntityAI>;
+		CollectTree(root, all);
+		map<EntityAI, int> ids = new map<EntityAI, int>;
+		ids.Set(root, 0);
+		EntityAI inHands;
+		if (p)
+			inHands = p.GetHumanInventory().GetEntityInHands();
 		int next = 1;
 		for (int i = 0; i < all.Count() && next <= DL_Const.MAX_ITEMS; i++)
 		{
 			EntityAI e = all[i];
-			if (!e || e == p)
+			if (!e || e == root || e == skip)
 				continue;
 			EntityAI par = e.GetHierarchyParent();
 			int parentId;
@@ -208,17 +224,12 @@ class DL_Snapshot
 				Print(DL_Const.LOG_TAG + "capture: skipped " + e.GetType() + " (parent not in list)");
 				continue;
 			}
-			if (e == inHands && d.restrained)
-			{
-				d.restrainItem = e.GetType(); // the locked cuffs: rebuilt by the restraint itself
-				continue;
-			}
 			DL_ItemData it = CaptureOne(p, e, inHands);
 			it.id = next;
 			it.parent = parentId;
 			ids.Set(e, next);
 			next++;
-			d.items.Insert(it);
+			outItems.Insert(it);
 		}
 	}
 
@@ -243,7 +254,8 @@ class DL_Snapshot
 				d.cFlip = loc.GetFlip();
 			}
 		}
-		d.quickbar = p.FindQuickBarEntityIndex(e);
+		if (p)
+			d.quickbar = p.FindQuickBarEntityIndex(e);
 		d.temperature = e.GetTemperature();
 
 		ItemBase ib = ItemBase.Cast(e);
@@ -382,14 +394,20 @@ class DL_Snapshot
 
 	protected int ApplyItems(PlayerBase p, DL_PlayerData d, out int dropped)
 	{
+		return ApplyTree(p, p, d.items, dropped);
+	}
+
+	// Rebuild a CaptureTree list under root (a player or a car). p = the player for hands/quickbar (null for a car).
+	int ApplyTree(EntityAI root, PlayerBase p, array<ref DL_ItemData> items, out int dropped)
+	{
 		map<int, EntityAI> made = new map<int, EntityAI>;
-		made.Set(0, p);
+		made.Set(0, root);
 		array<ref DL_ItemData> toQuickbar = new array<ref DL_ItemData>;
 		dropped = 0;
 		int count = 0;
-		for (int i = 0; i < d.items.Count(); i++)
+		for (int i = 0; i < items.Count(); i++)
 		{
-			DL_ItemData it = d.items[i];
+			DL_ItemData it = items[i];
 			if (!it)
 				continue;
 			EntityAI parent;
@@ -399,8 +417,8 @@ class DL_Snapshot
 				e = CreateAt(p, parent, it);
 			if (!e)
 			{
-				// never lose it: on the ground at the player (same idea as UAPI's CreateObject fallback, ItemStore.c:133)
-				e = EntityAI.Cast(g_Game.CreateObjectEx(it.type, p.GetPosition(), ECE_PLACE_ON_SURFACE));
+				// never lose it: on the ground next to root (same idea as UAPI's CreateObject fallback, ItemStore.c:133)
+				e = EntityAI.Cast(g_Game.CreateObjectEx(it.type, root.GetPosition(), ECE_PLACE_ON_SURFACE));
 				if (e)
 				{
 					dropped++;
@@ -421,7 +439,7 @@ class DL_Snapshot
 		for (int q = 0; q < toQuickbar.Count(); q++)
 		{
 			EntityAI qe;
-			if (made.Find(toQuickbar[q].id, qe) && qe)
+			if (p && made.Find(toQuickbar[q].id, qe) && qe)
 				p.SetQuickBarEntityShortcut(qe, toQuickbar[q].quickbar, true);
 		}
 		return count;
@@ -431,7 +449,7 @@ class DL_Snapshot
 	{
 		GameInventory inv = parent.GetInventory();
 		EntityAI e;
-		if (it.slot == DL_Const.SLOT_HANDS)
+		if (it.slot == DL_Const.SLOT_HANDS && p)
 			return p.GetHumanInventory().CreateInHands(it.type);
 		if (it.slot != DL_Const.SLOT_CARGO)
 		{

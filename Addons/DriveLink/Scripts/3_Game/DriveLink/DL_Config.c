@@ -7,6 +7,7 @@ class DL_Const
 	static const string LOG_TAG = "[DriveLink] ";
 	static const string DIR = "$profile:DriveLink";
 	static const string CONFIG = "$profile:DriveLink/config.json";
+	static const string DEBUG_FILE = "$profile:DriveLink/debug.json";
 	static const int RPC_REDIRECT = 4810001;   // server -> client: go to this server
 	static const int RPC_COUNTDOWN = 4810002;  // server -> client: leaving in N s (0 = cancelled)
 	static const int RPC_KICK = 4810003;       // server -> client: show this message (caption, text) and leave the server
@@ -153,6 +154,38 @@ class DL_PlayerData
 	ref array<ref DL_Bleeding> bleeding = new array<ref DL_Bleeding>;
 	ref array<ref DL_StomachItem> stomach = new array<ref DL_StomachItem>;
 	ref array<ref DL_ItemData> items = new array<ref DL_ItemData>;
+}
+
+// A car (M2). Parts (wheels, doors, battery, plugs, radiator...) are attachments and the trunk is cargo, so they are
+// the same flat item list as a player's gear (parent 0 = the car). Research/R2-cars.md.
+class DL_CarData
+{
+	int version = 1;
+	string type;
+	vector pos;
+	vector ori;
+	float health = -1;
+	ref array<float> fluids = new array<float>;   // fraction 0..1 per CarFluid (FUEL..USER4, car.c:18-29), index = enum value
+	ref array<float> fluidCaps = new array<float>; // capacity per CarFluid on the source (a brand-new car may read 0 at first)
+	ref array<ref DL_Zone_Health> zones = new array<ref DL_Zone_Health>;
+	ref array<ref DL_ItemData> items = new array<ref DL_ItemData>;
+}
+
+// $profile:DriveLink/debug.json - test switches, only read when the file exists. Never ship it on a live server.
+class DL_DebugZone
+{
+	vector center;
+	float radius = 10;
+}
+
+class DL_Debug
+{
+	// M2 spike 1: an EMPTY car standing 5 s in this circle is snapshotted, deleted, sent through JSON and rebuilt on
+	// the same spot; the log compares before/after. null/radius 0 = off.
+	ref DL_DebugZone carRebuildZone;
+	// M2 spike 2: on every login a car of this type (vanilla debug kit: wheels, parts, fluids) appears next to the
+	// player and 3 s later he is put in the driver seat. "" = off.
+	string seatTestCar;
 }
 
 // Server address entry (from the hub's /api/hello and redirect answers).

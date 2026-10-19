@@ -30,6 +30,10 @@ modded class MissionServer
 	protected float m_DL_Tick;
 	protected ref DL_Snapshot m_DL_Snap = new DL_Snapshot();
 	protected string m_DL_BuildError;      // why the last DL_BuildArrival returned null
+	protected ref DL_Debug m_DL_Debug;     // debug.json, null when the file is not there
+	protected ref DL_CarSnapshot m_DL_CarSnap = new DL_CarSnapshot();
+	protected ref map<CarScript, int> m_DL_CarInZoneSince = new map<CarScript, int>;
+	protected ref map<CarScript, bool> m_DL_CarDone = new map<CarScript, bool>; // rebuilt cars: not again until they leave the circle
 
 	override void OnMissionStart()
 	{
@@ -76,7 +80,161 @@ modded class MissionServer
 			h.key = m_DL_Cfg.hubKey;
 			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ArriveJson(h), new DL_HelloWaiter(this), "OnAnswer", "hello");
 		}
+		DL_LoadDebug();
 		Print(DL_Const.LOG_TAG + "v" + DL_Const.VERSION + " server '" + m_DL_Cfg.serverId + "', hub " + m_DL_Cfg.hubUrl + ", " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points, key set " + (m_DL_Cfg.hubKey != "").ToString());
+	}
+
+	// ---------------- M2 spikes (debug.json only) ----------------
+
+	protected void DL_LoadDebug()
+	{
+		if (!FileExist(DL_Const.DEBUG_FILE))
+			return;
+		string err;
+		if (!JsonFileLoader<DL_Debug>.LoadFile(DL_Const.DEBUG_FILE, m_DL_Debug, err) || !m_DL_Debug)
+		{
+			Print(DL_Const.LOG_TAG + "DEBUG debug.json unreadable: " + err);
+			m_DL_Debug = null;
+			return;
+		}
+		string zone = "off";
+		if (m_DL_Debug.carRebuildZone && m_DL_Debug.carRebuildZone.radius > 0)
+			zone = m_DL_Debug.carRebuildZone.center.ToString() + " r " + m_DL_Debug.carRebuildZone.radius.ToString();
+		Print(DL_Const.LOG_TAG + "DEBUG debug.json: carRebuildZone " + zone + ", seatTestCar '" + m_DL_Debug.seatTestCar + "'");
+	}
+
+	// Spike 1: an empty car 5 s in the circle -> snapshot -> delete -> JSON text -> rebuilt on the same spot 3 s later.
+	protected void DL_DebugTick()
+	{
+		if (!m_DL_Debug || !m_DL_Debug.carRebuildZone || m_DL_Debug.carRebuildZone.radius <= 0)
+			return;
+		array<Object> objs = new array<Object>;
+		array<CargoBase> cargos = new array<CargoBase>;
+		// CGame.GetObjectsAtPosition (3_game/global/game.c:922) searches a SPHERE: centre it on the ground (test
+		// 2026-10-18: y 0 under ground at 6 m missed the parked car), then keep cars within the radius on the map.
+		vector c0 = m_DL_Debug.carRebuildZone.center;
+		float r = m_DL_Debug.carRebuildZone.radius;
+		c0[1] = g_Game.SurfaceY(c0[0], c0[2]);
+		g_Game.GetObjectsAtPosition(c0, r + 5, objs, cargos);
+		map<CarScript, bool> seen = new map<CarScript, bool>;
+		int now = g_Game.GetTime();
+		foreach (Object o : objs)
+		{
+			CarScript car = CarScript.Cast(o);
+			if (!car)
+				continue;
+			vector cp = car.GetPosition();
+			float dx = cp[0] - c0[0];
+			float dz = cp[2] - c0[2];
+			if (dx * dx + dz * dz > r * r)
+				continue;
+			seen.Set(car, true);
+			if (m_DL_CarDone.Contains(car))
+				continue;
+			bool empty = true;
+			for (int c = 0; c < car.CrewSize(); c++)
+			{
+				if (car.CrewMember(c))
+					empty = false;
+			}
+			int since;
+			if (!empty || !m_DL_CarInZoneSince.Find(car, since))
+			{
+				m_DL_CarInZoneSince.Set(car, now); // occupied: restart the 5 s
+				continue;
+			}
+			if (now - since >= 5000)
+			{
+				m_DL_CarInZoneSince.Remove(car);
+				DL_CarSpike(car);
+			}
+		}
+		// cars that left the circle may be tested again
+		array<CarScript> gone = new array<CarScript>;
+		foreach (CarScript k, bool v : m_DL_CarDone)
+		{
+			if (!k || !seen.Contains(k))
+				gone.Insert(k);
+		}
+		foreach (CarScript g : gone)
+			m_DL_CarDone.Remove(g);
+	}
+
+	protected void DL_CarSpike(CarScript car)
+	{
+		DL_CarData d = m_DL_CarSnap.Capture(car);
+		string json;
+		string err;
+		JsonFileLoader<DL_CarData>.MakeData(d, json, err, false);
+		JsonFileLoader<DL_CarData>.SaveFile(DL_Const.DIR + "/car-snapshot.json", d, err);
+		Print(DL_Const.LOG_TAG + "CAR SPIKE " + d.type + " at " + d.pos.ToString() + ": " + d.items.Count().ToString() + " parts/items, health " + d.health.ToString() + ", " + DL_CarSnapshot.FluidText(d.fluids) + ", " + d.zones.Count().ToString() + " zones, json " + json.Length().ToString() + " bytes (saved car-snapshot.json); deleting it, rebuild in 3 s");
+		car.Delete();
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_CarSpikeBuild, 3000, false, json);
+	}
+
+	protected void DL_CarSpikeBuild(string json)
+	{
+		DL_CarData d;
+		string err;
+		if (!JsonFileLoader<DL_CarData>.LoadData(json, d, err) || !d)
+		{
+			Print(DL_Const.LOG_TAG + "CAR SPIKE FAILED: snapshot unreadable after the JSON round trip: " + err);
+			return;
+		}
+		int made;
+		int dropped;
+		CarScript car = m_DL_CarSnap.Build(d, d.pos, d.ori, made, dropped);
+		if (!car)
+		{
+			Print(DL_Const.LOG_TAG + "CAR SPIKE FAILED: could not create " + d.type);
+			return;
+		}
+		m_DL_CarDone.Set(car, true);
+		Print(DL_Const.LOG_TAG + "CAR SPIKE rebuilt " + d.type + ": " + made.ToString() + "/" + d.items.Count().ToString() + " parts/items (" + dropped.ToString() + " on the ground), health " + car.GetHealth("", "Health").ToString() + ", now " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car)));
+	}
+
+	// Spike 2: a fresh car next to a player who just logged in / arrived, then he is seated as driver.
+	protected void DL_SeatSpikeLater(string sid)
+	{
+		if (m_DL_Debug && m_DL_Debug.seatTestCar != "")
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatSpikeSpawn, 3000, false, sid);
+	}
+
+	protected void DL_SeatSpikeSpawn(string sid)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb)
+			return;
+		vector pos = pb.GetPosition() + pb.GetDirection() * 5;
+		CarScript car = CarScript.Cast(g_Game.CreateObjectEx(m_DL_Debug.seatTestCar, pos, ECE_SETUP | ECE_UPDATEPATHGRAPH | ECE_CREATEPHYSICS | ECE_TRACE));
+		if (!car)
+		{
+			Print(DL_Const.LOG_TAG + "SEAT SPIKE FAILED: could not create '" + m_DL_Debug.seatTestCar + "' (not a CarScript class?)");
+			return;
+		}
+		car.SetOrientation(pb.GetOrientation());
+		car.OnDebugSpawn(); // vanilla kit: wheels, doors, battery, plugs, fluids (e.g. offroadhatchback.c:457-477)
+		Print(DL_Const.LOG_TAG + "SEAT SPIKE spawned " + car.GetType() + " at " + pos.ToString() + " for " + sid + ", seating him in 2 s");
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatSpikeSeat, 2000, false, sid, car);
+	}
+
+	protected void DL_SeatSpikeSeat(string sid, CarScript car)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb || !car)
+			return;
+		pb.DL_SeatIn(car, 0);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatSpikeCheck, 4000, false, sid, car);
+	}
+
+	protected void DL_SeatSpikeCheck(string sid, CarScript car)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb || !car)
+			return;
+		bool inCmd = pb.GetCommand_Vehicle() != null;
+		bool isDriver = car.CrewDriver() == pb;
+		Print(DL_Const.LOG_TAG + "SEAT SPIKE result for " + sid + ": vehicle command " + inCmd.ToString() + ", driver of " + car.GetType() + " " + isDriver.ToString() + ", crew index " + car.CrewMemberIndex(pb).ToString());
 	}
 
 	void DL_OnHello(bool ok, string body)
@@ -343,7 +501,9 @@ modded class MissionServer
 				player.SetAllowDamage(false);
 				m_DL_Doomed.Set(player, true);
 			}
+			return;
 		}
+		DL_SeatSpikeLater(sid); // debug.json only
 	}
 
 	// Returns null (and says why in m_DL_BuildError) when he can't be built here; nothing is changed then.
@@ -395,6 +555,7 @@ modded class MissionServer
 		DL_Confirm(identity.GetPlainId(), r.token);
 		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + ap.name + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString());
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
+		DL_SeatSpikeLater(identity.GetPlainId());
 		return player;
 	}
 
@@ -424,6 +585,7 @@ modded class MissionServer
 			return;
 		m_DL_Tick = 0;
 		DL_CheckZones();
+		DL_DebugTick();
 	}
 
 	protected void DL_CheckZones()

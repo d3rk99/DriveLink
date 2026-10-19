@@ -44,3 +44,17 @@ below is from the vanilla scripts (BohemiaInteractive/DayZ-Script-Diff).
 4. Source: car deleted only after the hub confirms the transfer (same two-phase rule as players).
 5. Anti-dupe for cars: the car snapshot exists only inside the transfer; source deletes it on hand-over; target spawns it once
    per token (hub tracks a car_spawned flag on the transfer).
+
+## M2 spikes, in game 2026-10-18 (DayZ 1.30 servers, debug.json on Chernarus)
+1. Seat a player from script - PASS 5/5, also right after a character was built from a transfer.
+   Server sends a sync juncture to the player (PlayerBase.SendSyncJuncture); it runs on the server AND the owning
+   client, both set a member and the next CommandHandler tick calls StartCommand_Vehicle(car, crewIdx,
+   GetSeatAnimationType) + SetVehicleType(GetAnimInstance) - the vanilla debug spawner's path (DL_PlayerSeat.c).
+   Gotcha: juncture id 4810 never arrived; 233 works -> the id must stay below 256 (vanilla uses 0..26 and 200).
+2. Car snapshot -> delete -> JSON text -> rebuild - PASS: OffroadHatchback 28/28 parts/items, health and 15 damage
+   zones, 9.7 kB JSON; the rebuilt car had its fuel and started. Parts and trunk are just DL_Snapshot.CaptureTree /
+   ApplyTree with the car as root (no car-specific item code).
+   Gotchas: CarFluid has 8 values in 1.30 (USER1..USER4), not 6. GetFluidFraction reads 0 right after Fill on a
+   brand-new car although the fill worked - read it later. GetObjectsAtPosition searches a SPHERE (centre it on the
+   ground, then filter by 2-D distance).
+Not yet: engine on/off, lights, doors open, ruined parts, a car with people in it being deleted.
