@@ -25,4 +25,6 @@ Keep arrival points well outside their own server's leaving zone (Chernarus arri
 | Fix d194a17: client remembers LAN servers it joined | PASS 12:33 "remembered 192.168.1.133", 12:34 "joined via 204.8.71.111 -> using 192.168.1.133:2302" |
 | livonia2 -> Chernarus with the fix | PASS 12:35: 36/36 items, health 100 |
 | DriveLink on a LINUX DayZ server | PASS (livonia2) |
-Not tested yet: a car across machines, players coming from the internet into Chernarus.
+| Car across machines (new ports 2802/2902), Chernarus -> livonia2 12:44 | PASS: hub took it, source car removed after 13 s; on livonia2 black screen 12:45:04 -> off 12:45:09, engine started on the client |
+| livonia2 -> Chernarus by car 12:45:46 | PASS: client used 192.168.1.133:2802 by itself; waiting room 1/1, car 29/29, seated, engine running true (12:46:09), fuel carried (0.999192) |
+Not tested yet: players coming from the internet into Chernarus.
