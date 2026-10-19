@@ -86,63 +86,235 @@ class DL_TravelCost
 		return car.GetFluidFraction(CarFluid.FUEL) * car.GetFluidCapacity(CarFluid.FUEL);
 	}
 
-	// "" = everyone can pay; else what is missing, per person: "Britney: water 12% of 30%; car: fuel 4 L of 30 L"
-	static string Shortfall(DL_TravelPrice p, array<PlayerBase> crew, CarScript car)
+	// "" = everyone can pay; else what is missing, per person: "Britney: water 12% of 30%; car: fuel 4 L of 30 L".
+	// Counts bars + stomach + food/drink they carry (the driver also the trunk) and the tank + gasoline canisters.
+	static string Shortfall(DL_TravelPrice p, array<PlayerBase> crew, CarScript car, DL_Snapshot snap, DL_CarSnapshot carSnap)
 	{
 		if (!p)
 			return "";
+		DL_CarData cd;
+		if (car && p.byCar)
+			cd = carSnap.Capture(car);
+		float needFood = p.foodPct / 100.0 * PlayerConstants.SL_ENERGY_MAX;
+		float needWater = p.waterPct / 100.0 * PlayerConstants.SL_WATER_MAX;
+		float canisters = 0;
 		array<string> miss = new array<string>;
-		foreach (PlayerBase pb : crew)
+		for (int i = 0; i < crew.Count(); i++)
 		{
+			PlayerBase pb = crew[i];
 			if (!pb)
 				continue;
+			DL_PlayerData d = snap.Capture(pb);
+			DL_CarData trunk;
+			if (i == 0)
+				trunk = cd; // the driver eats from the trunk too (it travels in his snapshot)
+			float food;
+			float water;
+			float canL;
+			Count(d, trunk, food, water, canL);
+			canisters += canL;
 			string who = "you";
 			if (crew.Count() > 1 && pb.GetIdentity())
 				who = pb.GetIdentity().GetName();
 			string m = "";
-			float food = FoodPctOf(pb);
-			float water = WaterPctOf(pb);
-			if (food < p.foodPct)
-				m += "food " + Math.Floor(food).ToString() + "% of " + Math.Ceil(p.foodPct).ToString() + "%";
-			if (water < p.waterPct)
+			if (food < needFood)
+				m += "food " + Math.Floor(food / PlayerConstants.SL_ENERGY_MAX * 100).ToString() + "% of " + Math.Ceil(p.foodPct).ToString() + "%";
+			if (water < needWater)
 			{
 				if (m != "")
 					m += ", ";
-				m += "water " + Math.Floor(water).ToString() + "% of " + Math.Ceil(p.waterPct).ToString() + "%";
+				m += "water " + Math.Floor(water / PlayerConstants.SL_WATER_MAX * 100).ToString() + "% of " + Math.Ceil(p.waterPct).ToString() + "%";
 			}
 			if (m != "")
 				miss.Insert(who + ": " + m);
 		}
 		if (car && p.byCar)
 		{
-			float fuel = FuelLOf(car);
+			float fuel = FuelLOf(car) + canisters;
 			if (fuel < p.fuelL)
-				miss.Insert("car: fuel " + Math.Floor(fuel).ToString() + " L of " + Math.Ceil(p.fuelL).ToString() + " L");
+				miss.Insert("car: fuel " + Math.Floor(fuel).ToString() + " L of " + Math.Ceil(p.fuelL).ToString() + " L (tank + gasoline canisters)");
 		}
 		string res = "";
-		foreach (string s : miss)
+		foreach (string ms : miss)
 		{
 			if (res != "")
 				res += "; ";
-			res += s;
+			res += ms;
 		}
 		return res;
 	}
 
-	// food + water off one traveller's snapshot (never below 0). Returns what was taken, for the log.
-	static string ChargePlayer(DL_PlayerData d, DL_TravelPrice p)
+
+	// ---------------- supplies: bars + stomach + carried food/drink, fuel tank + canisters ----------------
+	// Nutrition is per 100 units of quantity / stomach amount, like vanilla digestion (playerstomach.c:90-93:
+	// profile.GetEnergy() / 100 per unit). Food: Edible_Base.GetFoodEnergy/GetFoodWater(null, type, stage)
+	// (edible_base.c:407-433); drinks: Liquid.GetNutritionalProfileByType (liquid.c:318). Units = stat units
+	// (PlayerStats energy/water, max 5000).
+
+	// energy + water per unit of what is in this item, false = nothing he would eat/drink on the road
+	static bool Nutrition(DL_ItemData it, out float energyPerUnit, out float waterPerUnit)
+	{
+		energyPerUnit = 0;
+		waterPerUnit = 0;
+		if (!it || it.quantity <= 0 || it.agents != 0) // contaminated (dirty water, salmonella...): not on the road
+			return false;
+		if (it.liquid != 0)
+		{
+			if ((it.liquid & (LIQUID_GROUP_DRINKWATER | LIQUID_BEER)) == 0)
+				return false; // fuel, disinfectant, blood, salt water...
+			NutritionalProfile lp = Liquid.GetNutritionalProfileByType(it.liquid);
+			if (!lp)
+				return false;
+			energyPerUnit = lp.GetEnergy() / 100;
+			waterPerUnit = lp.GetWaterContent() / 100;
+		}
+		else
+		{
+			if (!g_Game.IsKindOf(it.type, "Edible_Base") || g_Game.IsKindOf(it.type, "Bottle_Base"))
+				return false;
+			if (it.foodStage == FoodStageType.ROTTEN || it.foodStage == FoodStageType.BURNED)
+				return false;
+			string t = it.type;
+			t.ToLower();
+			if (it.foodStage == FoodStageType.RAW && (t.Contains("meat") || t.Contains("lard") || t.Contains("guts")))
+				return false; // raw meat makes you sick
+			int stage = it.foodStage;
+			if (stage < 0)
+				stage = 0;
+			energyPerUnit = Edible_Base.GetFoodEnergy(null, it.type, stage) / 100;
+			waterPerUnit = Edible_Base.GetFoodWater(null, it.type, stage) / 100;
+		}
+		return energyPerUnit > 0 || waterPerUnit > 0;
+	}
+
+	static NutritionalProfile StomachProfile(DL_StomachItem s)
+	{
+		NutritionalProfile p = Liquid.GetNutritionalProfileByName(s.type);
+		if (!p)
+			p = Edible_Base.GetNutritionalProfile(null, s.type, s.stage);
+		return p;
+	}
+
+	static bool IsFuel(DL_ItemData it)
+	{
+		return it && it.liquid == LIQUID_GASOLINE && it.quantity > 0;
+	}
+
+	// what one traveller (+ the car trunk, for the driver) has: food/water in stat units, canister fuel in litres
+	static void Count(DL_PlayerData d, DL_CarData car, out float food, out float water, out float canisterL)
+	{
+		food = d.energy;
+		water = d.water;
+		canisterL = 0;
+		foreach (DL_StomachItem s : d.stomach)
+		{
+			NutritionalProfile sp = StomachProfile(s);
+			if (sp && s.amount > 0)
+			{
+				food += s.amount * sp.GetEnergy() / 100;
+				water += s.amount * sp.GetWaterContent() / 100;
+			}
+		}
+		array<ref DL_ItemData> lists = new array<ref DL_ItemData>;
+		foreach (DL_ItemData a : d.items)
+			lists.Insert(a);
+		if (car)
+		{
+			foreach (DL_ItemData b : car.items)
+				lists.Insert(b);
+		}
+		foreach (DL_ItemData it : lists)
+		{
+			float e;
+			float w;
+			if (Nutrition(it, e, w))
+			{
+				food += it.quantity * e;
+				water += it.quantity * w;
+			}
+			if (IsFuel(it))
+				canisterL += it.quantity / 1000;
+		}
+	}
+
+	// takes "units" of what is needed from one source; returns how many units it took
+	static float Take(float have, float e, float w, inout float needFood, inout float needWater)
+	{
+		float units = 0;
+		if (needFood > 0 && e > 0)
+			units = Math.Max(units, needFood / e);
+		if (needWater > 0 && w > 0)
+			units = Math.Max(units, needWater / w);
+		units = Math.Min(units, have);
+		needFood = Math.Max(0, needFood - units * e);
+		needWater = Math.Max(0, needWater - units * w);
+		return units;
+	}
+
+	// eat on the road: the stomach first, then carried food/drink (his own, then the trunk), the bars last.
+	// Changes the snapshots; returns what was eaten for the log.
+	static string Eat(DL_PlayerData d, DL_CarData car, float needFood, float needWater)
+	{
+		string eaten = "";
+		foreach (DL_StomachItem s : d.stomach)
+		{
+			if (needFood <= 0 && needWater <= 0)
+				break;
+			NutritionalProfile sp = StomachProfile(s);
+			if (!sp || s.amount <= 0)
+				continue;
+			s.amount -= Take(s.amount, sp.GetEnergy() / 100, sp.GetWaterContent() / 100, needFood, needWater);
+		}
+		array<ref array<ref DL_ItemData>> sources = new array<ref array<ref DL_ItemData>>;
+		sources.Insert(d.items);
+		if (car)
+			sources.Insert(car.items);
+		foreach (array<ref DL_ItemData> list : sources)
+		{
+			for (int i = list.Count() - 1; i >= 0; i--)
+			{
+				if (needFood <= 0 && needWater <= 0)
+					break;
+				DL_ItemData it = list[i];
+				float e;
+				float w;
+				if (!Nutrition(it, e, w))
+					continue;
+				float units = Take(it.quantity, e, w, needFood, needWater);
+				if (units <= 0)
+					continue;
+				it.quantity -= units;
+				if (eaten != "")
+					eaten += ", ";
+				if (it.liquid != 0)
+					eaten += it.type + " " + Math.Round(units).ToString() + " ml";
+				else
+					eaten += it.type + " " + Math.Round(units).ToString() + " g";
+				// solid food that is all eaten is gone (nothing is attached to food); a bottle stays, empty
+				if (it.liquid == 0 && it.quantity < 0.5)
+					list.RemoveOrdered(i);
+				else if (it.quantity < 0.5)
+					it.quantity = 0;
+			}
+		}
+		d.energy = Math.Max(0, d.energy - needFood);
+		d.water = Math.Max(0, d.water - needWater);
+		if (eaten == "")
+			eaten = "nothing carried";
+		return "ate " + eaten + ", bars took " + Math.Round(needFood).ToString() + " food / " + Math.Round(needWater).ToString() + " water";
+	}
+
+	// food + water for the trip: eaten on the road from the snapshot (stomach, carried food/drink, the trunk for the
+	// driver = trunk != null), the bars pay the rest (never below 0). Returns what happened, for the log.
+	static string ChargePlayer(DL_PlayerData d, DL_TravelPrice p, DL_CarData trunk)
 	{
 		if (!p || !d)
 			return "";
-		float food = p.foodPct / 100.0 * PlayerConstants.SL_ENERGY_MAX;
-		float water = p.waterPct / 100.0 * PlayerConstants.SL_WATER_MAX;
-		d.energy = Math.Max(0, d.energy - food);
-		d.water = Math.Max(0, d.water - water);
-		return "charged " + Math.Round(food).ToString() + " food, " + Math.Round(water).ToString() + " water (left " + Math.Round(d.energy).ToString() + " / " + Math.Round(d.water).ToString() + ")";
+		return Eat(d, trunk, p.foodPct / 100.0 * PlayerConstants.SL_ENERGY_MAX, p.waterPct / 100.0 * PlayerConstants.SL_WATER_MAX);
 	}
 
 	// fuel + engine/wheel wear off the car's snapshot; the live car only gives the max health of its parts.
-	static string ChargeCar(DL_CarData d, CarScript car, DL_TravelPrice p)
+	static string ChargeCar(DL_CarData d, CarScript car, DL_TravelPrice p, DL_PlayerData driver)
 	{
 		if (!p || !d || !car || !p.byCar)
 			return "";
@@ -154,9 +326,32 @@ class DL_TravelCost
 		if (cap > 0 && d.fluids.Count() > CarFluid.FUEL)
 		{
 			float have = d.fluids[CarFluid.FUEL] * cap;
-			float left = Math.Max(0, have - p.fuelL);
-			d.fluids[CarFluid.FUEL] = left / cap;
-			res += "fuel " + Math.Round(have).ToString() + " -> " + Math.Round(left).ToString() + " L";
+			float fromTank = Math.Min(have, p.fuelL);
+			d.fluids[CarFluid.FUEL] = (have - fromTank) / cap;
+			res += "fuel " + Math.Round(have).ToString() + " -> " + Math.Round(have - fromTank).ToString() + " L";
+			// the rest from gasoline canisters: the trunk first, then what the driver carries
+			float needL = p.fuelL - fromTank;
+			float fromCans = 0;
+			array<ref array<ref DL_ItemData>> cans = new array<ref array<ref DL_ItemData>>;
+			cans.Insert(d.items);
+			if (driver)
+				cans.Insert(driver.items);
+			foreach (array<ref DL_ItemData> list : cans)
+			{
+				foreach (DL_ItemData can : list)
+				{
+					if (needL <= 0)
+						break;
+					if (!IsFuel(can))
+						continue;
+					float takeL = Math.Min(needL, can.quantity / 1000);
+					can.quantity -= takeL * 1000;
+					needL -= takeL;
+					fromCans += takeL;
+				}
+			}
+			if (fromCans > 0)
+				res += " + " + Math.Round(fromCans).ToString() + " L from canisters";
 		}
 		// engine: its damage zone
 		float engineMax = car.GetMaxHealth("Engine", "Health");

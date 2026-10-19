@@ -1196,7 +1196,7 @@ modded class MissionServer
 				// travel cost (Research/travel-cost-design.md): the price goes on the countdown; in refuse mode a crew
 				// that can't pay doesn't get one
 				DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, DL_CarOf(pb) != null);
-				string missing = DL_TravelCost.Shortfall(price, DL_CrewOf(pb), DL_CarOf(pb));
+				string missing = DL_TravelCost.Shortfall(price, DL_CrewOf(pb), DL_CarOf(pb), m_DL_Snap, m_DL_CarSnap);
 				if (missing != "" && DL_RefusesShortTrips())
 				{
 					m_DL_MustLeaveZone.Set(sid, true);
@@ -1354,7 +1354,7 @@ modded class MissionServer
 		string sid = pb.GetIdentity().GetPlainId();
 		// the price again: someone may have eaten, drunk or burnt fuel during the countdown
 		DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, car != null);
-		string missing = DL_TravelCost.Shortfall(price, crew, car);
+		string missing = DL_TravelCost.Shortfall(price, crew, car, m_DL_Snap, m_DL_CarSnap);
 		if (missing != "" && DL_RefusesShortTrips())
 		{
 			m_DL_MustLeaveZone.Set(sid, true);
@@ -1430,9 +1430,10 @@ modded class MissionServer
 		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " items, " + q.payload.bleeding.Count().ToString() + " bleeding, " + q.payload.modifiers.Count().ToString() + " modifiers, " + carText);
 		if (price)
 		{
-			string paid = DL_TravelCost.ChargePlayer(q.payload, price);
+			// the driver's snapshot holds the car: he eats from its trunk too, canisters top up the tank
+			string paid = DL_TravelCost.ChargePlayer(q.payload, price, q.payload.car);
 			if (car)
-				paid += "; car: " + DL_TravelCost.ChargeCar(q.payload.car, car, price);
+				paid += "; car: " + DL_TravelCost.ChargeCar(q.payload.car, car, price, q.payload);
 			Print(DL_Const.LOG_TAG + sid + " pays the trip (" + price.Text() + "): " + paid);
 		}
 		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.DepartJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
