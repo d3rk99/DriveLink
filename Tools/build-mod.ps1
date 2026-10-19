@@ -12,7 +12,10 @@ $pbo = Join-Path $out "DriveLink.pbo"
 $started = Get-Date
 # AddonBuilder exits 0 even on "[ERROR]: Build failed" (2026-10-18: the old PBO stayed because a running DayZ
 # client/server held it open), so check its log text and that the PBO really is new.
+# Its stderr banner ("Setting breakpad minidump ...") would stop the script under "Stop" in PowerShell 5.1.
+$ErrorActionPreference = "Continue"
 $log = & $builder $source $out "-prefix=DriveLink" "-packonly" "-clear" 2>&1 | Out-String
+$ErrorActionPreference = "Stop"
 if ($LASTEXITCODE -ne 0 -or $log -match "\[ERROR\]") {
   Write-Host $log
   throw "AddonBuilder failed. If it failed while copying the PBO: close the DayZ game and stop the test servers (they keep the PBO open)."

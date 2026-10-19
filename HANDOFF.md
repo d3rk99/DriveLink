@@ -12,7 +12,8 @@
 
 ## State when handed over
 - Hub builds (`Tools/build-hub.ps1`). `Tools/hub-api-check.sh` passed before the `map`→`world` rename.
-- Mod NOT rebuilt since the rename. The last deployed build failed to compile, so both test servers show "Failed to load game scripts!".
+- 2026-10-19 01:38: mod rebuilt + signed, both servers compile, apply the hub layout at hello, and Chernarus picked up
+  an editor save (rev 20) 30 s later with no restart. Not yet tried: a trip through an editor-made zone.
 - The hub DB holds TEST layouts made while trying the editor (chernarus rev 19, livonia rev 5). Ask Derk whether to clear them:
   `sqlite3 Hub/drivelink.db "DELETE FROM layouts"`. Then the servers re-import their real config.json zones on the next hello.
   Backups of the real configs: TestServer*/Profiles/DriveLink/config.json.bak-2026-10-18.
