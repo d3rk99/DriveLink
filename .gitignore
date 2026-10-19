@@ -10,3 +10,4 @@ Hub/target/
 Hub/hub-cert.pem
 Hub/hub-key.pem
 Hub/maps/
+dist/
