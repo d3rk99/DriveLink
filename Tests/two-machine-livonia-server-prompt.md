@@ -57,14 +57,14 @@ game then reconnects to the target server, which rebuilds them there.
    forceSameBuild = 1;
    BattlEye = 0;                 // same as Derk's test servers
    instanceId = 1;
-   steamQueryPort = 27016;
+   steamQueryPort = 27016;      // must be HERE: DayZ ignores -steamQueryPort on the command line
    disableVoN = 0;
    class Missions { class DayZ { template = "dayzOffline.enoch"; }; };
    ```
 4. **Start command** (from the DayZServer folder). Use a profiles folder you can find: logs and the DriveLink config
    live there.
    ```
-   DayZServer_x64.exe -config=serverDZ.cfg -profiles=<PROFILES DIR> -port=2302 -steamQueryPort=27016 -dologs -adminlog -netlog -freezecheck "-mod=@CF;@DabsFramework;@VPPAdminTools;@PersistentBodies;@DriveLink"
+   DayZServer_x64.exe -config=serverDZ.cfg -profiles=<PROFILES DIR> -port=2302 -dologs -adminlog -netlog -freezecheck "-mod=@CF;@DabsFramework;@VPPAdminTools;@PersistentBodies;@DriveLink"
    ```
 
 ## 4. Network (Machine B is outside Derk's network)

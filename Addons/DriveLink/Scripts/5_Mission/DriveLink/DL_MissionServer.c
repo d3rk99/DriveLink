@@ -287,13 +287,12 @@ modded class MissionServer
 		h.port = 2302;
 		if (g_Game.CommandlineGetParam("port", p) && p.ToInt() > 0)
 			h.port = p.ToInt();
-		// -steamQueryPort= on the command line wins over serverDZ.cfg steamQueryPort (2026-10-19: Livonia's 27017 was
-		// only on the command line and got reported as the 27016 default)
+		// serverDZ.cfg steamQueryPort is what DayZ uses; -steamQueryPort on the command line is IGNORED by DayZ 1.30
+		// (2026-10-19: -steamQueryPort=27802 still listened on 27016), so it is only a last guess
+		h.queryPort = g_Game.ServerConfigGetInt("steamQueryPort");
 		string qp;
-		if (g_Game.CommandlineGetParam("steamQueryPort", qp) && qp.ToInt() > 0)
+		if (h.queryPort <= 0 && g_Game.CommandlineGetParam("steamQueryPort", qp))
 			h.queryPort = qp.ToInt();
-		else
-			h.queryPort = g_Game.ServerConfigGetInt("steamQueryPort");
 		if (h.queryPort <= 0)
 			h.queryPort = 27016; // DayZ's default
 		string world;
