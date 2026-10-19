@@ -6,3 +6,7 @@ Hub/hub.log
 Hub/last-payload.json
 Hub/drivelink.db
 Hub/drivelink.db-*
+Hub/target/
+Hub/hub-cert.pem
+Hub/hub-key.pem
+Hub/maps/
