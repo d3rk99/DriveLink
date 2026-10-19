@@ -34,6 +34,7 @@ modded class MissionServer
 	protected ref DL_CarSnapshot m_DL_CarSnap = new DL_CarSnapshot();
 	protected ref map<CarScript, int> m_DL_CarInZoneSince = new map<CarScript, int>;
 	protected ref map<CarScript, bool> m_DL_CarDone = new map<CarScript, bool>; // rebuilt cars: not again until they leave the circle
+	protected ref map<string, CarScript> m_DL_TravelCar = new map<string, CarScript>; // steamId -> the car he is taking along, until the hub answers
 
 	override void OnMissionStart()
 	{
@@ -524,12 +525,45 @@ modded class MissionServer
 			return null;
 		}
 		vector pos = ap.pos;
+		float yaw = ap.yaw;
+		// M2: his car first, at carPos or else at the arrival point (he then stands 3 m to its left = driver side)
+		CarScript car;
+		string carText = "";
+		if (d.car && d.car.type != "")
+		{
+			vector carPos = ap.carPos;
+			float carYaw = ap.carYaw;
+			bool onPoint = carPos[0] == 0 && carPos[2] == 0;
+			if (onPoint)
+			{
+				carPos = ap.pos;
+				carYaw = ap.yaw;
+			}
+			carPos[1] = g_Game.SurfaceY(carPos[0], carPos[2]);
+			int carMade;
+			int carDropped;
+			car = m_DL_CarSnap.Build(d.car, carPos, Vector(carYaw, 0, 0), carMade, carDropped);
+			if (car)
+			{
+				car.SetAllowDamage(false);
+				if (onPoint)
+					pos = carPos + Vector(carYaw - 90, 0, 0).AnglesToVector() * 3;
+				carText = ", with his " + car.GetType() + " (" + carMade.ToString() + "/" + d.car.items.Count().ToString() + " parts/items, " + carDropped.ToString() + " on the ground)";
+			}
+			else
+			{
+				carText = ", WITHOUT his car: could not create " + d.car.type;
+				Print(DL_Const.LOG_TAG + "WARNING could not create the car " + d.car.type + " for " + identity.GetPlainId() + ", he arrives on foot");
+			}
+		}
 		pos[1] = g_Game.SurfaceY(pos[0], pos[2]);
 		// CreateCharacter (missionserver.c:486): CreatePlayer + SelectPlayer, same as a fresh spawn but his own body
 		PlayerBase player = CreateCharacter(identity, pos, null, d.charType);
 		if (!player)
 		{
 			m_DL_BuildError = "could not create the character " + d.charType;
+			if (car)
+				car.Delete(); // the trip stays pending with the car in it: a later build makes it again
 			return null;
 		}
 		if (oldChar)
@@ -540,7 +574,6 @@ modded class MissionServer
 				GetHive().CharacterKill(oldChar);
 			oldChar.Delete();
 		}
-		float yaw = ap.yaw;
 		player.SetOrientation(Vector(yaw, 0, 0));
 		int dropped;
 		int made = m_DL_Snap.Apply(player, d, dropped);
@@ -553,10 +586,42 @@ modded class MissionServer
 		}
 		m_DL_Leaving.Remove(identity.GetPlainId());
 		DL_Confirm(identity.GetPlainId(), r.token);
-		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + ap.name + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString());
+		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + ap.name + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString() + carText);
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
-		DL_SeatSpikeLater(identity.GetPlainId());
+		if (car)
+		{
+			// seated once his client is in (same juncture path as the seat spike, DL_PlayerSeat.c)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatTraveller, 3000, false, identity.GetPlainId(), car, d.carSeat);
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndCarProtection, (m_DL_Cfg.arrivalProtectSeconds + 3) * 1000, false, car);
+		}
 		return player;
+	}
+
+	protected void DL_SeatTraveller(string sid, CarScript car, int seat)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb || !car)
+		{
+			Print(DL_Const.LOG_TAG + "could not seat " + sid + ": player or car gone");
+			return;
+		}
+		if (seat < 0)
+			seat = 0;
+		pb.DL_SeatIn(car, seat);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatTravellerCheck, 4000, false, sid, car);
+	}
+
+	protected void DL_SeatTravellerCheck(string sid, CarScript car)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (pb && car)
+			Print(DL_Const.LOG_TAG + sid + " seated in his " + car.GetType() + ": " + (car.CrewMemberIndex(pb) >= 0).ToString() + " (seat " + car.CrewMemberIndex(pb).ToString() + "), " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car)));
+	}
+
+	protected void DL_EndCarProtection(CarScript car)
+	{
+		if (car)
+			car.SetAllowDamage(true);
 	}
 
 	// Tell the hub the character exists here now (hub /api/confirm claims the transfer + sets the owner).
@@ -617,6 +682,16 @@ modded class MissionServer
 			// a failed trip doesn't retry by itself (test 2026-10-18: "Travel failed" every 5 s while standing in it)
 			if (m_DL_MustLeaveZone.Contains(sid))
 				continue;
+			// M2 (driver only): in a vehicle only the driver of a car with nobody else in it travels, car included
+			string carProblem = DL_CarProblem(pb);
+			if (carProblem != "")
+			{
+				m_DL_MustLeaveZone.Set(sid, true);
+				if (had)
+					m_DL_InZoneSince.Remove(sid);
+				NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 8, "DriveLink", carProblem, "");
+				continue;
+			}
 			if (!had)
 			{
 				m_DL_InZoneSince.Set(sid, now);
@@ -629,6 +704,35 @@ modded class MissionServer
 				DL_Depart(pb, z);
 			}
 		}
+	}
+
+	// The car he drives, or null (on foot / not a car). HumanCommandVehicle.GetTransport (human.c:716 in 1.30).
+	protected CarScript DL_CarOf(PlayerBase pb)
+	{
+		HumanCommandVehicle vc = pb.GetCommand_Vehicle();
+		if (!vc)
+			return null;
+		return CarScript.Cast(vc.GetTransport());
+	}
+
+	// "" = may travel (on foot, or alone at the wheel of a car), else the reason he can't (M2 = driver only).
+	protected string DL_CarProblem(PlayerBase pb)
+	{
+		HumanCommandVehicle vc = pb.GetCommand_Vehicle();
+		if (!vc)
+			return "";
+		CarScript car = CarScript.Cast(vc.GetTransport());
+		if (!car)
+			return "Only cars can travel for now. Get out to travel on foot.";
+		if (car.CrewDriver() != pb)
+			return "Only the driver can take a car to another server. Get out to travel on foot.";
+		for (int c = 0; c < car.CrewSize(); c++)
+		{
+			Human h = car.CrewMember(c);
+			if (h && h != pb)
+				return "Passengers can't travel yet: they have to get out first.";
+		}
+		return "";
 	}
 
 	protected DL_Zone DL_ZoneAt(vector pos)
@@ -665,13 +769,29 @@ modded class MissionServer
 		q.to = z.to;
 		q.arrival = z.arrival;
 		q.payload = m_DL_Snap.Capture(pb);
-		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " items, " + q.payload.bleeding.Count().ToString() + " bleeding, " + q.payload.modifiers.Count().ToString() + " modifiers");
+		string carText = "on foot";
+		CarScript car = DL_CarOf(pb);
+		if (car)
+		{
+			// stop it where it is while the hub answers: engine off, handbrake, no damage (Car.EngineStop/SetHandbrake,
+			// car.c:236/209 in 1.30). The snapshot is taken now; anything that changes after this doesn't travel.
+			car.EngineStop();
+			car.SetHandbrake(1);
+			car.SetAllowDamage(false);
+			q.payload.car = m_DL_CarSnap.Capture(car);
+			q.payload.carSeat = car.CrewMemberIndex(pb);
+			m_DL_TravelCar.Set(sid, car);
+			carText = "driving " + car.GetType() + " (" + q.payload.car.items.Count().ToString() + " parts/items, " + DL_CarSnapshot.FluidText(q.payload.car.fluids) + ")";
+		}
+		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " items, " + q.payload.bleeding.Count().ToString() + " bleeding, " + q.payload.modifiers.Count().ToString() + " modifiers, " + carText);
 		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.DepartJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
 	}
 
 	void DL_OnDepartAnswer(string sid, bool ok, string body)
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
+		CarScript car = m_DL_TravelCar.Get(sid);
+		m_DL_TravelCar.Remove(sid);
 		DL_DepartResp r;
 		string err;
 		JsonSerializer js = new JsonSerializer();
@@ -679,8 +799,10 @@ modded class MissionServer
 			js.ReadFromString(r, body, err);
 		if (!ok || !r || !r.ok || !r.target)
 		{
-			// Nothing was handed over: he stays here with everything he has.
+			// Nothing was handed over: he stays here with everything he has, the car too.
 			m_DL_Leaving.Remove(sid);
+			if (car)
+				car.SetAllowDamage(true);
 			// RestApi gives the same OnError for "no connection" and "hub said no" (HTTP 4xx), so don't guess.
 			string why = "hub refused or unreachable (see the hub window)";
 			if (r && r.error != "")
@@ -693,6 +815,15 @@ modded class MissionServer
 			NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 8, "DriveLink", "Travel failed: " + why + ". Step out of the zone and back in to try again.", "");
 			}
 			return;
+		}
+		if (car)
+		{
+			// The hub holds the car now (inside his trip). Remember it BEFORE it goes (crash guard, DL_CarGuard), and
+			// delete it after he has been removed from the seat (DL_RemoveTraveller runs at 1.5 s).
+			DL_CarGuard.Remember(car);
+			DL_ParkCar(car);
+			Print(DL_Const.LOG_TAG + car.GetType() + " " + DL_CarGuard.IdOf(car) + " travels with " + sid + ", removing it here once its seats are empty");
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveCar, 3000, false, car, 0);
 		}
 		if (!pb)
 		{
@@ -707,6 +838,59 @@ modded class MissionServer
 		// give the RPC a moment to reach the client, then remove the character WITHOUT killing it (nothing may
 		// stay behind: no body, no dropped gear)
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveTraveller, 1500, false, sid);
+	}
+
+	// Derk 2026-10-18: move the departed car (with the logging-out driver still in it) out of everyone's reach until
+	// it can be deleted. Not 0 0 0: that is under the ground / at the world's edge, and an engine delete of an occupied
+	// car is what crashed the server. The position is logged 1 s later to see that the move held.
+	protected void DL_ParkCar(CarScript car)
+	{
+		vector p = m_DL_Cfg.parkingSpot;
+		if (p[0] == 0 && p[2] == 0)
+			return;
+		p[1] = g_Game.SurfaceY(p[0], p[2]) + 0.5;
+		vector from = car.GetPosition();
+		car.SetPosition(p);
+		car.SetOrientation(car.GetOrientation());
+		car.SetSynchDirty();
+		Print(DL_Const.LOG_TAG + car.GetType() + " parked: " + from.ToString() + " -> " + p.ToString());
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_LogCarPos, 1000, false, car);
+	}
+
+	protected void DL_LogCarPos(CarScript car)
+	{
+		if (car)
+			Print(DL_Const.LOG_TAG + car.GetType() + " 1 s after parking is at " + car.GetPosition().ToString());
+	}
+
+	// NEVER delete a car with someone in a seat: test 2026-10-18 20:06:25 the Chernarus server crashed (access
+	// violation, crash_2026-10-18_20-02-09.log) deleting the car while his logging-out character (vanilla keeps it in
+	// the world for the logout time, 15 s) still sat in it. Wait for the seats to empty: his character goes when the
+	// logout ends (HandleBody -> doomed -> DL_Forget) or at once via DL_RemoveTraveller.
+	protected void DL_RemoveCar(CarScript car, int tries = 0)
+	{
+		if (!car)
+			return;
+		int crew = 0;
+		for (int c = 0; c < car.CrewSize(); c++)
+		{
+			if (car.CrewMember(c))
+				crew++;
+		}
+		if (crew > 0)
+		{
+			if (tries < 60)
+			{
+				g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveCar, 1000, false, car, tries + 1);
+				return;
+			}
+			// a minute and still occupied: leave it (a duplicate is better than a crash); the crash guard list has it,
+			// so it is removed at this server's next start
+			Print(DL_Const.LOG_TAG + "WARNING " + car.GetType() + " still occupied after 60 s, NOT removed now (removed at next start)");
+			return;
+		}
+		Print(DL_Const.LOG_TAG + car.GetType() + " removed here (seats empty after " + tries.ToString() + " s)");
+		car.Delete();
 	}
 
 	// Normally the client is gone by now and vanilla's logout ends in PlayerDisconnected -> HandleBody (doomed ->

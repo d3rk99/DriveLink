@@ -32,6 +32,8 @@ class DL_ArrivalPoint
 	string name;
 	vector pos;
 	float yaw;
+	vector carPos;            // where a car that comes along is built; "0 0 0" = at pos (the driver then stands next to it)
+	float carYaw;
 }
 
 class DL_Config
@@ -42,6 +44,9 @@ class DL_Config
 	int countdownSeconds = 5;
 	float checkEverySeconds = 1;
 	int arrivalProtectSeconds = 10;             // no damage right after arriving
+	// M2: a car that left is moved here (ground height) until its seats are empty and it can be deleted, so nobody
+	// can loot its trunk in the meantime (those items would exist twice). Pick a spot far from players. "0 0 0" = off.
+	vector parkingSpot;
 	ref array<ref DL_Zone> zones = new array<ref DL_Zone>;
 	ref array<ref DL_ArrivalPoint> arrivals = new array<ref DL_ArrivalPoint>;
 
@@ -154,6 +159,10 @@ class DL_PlayerData
 	ref array<ref DL_Bleeding> bleeding = new array<ref DL_Bleeding>;
 	ref array<ref DL_StomachItem> stomach = new array<ref DL_StomachItem>;
 	ref array<ref DL_ItemData> items = new array<ref DL_ItemData>;
+	// M2: the car he drove into the zone (driver only for now), and his seat in it. A null ref may come back from
+	// JSON as an EMPTY object, so "has a car" = car && car.type != "".
+	ref DL_CarData car;
+	int carSeat = -1;
 }
 
 // A car (M2). Parts (wheels, doors, battery, plugs, radiator...) are attachments and the trunk is cargo, so they are
