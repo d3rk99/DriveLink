@@ -42,8 +42,9 @@ class DL_ArrivalPoint
 class DL_Config
 {
 	string hubUrl = "http://127.0.0.1:7290";   // the DriveLink Hub
-	string hubKey = "";                         // serverKey from the hub's hub.json
-	string serverId = "chernarus";              // this server's id in hub.json
+	string hubKey = "";                         // the hub's server key (web app, Setup page)
+	string serverId = "";                       // filled in by the hub once this server is approved (Servers page)
+	string joinId = "";                         // made on the first start: how the hub tells this server apart before it has an id
 	int countdownSeconds = 5;
 	float checkEverySeconds = 1;
 	int arrivalProtectSeconds = 10;             // no damage right after arriving

@@ -65,6 +65,34 @@ expect "unknown server" "$(post /api/arrive "$(req sakhal ",\"steamId\":\"$SID\"
 expect "depart to self" "$(post /api/depart "$(req chernarus ",\"steamId\":\"$SID\",\"to\":\"chernarus\",\"payload\":{}")")" 400
 expect "key in the URL" "$(post "/api/hello?serverId=chernarus&key=$KEY" '{}')" 200
 
+# joining from the web app: a new server asks with its claim, is approved on the Servers page, learns its id
+apost() { curl -s -m 5 -o "$T/body" -w "%{http_code}" -H "Content-Type: application/json" --data-binary "$2" "$U$1"; }
+expect "join: hello without id" "$(post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"claim\":\"c-123\",\"port\":2502,\"queryPort\":27020,\"world\":\"Sakhal\"}")" 200
+has "join: answer is pending" '"pending":true'
+curl -s -m 5 "$U/admin/api/state" > "$T/body"; has "join: listed on the Servers page" '"claim":"c-123"'
+has "join: suggests this PC's LAN address" '"suggestLan":"'
+expect "join: approve" "$(apost /admin/api/pending/c-123/approve '{"id":"sakhal","name":"Sakhal","lanHost":"127.0.0.1","port":2502}')" 200
+grep -q '"claim": "c-123"' "$T/hub.json" && echo "ok   join: saved in hub.json" || { echo "FAIL join: not in hub.json"; FAIL=1; }
+expect "join: hello by claim" "$(post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"claim\":\"c-123\",\"port\":2502}")" 200
+has "join: learns its id" '"serverId":"sakhal"'
+expect "join: works by id now" "$(post /api/arrive "$(req sakhal ",\"steamId\":\"76561198000000009\"")")" 200
+expect "link: hello from a reinstalled livonia" "$(post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"claim\":\"c-456\",\"port\":2402}")" 200
+expect "link: to the existing livonia" "$(apost /admin/api/pending/c-456/approve '{"id":"livonia","name":"x","port":0,"link":true}')" 200
+post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"claim\":\"c-456\"}" >/dev/null; has "link: learns it is livonia" '"serverId":"livonia"'
+expect "servers page: add" "$(apost /admin/api/servers '{"isNew":true,"id":"deerisle","name":"Deer Isle","lanHost":"10.0.0.5","port":2602}')" 200
+expect "servers page: add twice refused" "$(apost /admin/api/servers '{"isNew":true,"id":"deerisle","name":"Deer Isle","lanHost":"10.0.0.5","port":2602}')" 400
+expect "servers page: edit" "$(apost /admin/api/servers '{"id":"deerisle","name":"Deer Isle 2","lanHost":"10.0.0.6","port":2602}')" 200
+grep -q 'Deer Isle 2' "$T/hub.json" && echo "ok   servers page: edit saved" || { echo "FAIL edit not saved"; FAIL=1; }
+expect "servers page: remove" "$(apost /admin/api/servers/deerisle/delete '')" 200
+expect "removed server refused" "$(post /api/arrive "$(req deerisle ",\"steamId\":\"$SID\"")")" 400
+expect "hello reports a new port" "$(post /api/hello "{\"serverId\":\"livonia\",\"key\":\"$KEY\",\"port\":2412,\"queryPort\":27022}")" 200
+grep -q '"port": 2412' "$T/hub.json" && echo "ok   reported port saved" || { echo "FAIL reported port not saved"; FAIL=1; }
+expect "settings: public address" "$(apost /admin/api/settings '{"publicHost":"hub.example.com"}')" 200
+grep -q 'hub.example.com' "$T/hub.json" && echo "ok   settings saved" || { echo "FAIL settings not saved"; FAIL=1; }
+expect "settings: short password refused" "$(apost /admin/api/settings '{"adminPassword":"abc"}')" 400
+code=$(curl -s -m 20 -o "$T/body" -w "%{http_code}" "$U/admin/api/firewall"); expect "firewall check" "$code" 200
+has "firewall: hub rule listed" '"DriveLink Hub"'
+
 # HTTPS (self-signed, so -k)
 code=$(curl -s -k -m 5 -o "$T/body" -w "%{http_code}" --data-binary "$(req chernarus "")" https://127.0.0.1:17291/api/hello)
 expect "HTTPS hello (self-signed)" "$code" 200

@@ -1,7 +1,10 @@
-// The map editor: /admin (HTML page + Leaflet, embedded in the exe) and its JSON API. Password = hub.json
-// adminPassword (browser login box, any user name). Edits go into the layouts table; the DayZ servers pick them up
-// within ~30 s (/api/layout) - no restart.
+// The hub's web app: /admin (HTML page + Leaflet, embedded in the exe) and its JSON API.
+//   Map      - leaving zones + arrival points per server (layouts table); servers pick edits up within ~30 s
+//   Servers  - add / edit / remove DayZ servers, approve new ones that asked to join (saved to hub.json at once)
+//   Setup    - what a DayZ server needs in its config.json, hub settings, Windows Firewall rules
+// Password = hub.json adminPassword (browser login box, any user name); none needed on the hub's own machine.
 use crate::api::Shared;
+use crate::config::ServerEntry;
 use axum::body::Bytes;
 use axum::extract::{Path, Request, State};
 use axum::http::{header, StatusCode};
@@ -10,6 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use base64::Engine;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 
@@ -26,6 +30,13 @@ pub fn routes(h: Shared) -> Router<Shared> {
         .route("/admin/api/layout/{server}", post(save_layout))
         .route("/admin/api/maps/{map}/build", post(build_map))
         .route("/admin/maps/{map}/{z}/{file}", get(tile))
+        .route("/admin/api/servers", post(save_server))
+        .route("/admin/api/servers/{id}/delete", post(delete_server))
+        .route("/admin/api/pending/{claim}/approve", post(approve))
+        .route("/admin/api/pending/{claim}/dismiss", post(dismiss))
+        .route("/admin/api/settings", post(save_settings))
+        .route("/admin/api/firewall", get(firewall_state))
+        .route("/admin/api/firewall/apply", post(firewall_apply))
         .layer(axum::middleware::from_fn_with_state(h, auth))
 }
 
@@ -34,6 +45,7 @@ async fn auth(State(h): State<Shared>, axum::extract::ConnectInfo(addr): axum::e
     if addr.ip().is_loopback() {
         return next.run(req).await;
     }
+    let pw = h.cfg().admin_password;
     let ok = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -43,7 +55,7 @@ async fn auth(State(h): State<Shared>, axum::extract::ConnectInfo(addr): axum::e
         .and_then(|b| String::from_utf8(b).ok())
         .map(|up| {
             let pass = up.split_once(':').map(|(_, p)| p).unwrap_or("");
-            bool::from(pass.as_bytes().ct_eq(h.cfg.admin_password.as_bytes()))
+            bool::from(pass.as_bytes().ct_eq(pw.as_bytes()))
         })
         .unwrap_or(false);
     if !ok {
@@ -65,17 +77,46 @@ fn guess_map(id: &str, name: &str) -> &'static str {
     }
 }
 
+struct Json(Value);
+impl IntoResponse for Json {
+    fn into_response(self) -> Response {
+        ([(header::CONTENT_TYPE, "application/json")], self.0.to_string()).into_response()
+    }
+}
+
+fn bad(msg: impl Into<String>) -> Response {
+    (StatusCode::BAD_REQUEST, msg.into()).into_response()
+}
+
+fn hub_port(listen: &str) -> u16 {
+    listen.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0)
+}
+
 async fn state(State(h): State<Shared>) -> Response {
+    let cfg = h.cfg();
     let db = h.db.lock().unwrap();
     let mut servers = Vec::new();
-    for s in &h.cfg.servers {
+    for s in &cfg.servers {
         let l = crate::layout::get(&db, &s.id).ok().flatten();
-        let map = l.as_ref().map(|l| l.map.clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| guess_map(&s.id, &s.name).to_string());
+        let map = l
+            .as_ref()
+            .map(|l| l.map.clone())
+            .filter(|m| !m.is_empty())
+            .or_else(|| Some(s.world.clone()).filter(|w| !w.is_empty()))
+            .unwrap_or_else(|| guess_map(&s.id, &s.name).to_string());
         let layout = l.map(|l| crate::layout::to_json(&l)).unwrap_or(json!({"rev": 0, "zones": [], "arrivals": []}));
-        servers.push(json!({"id": s.id, "name": s.name, "map": map, "layout": layout}));
+        // seconds since its last request (servers ask for their layout every 30 s)
+        let ago: Option<i64> = db
+            .query_row("SELECT CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', last_seen) AS INTEGER) FROM servers WHERE id=?1", [&s.id], |r| r.get(0))
+            .ok();
+        servers.push(json!({
+            "id": s.id, "name": s.name, "lanHost": s.lan_host, "publicHost": s.public_host, "port": s.port,
+            "queryPort": s.query_port, "password": s.password, "world": s.world, "map": map, "layout": layout,
+            "seenSecondsAgo": ago, "local": h.is_local_server(&s.id),
+        }));
     }
     drop(db);
-    let avail = crate::maps::available(&h.cfg.dayz_path);
+    let avail = crate::maps::available(&cfg.dayz_path);
     let mut maps = serde_json::Map::new();
     let status = h.maps.lock().unwrap().clone();
     let mut names: Vec<String> = avail.keys().cloned().collect();
@@ -88,33 +129,29 @@ async fn state(State(h): State<Shared>) -> Response {
     }
     names.sort();
     for n in names {
-        maps.insert(
-            n.clone(),
-            json!({
-                "inGameFiles": avail.contains_key(&n),
-                "meta": crate::maps::meta(&h.dir, &n),
-                "status": status.get(&n),
-            }),
-        );
+        maps.insert(n.clone(), json!({"inGameFiles": avail.contains_key(&n), "meta": crate::maps::meta(&h.dir, &n), "status": status.get(&n)}));
     }
-    let tools = crate::maps::tools_dir(&h.cfg.dayz_tools_path);
-    Json(json!({"servers": servers, "maps": maps, "tools": tools.map(|t| t.display().to_string())})).into_response()
-}
-
-struct Json(Value);
-impl IntoResponse for Json {
-    fn into_response(self) -> Response {
-        ([(header::CONTENT_TYPE, "application/json")], self.0.to_string()).into_response()
-    }
+    let tools = crate::maps::tools_dir(&cfg.dayz_tools_path);
+    let pending: Vec<crate::api::Pending> = h.pending.lock().unwrap().values().cloned().collect();
+    let lan = crate::net::lan_ip().map(|i| i.to_string()).unwrap_or_default();
+    Json(json!({
+        "servers": servers, "maps": maps, "tools": tools.map(|t| t.display().to_string()), "pending": pending,
+        "hub": {
+            "serverKey": cfg.server_key, "lanIp": lan, "publicHost": cfg.public_host,
+            "httpPort": hub_port(&cfg.listen), "httpsPort": hub_port(&cfg.listen_tls), "listen": cfg.listen, "listenTls": cfg.listen_tls,
+            "dayzPath": cfg.dayz_path, "dayzToolsPath": cfg.dayz_tools_path, "hasPassword": !cfg.admin_password.is_empty(),
+        },
+    }))
+    .into_response()
 }
 
 async fn save_layout(State(h): State<Shared>, Path(server): Path<String>, body: Bytes) -> Response {
-    if h.cfg.server(&server).is_none() {
+    if h.cfg().server(&server).is_none() {
         return (StatusCode::NOT_FOUND, "unknown server").into_response();
     }
     let v: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("bad json: {e}")).into_response(),
+        Err(e) => return bad(format!("bad json: {e}")),
     };
     let zones = crate::layout::clean_zones(&v["zones"]);
     let arrivals = crate::layout::clean_arrivals(&v["arrivals"]);
@@ -130,13 +167,242 @@ async fn save_layout(State(h): State<Shared>, Path(server): Path<String>, body: 
     }
 }
 
-async fn build_map(State(h): State<Shared>, Path(map): Path<String>) -> Response {
-    let avail = crate::maps::available(&h.cfg.dayz_path);
-    let Some(pbo) = avail.get(&map).cloned() else {
-        return (StatusCode::NOT_FOUND, format!("no worlds_{map}_data.pbo found (set dayzPath in hub.json)")).into_response();
+// ---------------- servers ----------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerForm {
+    #[serde(default)]
+    is_new: bool,
+    id: String,
+    name: String,
+    #[serde(default)]
+    lan_host: String,
+    #[serde(default)]
+    public_host: String,
+    port: u16,
+    #[serde(default)]
+    password: String,
+    /// approve: this join request is a server the hub has already (reinstalled, or set up before joining existed)
+    #[serde(default)]
+    link: bool,
+}
+
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 32 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+fn apply_form(e: &mut ServerEntry, f: &ServerForm) {
+    e.name = f.name.trim().to_string();
+    e.lan_host = f.lan_host.trim().to_string();
+    e.public_host = f.public_host.trim().to_string();
+    e.port = f.port;
+    e.password = f.password.clone();
+}
+
+// add (isNew) or edit a server. The id can't change later: trips and characters are stored under it.
+async fn save_server(State(h): State<Shared>, body: Bytes) -> Response {
+    let f: ServerForm = match serde_json::from_slice(&body) {
+        Ok(f) => f,
+        Err(e) => return bad(format!("bad form: {e}")),
     };
-    let Some(tools) = crate::maps::tools_dir(&h.cfg.dayz_tools_path) else {
-        return (StatusCode::NOT_FOUND, "DayZ Tools not found (install it from Steam, or set dayzToolsPath in hub.json)").into_response();
+    if !valid_id(&f.id) {
+        return bad("id: 1-32 characters, lower case letters, digits, - or _");
+    }
+    if f.name.trim().is_empty() {
+        return bad("name is empty");
+    }
+    let res = h.update_cfg(|c| {
+        match c.servers.iter_mut().find(|s| s.id == f.id) {
+            Some(_) if f.is_new => return Err(format!("there is already a server with the id {:?}", f.id)),
+            Some(e) => apply_form(e, &f),
+            None if !f.is_new => return Err(format!("no server {:?}", f.id)),
+            None => {
+                let mut e = ServerEntry { id: f.id.clone(), ..Default::default() };
+                apply_form(&mut e, &f);
+                c.servers.push(e);
+            }
+        }
+        Ok(())
+    });
+    match res {
+        Ok(()) => {
+            crate::logf!("servers page: {} {:?} saved", if f.is_new { "added" } else { "edited" }, f.id);
+            Json(json!({"ok": true})).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn delete_server(State(h): State<Shared>, Path(id): Path<String>) -> Response {
+    let res = h.update_cfg(|c| {
+        let n = c.servers.len();
+        c.servers.retain(|s| s.id != id);
+        if c.servers.len() == n { Err(format!("no server {id:?}")) } else { Ok(()) }
+    });
+    match res {
+        Ok(()) => {
+            crate::logf!("servers page: {id:?} removed (its zones stay in the database in case it comes back)");
+            Json(json!({"ok": true})).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+// a server that asked to join: make it a real one. The DayZ server learns its id on its next hello (~15 s).
+async fn approve(State(h): State<Shared>, Path(claim): Path<String>, body: Bytes) -> Response {
+    let f: ServerForm = match serde_json::from_slice(&body) {
+        Ok(f) => f,
+        Err(e) => return bad(format!("bad form: {e}")),
+    };
+    let Some(p) = h.pending.lock().unwrap().get(&claim).cloned() else {
+        return bad("that join request is gone (the DayZ server stopped asking)");
+    };
+    if !valid_id(&f.id) {
+        return bad("id: 1-32 characters, lower case letters, digits, - or _");
+    }
+    let res = h.update_cfg(|c| {
+        if f.link {
+            let Some(e) = c.servers.iter_mut().find(|s| s.id == f.id) else { return Err(format!("no server {:?}", f.id)) };
+            e.claim = claim.clone();
+            if p.port != 0 {
+                e.port = p.port;
+            }
+            if p.query_port != 0 {
+                e.query_port = p.query_port;
+            }
+            if !p.world.is_empty() {
+                e.world = p.world.clone();
+            }
+            return Ok(());
+        }
+        if c.server(&f.id).is_some() {
+            return Err(format!("there is already a server with the id {:?} (pick it under 'This is' to link it)", f.id));
+        }
+        let mut e = ServerEntry { id: f.id.clone(), claim: claim.clone(), query_port: p.query_port, world: p.world.clone(), ..Default::default() };
+        apply_form(&mut e, &f);
+        c.servers.push(e);
+        Ok(())
+    });
+    match res {
+        Ok(()) => {
+            h.pending.lock().unwrap().remove(&claim);
+            crate::logf!("servers page: join request from {} approved as {:?}{}", p.addr, f.id, if f.link { " (existing server)" } else { "" });
+            Json(json!({"ok": true})).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn dismiss(State(h): State<Shared>, Path(claim): Path<String>) -> Response {
+    h.pending.lock().unwrap().remove(&claim);
+    Json(json!({"ok": true})).into_response()
+}
+
+// ---------------- setup ----------------
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct SettingsForm {
+    public_host: Option<String>,
+    admin_password: Option<String>,
+    dayz_path: Option<String>,
+    dayz_tools_path: Option<String>,
+    new_server_key: bool,
+}
+
+async fn save_settings(State(h): State<Shared>, body: Bytes) -> Response {
+    let f: SettingsForm = match serde_json::from_slice(&body) {
+        Ok(f) => f,
+        Err(e) => return bad(format!("bad form: {e}")),
+    };
+    if let Some(p) = &f.admin_password {
+        if p.len() < 8 {
+            return bad("the password needs 8+ characters");
+        }
+    }
+    let res = h.update_cfg(|c| {
+        if let Some(v) = &f.public_host {
+            c.public_host = v.trim().to_string();
+        }
+        if let Some(v) = &f.admin_password {
+            c.admin_password = v.clone();
+        }
+        if let Some(v) = &f.dayz_path {
+            c.dayz_path = v.trim().to_string();
+        }
+        if let Some(v) = &f.dayz_tools_path {
+            c.dayz_tools_path = v.trim().to_string();
+        }
+        if f.new_server_key {
+            c.server_key = crate::config::random_key();
+        }
+        Ok(())
+    });
+    match res {
+        Ok(()) => {
+            crate::logf!("setup page: settings saved{}", if f.new_server_key { " (NEW server key: every DayZ server needs it now)" } else { "" });
+            Json(json!({"ok": true})).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+fn firewall_json(h: &Shared, rules: &[crate::firewall::Rule]) -> Value {
+    let cfg = h.cfg();
+    let remote: Vec<Value> = cfg
+        .servers
+        .iter()
+        .filter(|s| s.port != 0 && !h.is_local_server(&s.id))
+        .map(|s| json!({"id": s.id, "name": s.name, "powershell": crate::firewall::remote_powershell(&s.id, s.port, s.query_port), "seen": h.seen.lock().unwrap().get(&s.id).cloned()}))
+        .collect();
+    json!({"rules": rules, "commands": crate::firewall::hub_commands(rules), "remote": remote, "windows": cfg!(windows)})
+}
+
+async fn firewall_state(State(h): State<Shared>) -> Response {
+    let hh = h.clone();
+    let rules = tokio::task::spawn_blocking(move || crate::firewall::wanted(&hh.cfg(), &|id| hh.is_local_server(id))).await.unwrap_or_default();
+    Json(firewall_json(&h, &rules)).into_response()
+}
+
+async fn firewall_apply(State(h): State<Shared>) -> Response {
+    let hh = h.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let rules = crate::firewall::wanted(&hh.cfg(), &|id| hh.is_local_server(id));
+        let res = crate::firewall::apply(&rules, &hh.dir);
+        let after = crate::firewall::wanted(&hh.cfg(), &|id| hh.is_local_server(id));
+        (res, after)
+    })
+    .await;
+    let Ok((res, after)) = out else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "firewall task failed").into_response();
+    };
+    let mut v = firewall_json(&h, &after);
+    match res {
+        Ok(m) => {
+            crate::logf!("setup page: firewall: {m}");
+            v["ok"] = json!(true);
+            v["message"] = json!(m);
+        }
+        Err(e) => {
+            crate::logf!("setup page: firewall: {e}");
+            v["ok"] = json!(false);
+            v["message"] = json!(e);
+        }
+    }
+    Json(v).into_response()
+}
+
+// ---------------- map tiles ----------------
+
+async fn build_map(State(h): State<Shared>, Path(map): Path<String>) -> Response {
+    let cfg = h.cfg();
+    let avail = crate::maps::available(&cfg.dayz_path);
+    let Some(pbo) = avail.get(&map).cloned() else {
+        return (StatusCode::NOT_FOUND, format!("no worlds_{map}_data.pbo found (set the DayZ folder on the Setup page)")).into_response();
+    };
+    let Some(tools) = crate::maps::tools_dir(&cfg.dayz_tools_path) else {
+        return (StatusCode::NOT_FOUND, "DayZ Tools not found (install it from Steam, or set its folder on the Setup page)").into_response();
     };
     {
         let mut st = h.maps.lock().unwrap();

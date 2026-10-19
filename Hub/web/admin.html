@@ -3,20 +3,40 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DriveLink Map Editor</title>
+<title>DriveLink Hub</title>
 <link rel="stylesheet" href="/admin/vendor/leaflet.css">
 <style>
   :root { --bg:#14171a; --panel:#1d2126; --line:#2c323a; --text:#e6e8eb; --dim:#9aa3ad; --accent:#4fb3ff; --zone:#ff8a3d; --arr:#45d483; --bad:#ff5d5d; }
   * { box-sizing: border-box; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, Segoe UI, sans-serif; }
-  #app { display:flex; height:100%; }
+  #top { height:44px; display:flex; align-items:center; gap:6px; padding:0 12px; background:var(--panel); border-bottom:1px solid var(--line); }
+  #top b { margin-right:10px; }
+  #top .badge { background:var(--accent); color:#06121c; border-radius:9px; padding:0 6px; font-size:11px; margin-left:4px; }
+  #app { display:flex; height:calc(100% - 44px); }
+  #page { height:calc(100% - 44px); overflow:auto; padding:18px; }
+  #page .wrap { max-width:920px; margin:0 auto; }
+  #page h2.big { font-size:18px; margin:4px 0 10px; color:var(--text); text-transform:none; letter-spacing:0; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { text-align:left; padding:7px 6px; border-bottom:1px solid var(--line); font-size:13px; }
+  th { color:var(--dim); font-weight:normal; }
+  tr.click { cursor:pointer; } tr.click:hover { background:#262b31; }
+  .ok { color:var(--arr); } .warn { color:#ffcc4d; } .badtxt { color:var(--bad); }
+  code, pre { font:12px/1.45 Consolas, monospace; background:#0f1215; border:1px solid var(--line); border-radius:6px; }
+  code { padding:1px 5px; } pre { padding:8px 10px; white-space:pre-wrap; word-break:break-all; margin:6px 0; }
+  .copy { float:right; font-size:12px; padding:3px 8px; margin:-2px 0 0 8px; }
+  .grid3 { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  @media (max-width:700px) { .grid3, .grid2 { grid-template-columns:1fr; } }
+  .btns { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  button.primary { background:var(--accent); color:#06121c; border-color:var(--accent); }
   #side { width:340px; min-width:300px; background:var(--panel); border-right:1px solid var(--line); overflow:auto; padding:14px; }
   #map { flex:1; background:#0b0d0f; }
   h1 { font-size:16px; margin:0 0 4px; }
   .sub { color:var(--dim); font-size:12px; margin-bottom:12px; }
   .tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
   .tab { padding:6px 10px; border:1px solid var(--line); border-radius:6px; cursor:pointer; background:transparent; color:var(--text); }
-  .tab.on { border-color:var(--accent); color:var(--accent); background:transparent; }
+  .tab.on, .nav.on { border-color:var(--accent); color:var(--accent); background:transparent; }
+  .nav { padding:6px 10px; border:1px solid var(--line); border-radius:6px; cursor:pointer; background:transparent; color:var(--text); }
   .tools { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:8px 0 12px; }
   button { font:inherit; padding:7px 10px; border-radius:6px; border:1px solid var(--line); background:#262b31; color:var(--text); cursor:pointer; }
   button:hover { border-color:var(--accent); }
@@ -40,9 +60,16 @@
 </style>
 </head>
 <body>
+<div id="top">
+  <b>DriveLink Hub</b>
+  <button class="nav tab-nav" data-view="servers">Servers<span id="pendBadge"></span></button>
+  <button class="nav tab-nav" data-view="map">Map</button>
+  <button class="nav tab-nav" data-view="setup">Setup</button>
+</div>
+<div id="page" style="display:none"><div class="wrap" id="pageBody"></div></div>
 <div id="app">
   <div id="side">
-    <h1>DriveLink map editor</h1>
+    <h1>Map</h1>
     <div class="sub">Leaving zones and arrival points. Changes are saved at once and reach the DayZ server within ~30 s. Heights come from the terrain.</div>
     <div class="tabs" id="tabs"></div>
     <div class="box" id="mapbox"></div>
@@ -68,12 +95,6 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;",
 const srv = () => S.servers.find(s => s.id === cur);
 const L_of = s => s.layout;
 
-async function load() {
-  const r = await fetch("/admin/api/state", { cache: "no-store" });
-  S = await r.json();
-  if (!cur) cur = S.servers[0] && S.servers[0].id;
-  render(true);
-}
 
 function setStatus(t, bad) { const e = $("status"); e.textContent = t; e.style.color = bad ? "var(--bad)" : ""; }
 
@@ -311,7 +332,231 @@ function save() {
   }, 400);
 }
 
-load().catch(e => setStatus("Could not load: " + e.message, true));
+// ---------- views: Servers | Map | Setup ----------
+let view = null, editing = null, fw = null, showKey = false;
+const ago = s => s == null ? null : s < 90 ? "online" : s < 3600 ? `last seen ${Math.round(s / 60)} min ago` : s < 86400 ? `last seen ${Math.round(s / 3600)} h ago` : `last seen ${Math.round(s / 86400)} d ago`;
+const post = async (url, body) => {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: body === undefined ? "{}" : JSON.stringify(body) });
+  const t = await r.text();
+  if (!r.ok) throw new Error(t);
+  try { return JSON.parse(t); } catch { return {}; }
+};
+const copyBtn = text => `<button class="copy" data-copy="${esc(text)}">Copy</button>`;
+function wireCopy(root) {
+  root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { b.textContent = "Select + Ctrl+C"; }
+    setTimeout(() => b.textContent = "Copy", 1500);
+  });
+}
+function pageMsg(t, bad) { const e = $("pageMsg"); if (e) { e.textContent = t; e.className = "status " + (bad ? "badtxt" : "ok"); } }
+
+function setView(v) {
+  view = v;
+  try { localStorage.setItem("dlView", v); } catch {}
+  document.querySelectorAll(".nav").forEach(b => b.classList.toggle("on", b.dataset.view === v));
+  $("app").style.display = v === "map" ? "flex" : "none";
+  $("page").style.display = v === "map" ? "none" : "block";
+  if (v === "map") {
+    if (!S.servers.length) { setView("servers"); return; }
+    if (!cur || !srv()) cur = S.servers[0].id;
+    render(true);
+  } else if (v === "servers") renderServers();
+  else renderSetup();
+}
+document.querySelectorAll(".nav").forEach(b => b.onclick = () => setView(b.dataset.view));
+
+async function refresh() {
+  const r = await fetch("/admin/api/state", { cache: "no-store" });
+  const n = await r.json();
+  // keep unsaved map edits: only take the server list / pending / hub info
+  const keep = S ? Object.fromEntries(S.servers.map(s => [s.id, s.layout])) : {};
+  S = n;
+  if (view === "map") S.servers.forEach(s => { if (keep[s.id]) s.layout = keep[s.id]; });
+  $("pendBadge").innerHTML = S.pending.length ? `<span class="badge">${S.pending.length}</span>` : "";
+}
+
+// ---------- Servers ----------
+function serverForm(f, isNew, claim) {
+  return `<div class="grid2">
+      <div><label>Name (players see it)</label><input id="sName" value="${esc(f.name || "")}" placeholder="Livonia"></div>
+      <div><label>Id (short, lower case; can't change later)</label><input id="sId" value="${esc(f.id || "")}" ${isNew ? "" : "disabled"} placeholder="livonia"></div>
+    </div>
+    <div class="grid3">
+      <div><label>LAN address (players on your network)</label><input id="sLan" value="${esc(f.lanHost || "")}" placeholder="192.168.1.20"></div>
+      <div><label>Public address (players from the internet)</label><input id="sPub" value="${esc(f.publicHost || "")}" placeholder="your public IP or name"></div>
+      <div><label>Game port</label><input id="sPort" type="number" value="${f.port || 2302}"></div>
+    </div>
+    <label>Server password (empty = none)</label><input id="sPw" value="${esc(f.password || "")}">
+    <div class="hint" style="margin-top:6px">Travelling players are sent to the LAN address when they came in over your network, otherwise to the public one. Fill in at least one.</div>`;
+}
+function readForm(isNew) {
+  return { isNew, id: $("sId").value.trim().toLowerCase(), name: $("sName").value.trim(), lanHost: $("sLan").value.trim(), publicHost: $("sPub").value.trim(), port: +$("sPort").value, password: $("sPw").value };
+}
+function idFrom(text) { return (text || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32); }
+const WORLD_NAMES = { chernarusplus: "Chernarus", enoch: "Livonia", sakhal: "Sakhal" };
+
+function renderServers() {
+  const b = $("pageBody");
+  let h = `<h2 class="big">Servers</h2>`;
+  if (S.pending.length) {
+    h += `<div class="box" style="border-color:var(--accent)"><h2>Asking to join</h2>`;
+    S.pending.forEach((p, i) => {
+      const name = WORLD_NAMES[p.world] || (p.world ? p.world[0].toUpperCase() + p.world.slice(1) : "");
+      h += `<div style="margin-bottom:10px"><div><b>${p.local ? "A DayZ server on this PC" : `A DayZ server at ${esc(p.addr)}`}</b>
+          <span class="hint"> - map ${esc(p.world || "?")}, game port ${p.port || "?"}, query port ${p.queryPort || "?"}</span></div>
+          <button data-pend="${i}" style="margin-top:6px">Set it up</button> <button data-dismiss="${esc(p.claim)}">Ignore</button></div>`;
+      p._name = name;
+    });
+    h += `</div>`;
+  }
+  if (editing) {
+    const isNew = editing.isNew, claim = editing.claim;
+    const linkSel = claim && S.servers.length ? `<label>This is</label><select id="sLink"><option value="">a new server</option>${S.servers.map(s => `<option value="${esc(s.id)}" ${editing.link === s.id ? "selected" : ""}>${esc(s.name)} (already here: link it)</option>`).join("")}</select>` : "";
+    h += `<div class="box"><h2>${claim ? "Approve this server" : isNew ? "Add a server" : "Edit " + esc(editing.f.name)}</h2>${linkSel}${editing.link ? "" : serverForm(editing.f, isNew || !!claim, claim)}
+      <div class="btns"><button class="primary" id="sSave">${claim ? "Approve" : "Save"}</button><button id="sCancel">Cancel</button>
+      ${!isNew && !claim ? `<button class="danger" id="sDel">Remove server</button>` : ""}</div><div class="status" id="pageMsg"></div></div>`;
+  }
+  h += `<div class="box"><h2>Connected to this hub</h2>`;
+  if (!S.servers.length) h += `<div class="hint">No servers yet. Start a DayZ server with the DriveLink mod and this hub's address + key (see <a href="#" id="goSetup" style="color:var(--accent)">Setup</a>): it shows up above to approve. Or add one by hand.</div>`;
+  else {
+    h += `<table><tr><th>Name</th><th>Status</th><th>Map</th><th>Address</th><th>Port</th></tr>`;
+    S.servers.forEach((s, i) => {
+      const st = ago(s.seenSecondsAgo);
+      const cls = st === "online" ? "ok" : st ? "warn" : "hint";
+      h += `<tr class="click" data-edit="${i}"><td><b>${esc(s.name)}</b> <span class="hint">${esc(s.id)}</span></td>
+        <td class="${cls}">${esc(st || "never connected")}${s.local ? ' <span class="hint">(this PC)</span>' : ""}</td><td>${esc(s.map || "?")}</td>
+        <td>${esc(s.lanHost || "-")}${s.publicHost ? " / " + esc(s.publicHost) : ""}</td><td>${s.port}${s.queryPort ? ` <span class="hint">q ${s.queryPort}</span>` : ""}</td></tr>`;
+    });
+    h += `</table>`;
+  }
+  h += `<div class="btns"><button id="sAdd">+ Add a server by hand</button></div></div>`;
+  b.innerHTML = h;
+  const gs = $("goSetup"); if (gs) gs.onclick = e => { e.preventDefault(); setView("setup"); };
+  b.querySelectorAll("[data-pend]").forEach(x => x.onclick = () => {
+    const p = S.pending[+x.dataset.pend];
+    editing = { claim: p.claim, f: { name: p._name, id: idFrom(p.wantedId || p._name || p.world), lanHost: p.suggestLan, publicHost: p.suggestPublic, port: p.port || 2302 } };
+    renderServers();
+  });
+  b.querySelectorAll("[data-dismiss]").forEach(x => x.onclick = async () => { await post(`/admin/api/pending/${encodeURIComponent(x.dataset.dismiss)}/dismiss`); await refresh(); renderServers(); });
+  b.querySelectorAll("[data-edit]").forEach(x => x.onclick = () => { const s = S.servers[+x.dataset.edit]; editing = { isNew: false, f: { ...s } }; renderServers(); });
+  $("sAdd").onclick = () => { editing = { isNew: true, f: { port: 2302, lanHost: S.hub.lanIp } }; renderServers(); };
+  if (editing) {
+    const ls = $("sLink");
+    if (ls) ls.onchange = () => { editing.link = ls.value || null; renderServers(); };
+    if ($("sName")) $("sName").oninput = () => { if (editing.isNew || editing.claim) { const idEl = $("sId"); if (!idEl.dataset.touched) idEl.value = idFrom($("sName").value); } };
+    if ($("sId")) $("sId").oninput = () => { $("sId").dataset.touched = "1"; };
+    $("sCancel").onclick = () => { editing = null; renderServers(); };
+    $("sSave").onclick = async () => {
+      const f = editing.link ? { id: editing.link, name: "x", port: 0, link: true } : readForm(!!editing.isNew);
+      if (!f.link && !f.lanHost && !f.publicHost) return pageMsg("Fill in the LAN address, the public address, or both.", true);
+      try {
+        if (editing.claim) await post(`/admin/api/pending/${encodeURIComponent(editing.claim)}/approve`, f);
+        else await post("/admin/api/servers", f);
+        const was = editing.claim;
+        editing = null; await refresh(); renderServers();
+        pageMsg(was ? `Approved. The server connects within ~15 s${f.link ? "" : " and can then get zones on the Map page"}.` : "Saved.");
+      } catch (e) { pageMsg(e.message, true); }
+    };
+    const d = $("sDel");
+    if (d) d.onclick = async () => {
+      if (!confirm(`Remove ${editing.f.name} from the hub? Zones on other servers that send players there stop working. Its own zones are kept in case you add it again.`)) return;
+      try { await post(`/admin/api/servers/${encodeURIComponent(editing.f.id)}/delete`); editing = null; await refresh(); renderServers(); } catch (e) { pageMsg(e.message, true); }
+    };
+  }
+}
+
+// ---------- Setup ----------
+function renderSetup() {
+  const hub = S.hub, b = $("pageBody");
+  const port = hub.httpPort || 7290;
+  const cfgLine = host => `"hubUrl": "http://${host}:${port}",\n"hubKey": "${hub.serverKey}",`;
+  const shown = showKey ? esc(hub.serverKey) : "•".repeat(16);
+  let h = `<h2 class="big">Setup</h2>
+  <div class="box"><h2>1. Connect a DayZ server</h2>
+    <div class="hint">On the DayZ server: add the <b>@DriveLink</b> mod and start it once. It makes <code>&lt;profiles folder&gt;/DriveLink/config.json</code>.
+    Put these two lines in it (the server id fills itself in), restart that server, then approve it on the <a href="#" id="goServers" style="color:var(--accent)">Servers</a> page.</div>
+    <div class="grid3" style="margin-top:8px">
+      <div><label>Same PC as this hub</label><pre>${copyBtn(cfgLine("127.0.0.1"))}${esc(cfgLine("127.0.0.1"))}</pre></div>
+      <div><label>Another PC on your network</label><pre>${copyBtn(cfgLine(hub.lanIp || "HUB-LAN-IP"))}${esc(cfgLine(hub.lanIp || "HUB-LAN-IP"))}</pre></div>
+      <div><label>Over the internet</label><pre>${copyBtn(cfgLine(hub.publicHost || "HUB-PUBLIC-ADDRESS"))}${esc(cfgLine(hub.publicHost || "HUB-PUBLIC-ADDRESS"))}</pre>
+        ${hub.publicHost ? "" : `<div class="hint">Set this hub's public address below to fill this in.</div>`}</div>
+    </div>
+  </div>
+  <div class="box"><h2>2. Firewall (Windows)</h2><div id="fwBody" class="hint">Checking…</div></div>
+  <div class="box"><h2>3. Hub settings</h2>
+    <div class="grid2">
+      <div><label>This hub's public address (for the internet line above)</label><input id="hPub" value="${esc(hub.publicHost)}" placeholder="e.g. 203.0.113.7 or hub.example.com"></div>
+      <div><label>New web app password (needed from other PCs; empty = keep)</label><input id="hPw" type="password" placeholder="8+ characters"></div>
+      <div><label>DayZ folder (for the map images; empty = find it)</label><input id="hDayz" value="${esc(hub.dayzPath)}"></div>
+      <div><label>DayZ Tools folder (empty = find it)</label><input id="hTools" value="${esc(hub.dayzToolsPath)}"></div>
+    </div>
+    <label>Server key (every DayZ server sends it)</label>
+    <pre>${copyBtn(hub.serverKey)}<span id="keyTxt">${shown}</span></pre>
+    <div class="btns"><button class="primary" id="hSave">Save settings</button><button id="hShow">${showKey ? "Hide" : "Show"} key</button><button class="danger" id="hNewKey">Make a new key</button></div>
+    <div class="hint" style="margin-top:6px">Hub address: ${esc(hub.listen || "-")} (HTTP)${hub.listenTls ? ", " + esc(hub.listenTls) + " (HTTPS)" : ""}. Changing ports needs a hub restart (hub.json).</div>
+    <div class="status" id="pageMsg"></div>
+  </div>`;
+  b.innerHTML = h;
+  wireCopy(b);
+  $("goServers").onclick = e => { e.preventDefault(); setView("servers"); };
+  $("hShow").onclick = () => { showKey = !showKey; renderSetup(); };
+  $("hSave").onclick = async () => {
+    const body = { publicHost: $("hPub").value, dayzPath: $("hDayz").value, dayzToolsPath: $("hTools").value };
+    if ($("hPw").value) body.adminPassword = $("hPw").value;
+    try { await post("/admin/api/settings", body); await refresh(); renderSetup(); pageMsg("Saved."); } catch (e) { pageMsg(e.message, true); }
+  };
+  $("hNewKey").onclick = async () => {
+    if (!confirm("Make a new server key? EVERY DayZ server stops reaching the hub until you put the new key in its config.json.")) return;
+    try { await post("/admin/api/settings", { newServerKey: true }); showKey = true; await refresh(); renderSetup(); pageMsg("New key made. Put it in every DayZ server's config.json."); } catch (e) { pageMsg(e.message, true); }
+  };
+  loadFirewall();
+}
+
+function renderFirewall(msg, bad) {
+  const e = $("fwBody");
+  if (!e || !fw) return;
+  if (!fw.windows) { e.innerHTML = "This hub is not running on Windows: open the ports below in your system's firewall."; return; }
+  const missing = fw.rules.filter(r => !r.present).length;
+  let h = `<div class="hint">Rules for the hub and the DayZ servers on <b>this PC</b>.${missing ? " Applying needs administrator rights: Windows asks once on this PC." : ""}</div><table style="margin-top:6px"><tr><th>Rule</th><th>Ports</th><th>For</th><th></th></tr>`;
+  fw.rules.forEach(r => h += `<tr><td>${esc(r.name)}</td><td>${r.proto} ${esc(r.ports)}</td><td class="hint">${esc(r.why)}</td><td class="${r.present ? "ok" : "warn"}">${r.present ? "✓ open" : "missing"}</td></tr>`);
+  h += `</table><div class="btns">${missing ? `<button class="primary" id="fwApply">Apply firewall rules</button>` : `<span class="ok">All open.</span>`}<button id="fwRe">Check again</button></div>`;
+  if (msg) h += `<div class="status ${bad ? "badtxt" : "ok"}">${esc(msg)}</div>`;
+  if (missing) h += `<details style="margin-top:8px"><summary class="hint">Or run these in an administrator terminal</summary><pre>${copyBtn(fw.commands.join("\n"))}${esc(fw.commands.join("\n"))}</pre></details>`;
+  if (fw.remote.length) {
+    h += `<div style="margin-top:12px"><b>DayZ servers on other PCs</b> <span class="hint">- the hub can't reach their firewall: run this on that PC in an administrator PowerShell</span></div>`;
+    fw.remote.forEach(r => h += `<label>${esc(r.name)}${r.seen ? ` (at ${esc(r.seen)})` : ""}</label><pre>${copyBtn(r.powershell)}${esc(r.powershell)}</pre>`);
+  }
+  h += `<div class="hint" style="margin-top:10px">Players or servers coming from the internet also need these ports forwarded on your router (UDP game ports to each DayZ server PC, TCP ${S.hub.httpPort || 7290} to this hub); routers can't be set from here.</div>`;
+  e.innerHTML = h;
+  wireCopy(e);
+  const a = $("fwApply");
+  if (a) a.onclick = async () => {
+    a.disabled = true; a.textContent = "Waiting for Windows…";
+    try { fw = await post("/admin/api/firewall/apply"); renderFirewall(fw.message, !fw.ok); } catch (x) { renderFirewall(x.message, true); }
+  };
+  $("fwRe").onclick = () => loadFirewall();
+}
+
+async function loadFirewall() {
+  try { const r = await fetch("/admin/api/firewall", { cache: "no-store" }); fw = await r.json(); renderFirewall(); }
+  catch (e) { const el = $("fwBody"); if (el) el.textContent = "Could not check: " + e.message; }
+}
+
+// keep Servers status fresh (join requests appear by themselves)
+setInterval(async () => {
+  if (view !== "servers" || editing) return;
+  try { await refresh(); renderServers(); } catch {}
+}, 5000);
+
+(async () => {
+  try {
+    await refresh();
+    let v = null;
+    try { v = localStorage.getItem("dlView"); } catch {}
+    if (!S.servers.length || S.pending.length) v = "servers";
+    setView(v || "map");
+  } catch (e) { $("pageBody").textContent = "Could not load: " + e.message; $("page").style.display = "block"; $("app").style.display = "none"; }
+})();
 </script>
 </body>
 </html>

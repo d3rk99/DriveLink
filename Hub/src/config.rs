@@ -14,6 +14,19 @@ pub struct ServerEntry {
     pub port: u16,           // game port
     #[serde(default)]
     pub password: String,    // server password, "" = none
+    /// Steam query port (UDP, serverDZ.cfg steamQueryPort), reported by the server; 0 = not known yet
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub query_port: u16,
+    /// the map it runs (GetWorldName, lower case: chernarusplus, enoch, sakhal...), reported by the server
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub world: String,
+    /// the join id the DayZ server made for itself before it had a serverId (approved in /admin)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub claim: String,
+}
+
+fn is_zero(v: &u16) -> bool {
+    *v == 0
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -45,6 +58,9 @@ pub struct Config {
     /// optional: the "DayZ Tools" folder; empty = look in the Steam libraries
     #[serde(default)]
     pub dayz_tools_path: String,
+    /// optional: this hub's internet address (name or IP), only used to show the DayZ servers what to put in hubUrl
+    #[serde(default)]
+    pub public_host: String,
 }
 
 /// Fills in an admin password when there is none; returns it when it was just made.
@@ -65,12 +81,12 @@ pub fn random_key() -> String {
     hex::encode(b)
 }
 
-fn save(path: &Path, c: &Config) -> Result<(), String> {
+pub fn save(path: &Path, c: &Config) -> Result<(), String> {
     let out = serde_json::to_string_pretty(c).map_err(|e| e.to_string())?;
     std::fs::write(path, out).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
-/// (config, created). A new file gets a random server key and the two test servers.
+/// (config, created). A new file gets a random server key and no servers yet.
 pub fn load_or_create(path: &Path) -> Result<(Config, bool), String> {
     let data = match std::fs::read_to_string(path) {
         Ok(d) => d,
@@ -82,13 +98,11 @@ pub fn load_or_create(path: &Path) -> Result<(Config, bool), String> {
                 tls_key: String::new(),
                 database: DEFAULT_DATABASE.into(),
                 server_key: random_key(),
-                servers: vec![
-                    ServerEntry { id: "chernarus".into(), name: "Chernarus".into(), lan_host: "192.168.1.133".into(), port: 2302, ..Default::default() },
-                    ServerEntry { id: "livonia".into(), name: "Livonia".into(), lan_host: "192.168.1.133".into(), port: 2402, ..Default::default() },
-                ],
+                servers: Vec::new(), // added on the Servers page (or a DayZ server asks to join and is approved there)
                 admin_password: String::new(),
                 dayz_path: String::new(),
                 dayz_tools_path: String::new(),
+                public_host: String::new(),
             };
             save(path, &c)?;
             return Ok((c, true));

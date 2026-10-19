@@ -20,6 +20,11 @@ class DL_HelloReq
 {
 	string serverId;
 	string key;
+	// joining without an id: the hub lists this server on its Servers page to approve
+	string claim;
+	int port;
+	int queryPort;
+	string world;
 	ref array<ref DL_Zone> zones;
 	ref array<ref DL_ArrivalPoint> arrivals;
 }
@@ -36,6 +41,9 @@ class DL_Layout
 class DL_HelloResp
 {
 	bool ok;
+	bool pending;             // known key, but not approved on the hub's Servers page yet
+	string serverId;          // the id the hub knows this server by
+	string error;
 	ref DL_Layout layout;
 }
 

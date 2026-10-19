@@ -98,36 +98,18 @@ modded class MissionServer
 		}
 		else
 		{
-			// example so the owner sees the shape; travel stays off until hubKey is filled in
-			DL_Zone z = new DL_Zone();
-			z.name = "West edge";
-			z.center = "100 0 7500";
-			z.radius = 40;
-			z.to = "livonia";
-			z.arrival = "east_road";
-			m_DL_Cfg.zones.Insert(z);
-			DL_ArrivalPoint a = new DL_ArrivalPoint();
-			a.name = "west_road";
-			a.pos = "200 0 7500";
-			a.yaw = 90;
-			m_DL_Cfg.arrivals.Insert(a);
+			// zones + arrival points are drawn in the hub's web app; only the hub's address + key go here
 			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
-			Print(DL_Const.LOG_TAG + "wrote example " + DL_Const.CONFIG + " - fill in hubKey, serverId, zones, arrivals");
+			Print(DL_Const.LOG_TAG + "wrote " + DL_Const.CONFIG + " - put in hubUrl + hubKey (the hub's web app, Setup page shows both), restart, then approve this server on the hub's Servers page");
+		}
+		if (m_DL_Cfg.joinId == "")
+		{
+			Math.Randomize(-1);
+			m_DL_Cfg.joinId = Math.RandomInt(0, int.MAX).ToString() + "-" + Math.RandomInt(0, int.MAX).ToString() + "-" + g_Game.GetTime().ToString();
+			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
 		}
 		if (m_DL_Cfg.hubKey != "")
-		{
-			// boot check: one /api/hello so the log says right away whether this server can reach the hub
-			// ...and it carries this server's zones/arrival points (the hub imports them once, see DL_HelloReq)
-			DL_HelloReq h = new DL_HelloReq();
-			h.serverId = m_DL_Cfg.serverId;
-			h.key = m_DL_Cfg.hubKey;
-			h.zones = m_DL_Cfg.zones;
-			h.arrivals = m_DL_Cfg.arrivals;
-			string hj;
-			string herr;
-			JsonFileLoader<DL_HelloReq>.MakeData(h, hj, herr, false);
-			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, hj, new DL_HelloWaiter(this), "OnAnswer", "hello");
-		}
+			DL_SendHello();
 		DL_LoadDebug();
 		Print(DL_Const.LOG_TAG + "v" + DL_Const.VERSION + " server '" + m_DL_Cfg.serverId + "', hub " + m_DL_Cfg.hubUrl + ", " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points, key set " + (m_DL_Cfg.hubKey != "").ToString());
 	}
@@ -285,21 +267,76 @@ modded class MissionServer
 		Print(DL_Const.LOG_TAG + "SEAT SPIKE result for " + sid + ": vehicle command " + inCmd.ToString() + ", driver of " + car.GetType() + " " + isDriver.ToString() + ", crew index " + car.CrewMemberIndex(pb).ToString());
 	}
 
+	// /api/hello: on boot, and again until the hub answers OK (hub down, or this server not approved yet). It carries
+	// this server's zones/arrival points (the hub imports them once, see DL_HelloReq) and who it is (port, map).
+	protected bool m_DL_Polling;
+	protected bool m_DL_SaidPending;
+
+	protected void DL_SendHello()
+	{
+		DL_HelloReq h = new DL_HelloReq();
+		h.serverId = m_DL_Cfg.serverId;
+		h.key = m_DL_Cfg.hubKey;
+		h.claim = m_DL_Cfg.joinId;
+		h.zones = m_DL_Cfg.zones;
+		h.arrivals = m_DL_Cfg.arrivals;
+		string p;
+		h.port = 2302;
+		if (g_Game.CommandlineGetParam("port", p) && p.ToInt() > 0)
+			h.port = p.ToInt();
+		h.queryPort = g_Game.ServerConfigGetInt("steamQueryPort");
+		if (h.queryPort <= 0)
+			h.queryPort = 27016; // DayZ's default
+		string world;
+		g_Game.GetWorldName(world);
+		world.ToLower();
+		h.world = world;
+		string hj;
+		string herr;
+		JsonFileLoader<DL_HelloReq>.MakeData(h, hj, herr, false);
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, hj, new DL_HelloWaiter(this), "OnAnswer", "hello");
+	}
+
 	void DL_OnHello(bool ok, string body)
 	{
 		if (!ok)
 		{
-			Print(DL_Const.LOG_TAG + "hub hello FAILED - check hubUrl, that the hub runs, and the hub window/log");
+			Print(DL_Const.LOG_TAG + "hub hello FAILED - check hubUrl/hubKey, that the hub runs, and the hub's log; trying again in 30 s");
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendHello, 30000, false);
 			return;
 		}
-		Print(DL_Const.LOG_TAG + "hub hello OK: " + body.Substring(0, Math.Min(160, body.Length())));
 		DL_HelloResp r;
 		string err;
 		JsonSerializer js = new JsonSerializer();
-		if (js.ReadFromString(r, body, err) && r && r.layout)
+		if (!js.ReadFromString(r, body, err) || !r)
+		{
+			Print(DL_Const.LOG_TAG + "hub hello: unreadable answer (" + err + "), trying again in 30 s");
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendHello, 30000, false);
+			return;
+		}
+		if (r.pending)
+		{
+			if (!m_DL_SaidPending)
+				Print(DL_Const.LOG_TAG + "the hub knows the key but not this server yet: approve it on the hub's Servers page (asking again every 15 s)");
+			m_DL_SaidPending = true;
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendHello, 15000, false);
+			return;
+		}
+		Print(DL_Const.LOG_TAG + "hub hello OK: " + body.Substring(0, Math.Min(160, body.Length())));
+		if (r.serverId != "" && r.serverId != m_DL_Cfg.serverId)
+		{
+			Print(DL_Const.LOG_TAG + "the hub knows this server as '" + r.serverId + "' (was '" + m_DL_Cfg.serverId + "'), saved in config.json");
+			m_DL_Cfg.serverId = r.serverId;
+			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
+		}
+		if (r.layout)
 			DL_ApplyLayout(r.layout, "hello");
 		// from now on: ask for edits every 30 s (only a rev number goes over the wire when nothing changed)
-		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_PollLayout, 30000, true);
+		if (!m_DL_Polling)
+		{
+			m_DL_Polling = true;
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_PollLayout, 30000, true);
+		}
 	}
 
 	// ---------------- zones + arrival points from the hub (map editor) ----------------
@@ -356,7 +393,7 @@ modded class MissionServer
 
 	protected bool DL_On()
 	{
-		return m_DL_Cfg && m_DL_Cfg.hubKey != "";
+		return m_DL_Cfg && m_DL_Cfg.hubKey != "" && m_DL_Cfg.serverId != ""; // no id = not approved on the hub yet
 	}
 
 	// ---------------- arrival ----------------

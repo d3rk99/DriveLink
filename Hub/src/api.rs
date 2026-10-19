@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, value::RawValue, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use subtle::ConstantTimeEq;
 
@@ -25,9 +25,55 @@ const MAX_BODY: usize = 4 << 20; // 4 MB per request (a player + car snapshot is
 
 pub struct Hub {
     pub dir: std::path::PathBuf, // hub.json folder (maps/ lives here)
+    pub cfg_path: std::path::PathBuf,
     pub maps: crate::maps::Status,
-    pub cfg: Config,
+    pub cfg: RwLock<Config>, // edited live from /admin (Servers, Setup) and saved to hub.json
+    pub pending: Mutex<HashMap<String, Pending>>, // claim -> a DayZ server asking to join
+    pub seen: Mutex<HashMap<String, String>>,     // server id -> the address its last request came from
     pub db: Mutex<Connection>,
+}
+
+/// A DayZ server with the right key that the hub doesn't know yet; it shows up in /admin to be approved.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pending {
+    pub claim: String,
+    pub addr: String,
+    pub local: bool, // on the hub's own machine
+    pub port: u16,
+    pub query_port: u16,
+    pub world: String,
+    pub wanted_id: String,
+    pub last_seen: String,
+    // what to fill in for it: same machine -> the hub's LAN address, LAN -> its address, internet -> public
+    pub suggest_lan: String,
+    pub suggest_public: String,
+}
+
+impl Hub {
+    pub fn cfg(&self) -> Config {
+        self.cfg.read().unwrap().clone()
+    }
+
+    /// Change hub.json: edit a copy, check it, write it, then use it.
+    pub fn update_cfg(&self, f: impl FnOnce(&mut Config) -> Result<(), String>) -> Result<(), String> {
+        let mut cur = self.cfg.write().unwrap();
+        let mut next = cur.clone();
+        f(&mut next)?;
+        next.validate()?;
+        crate::config::save(&self.cfg_path, &next)?;
+        *cur = next;
+        Ok(())
+    }
+
+    /// Did this server's last request come from the hub's own machine?
+    pub fn is_local_server(&self, id: &str) -> bool {
+        if let Some(a) = self.seen.lock().unwrap().get(id) {
+            return crate::net::is_this_machine(a);
+        }
+        // not heard from since the hub started: go by its LAN address
+        self.cfg().server(id).map(|s| crate::net::is_this_machine(&s.lan_host)).unwrap_or(false)
+    }
 }
 
 pub type Shared = Arc<Hub>;
@@ -96,6 +142,11 @@ fn preview(b: &[u8]) -> String {
 struct Base {
     server_id: String,
     key: String,
+    // /api/hello only: who a new server is (it has no serverId yet, see Pending)
+    claim: String,
+    port: u16,
+    query_port: u16,
+    world: String,
 }
 
 /// Checks the key + server id (body, else URL). Ok(server id) or the refusal to send back.
@@ -113,25 +164,80 @@ fn check(h: &Hub, path: &str, addr: &SocketAddr, q: &HashMap<String, String>, bo
     if b.server_id.is_empty() {
         b.server_id = q.get("serverId").cloned().unwrap_or_default();
     }
-    if !bool::from(b.key.as_bytes().ct_eq(h.cfg.server_key.as_bytes())) {
+    let cfg = h.cfg();
+    if !bool::from(b.key.as_bytes().ct_eq(cfg.server_key.as_bytes())) {
         crate::logf!("refused {path} from {addr}: wrong key (got {} chars, serverId {:?}), body starts {:?}", b.key.len(), b.server_id, preview(body));
         return Err(refuse(StatusCode::UNAUTHORIZED, "wrong key"));
     }
-    let Some(server) = h.cfg.server(&b.server_id) else {
+    // a server approved in /admin may still say hello with its claim only (it learns its id from this answer)
+    let found = cfg.server(&b.server_id).or_else(|| if b.claim.is_empty() { None } else { cfg.servers.iter().find(|s| s.claim == b.claim) });
+    let Some(server) = found.cloned() else {
+        if path == "/api/hello" && !b.claim.is_empty() {
+            let ip = addr.ip().to_string();
+            let here = crate::net::is_this_machine(&ip);
+            let (suggest_lan, suggest_public) = if here {
+                (crate::net::lan_ip().map(|i| i.to_string()).unwrap_or_else(|| ip.clone()), String::new())
+            } else if crate::net::is_private(&ip) {
+                (ip.clone(), String::new())
+            } else {
+                (String::new(), ip.clone())
+            };
+            let p = Pending {
+                suggest_lan,
+                suggest_public,
+                claim: b.claim.clone(),
+                local: here,
+                addr: ip,
+                port: b.port,
+                query_port: b.query_port,
+                world: b.world.to_lowercase(),
+                wanted_id: b.server_id.clone(),
+                last_seen: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            };
+            let new = h.pending.lock().unwrap().insert(b.claim.clone(), p).is_none();
+            if new {
+                crate::logf!("new DayZ server asks to join from {addr} (world {:?}, port {}): approve it in the map editor, Servers", b.world, b.port);
+            }
+            return Err(reply(StatusCode::OK, json!({"ok": false, "pending": true, "error": "waiting for approval in the hub (map editor, Servers page)"})));
+        }
         crate::logf!("refused {path}: unknown serverId {:?}", b.server_id);
-        return Err(refuse(StatusCode::BAD_REQUEST, &format!("unknown serverId {} (add it to hub.json)", b.server_id)));
+        return Err(refuse(StatusCode::BAD_REQUEST, &format!("unknown serverId {} (add it on the hub's Servers page)", b.server_id)));
     };
+    h.seen.lock().unwrap().insert(server.id.clone(), addr.ip().to_string());
+    // the server tells its game/query port on every hello: keep hub.json right without anyone typing it
+    let world = b.world.to_lowercase();
+    if path == "/api/hello" && ((b.port != 0 && b.port != server.port) || (b.query_port != 0 && b.query_port != server.query_port) || (!world.is_empty() && world != server.world)) {
+        let id = server.id.clone();
+        let res = h.update_cfg(|c| {
+            if let Some(s) = c.servers.iter_mut().find(|s| s.id == id) {
+                if b.port != 0 {
+                    s.port = b.port;
+                }
+                if b.query_port != 0 {
+                    s.query_port = b.query_port;
+                }
+                if !world.is_empty() {
+                    s.world = world.clone();
+                }
+            }
+            Ok(())
+        });
+        match res {
+            Ok(()) => crate::logf!("{id}: game port {} / query port {} / map {world:?} saved (reported by the server)", b.port, b.query_port),
+            Err(e) => crate::logf!("{id}: could not save its ports: {e}"),
+        }
+    }
     if let Ok(db) = h.db.lock() {
         let _ = db.execute(
             "INSERT INTO servers(id,name,last_seen) VALUES(?1,?2,CURRENT_TIMESTAMP) ON CONFLICT (id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP",
-            params![b.server_id, server.name],
+            params![server.id, server.name],
         );
     }
-    Ok(b.server_id)
+    Ok(server.id)
 }
 
 fn server_out(h: &Hub, id: &str) -> Value {
-    match h.cfg.server(id) {
+    match h.cfg().server(id) {
         Some(s) => json!({"id": s.id, "name": s.name, "lanHost": s.lan_host, "publicHost": s.public_host, "port": s.port, "password": s.password}),
         None => Value::Null,
     }
@@ -161,7 +267,7 @@ async fn hello(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body:
         Ok(s) => s,
         Err(r) => return r,
     };
-    let servers: Vec<Value> = h.cfg.servers.iter().map(|s| server_out(&h, &s.id)).collect();
+    let servers: Vec<Value> = h.cfg().servers.iter().map(|s| server_out(&h, &s.id)).collect();
     // Map editor: the server sends the zones/arrival points from its config.json; the first time, they become the
     // hub's copy. From then on the hub's copy wins (edited on the map) and goes back in "layout".
     let sent: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
@@ -180,7 +286,7 @@ async fn hello(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body:
         Err(e) => return db_error(e),
     };
     crate::logf!("hello from {sid}");
-    reply(StatusCode::OK, json!({"ok": true, "servers": servers, "layout": layout, "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)}))
+    reply(StatusCode::OK, json!({"ok": true, "serverId": sid, "servers": servers, "layout": layout, "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)}))
 }
 
 #[derive(Deserialize, Default)]
@@ -233,7 +339,7 @@ async fn depart(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
         Err(e) => return e,
     };
     let payload = r.payload.as_ref().map(|p| p.get().to_string()).unwrap_or_default();
-    let target_known = h.cfg.server(&r.to).is_some();
+    let target_known = h.cfg().server(&r.to).is_some();
     if r.steam_id.is_empty() || !target_known || r.to == from || payload.is_empty() || payload == "null" {
         crate::logf!("depart refused: steamId {:?}, to {:?} (known {target_known}), from {from:?}, payload {} bytes", r.steam_id, r.to, payload.len());
         return refuse(StatusCode::BAD_REQUEST, "need steamId, a different known target server and a JSON payload");
@@ -334,7 +440,7 @@ async fn arrive(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
         Err(e) => return db_error(e),
     };
     if let Some(Some(o)) = &owner {
-        if *o != here && h.cfg.server(o).is_some() {
+        if *o != here && h.cfg().server(o).is_some() {
             crate::logf!("arrive {} on {here}: owned by {o}, redirect", r.steam_id);
             return reply(StatusCode::OK, json!({"ok": true, "action": "redirect", "target": server_out(&h, o)}));
         }

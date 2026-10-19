@@ -5,15 +5,17 @@
 //   DriveLinkHub.exe transfers | return <steamId> | drop <steamId> | dump [file]   admin commands
 //   -config <file>                      another hub.json (default: next to the exe)
 //
-// First start writes hub.json with a random server key and stops: put that key in every DayZ server's
-// DriveLink config. Same API, database and hub.json as the Go hub it replaces.
+// First start writes hub.json with a random server key and keeps running: everything else (servers, zones, hub
+// settings, firewall) is done in the web app at http://localhost:7290/admin.
 mod admin;
 mod api;
 mod config;
 mod db;
+mod firewall;
 mod layout;
 mod log;
 mod maps;
+mod net;
 mod numfix;
 #[cfg(windows)]
 mod service;
@@ -45,23 +47,12 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
     let dir = cfg_path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     log::init(dir.join("hub.log"), console);
     let (mut cfg, created) = config::load_or_create(&cfg_path)?;
-    if !created {
-        if let Some(p) = config::ensure_admin_password(&cfg_path, &mut cfg)? {
-            logf!("map editor password made (hub.json adminPassword): {p}");
-        }
+    if let Some(p) = config::ensure_admin_password(&cfg_path, &mut cfg)? {
+        logf!("web app password made (needed from other PCs only; change it on the Setup page): {p}");
     }
     if created {
-        let msg = format!(
-            "First start: wrote {}\n1. Check the \"servers\" list (id, lanHost, publicHost, port).\n2. Put this in EVERY DayZ server's DriveLink config as hubKey:\n     {}\nThen start the hub again.",
-            cfg_path.display(),
-            cfg.server_key
-        );
-        if console {
-            println!("\n{msg}");
-            return Ok(());
-        }
-        logf!("{}", msg.replace('\n', " | "));
-        return Err("new hub.json written, fill it in and start the service again".into());
+        // nothing to fill in by hand any more: servers, key and firewall are all on the web app
+        logf!("first start: wrote {} with a new server key; open the web app to add your DayZ servers", cfg_path.display());
     }
     cfg.validate().map_err(|e| format!("hub.json: {e}"))?;
     let db_path = {
@@ -70,7 +61,15 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
     };
     let mut conn = db::open(&db_path)?;
     db::migrate(&mut conn)?;
-    let hub = Arc::new(api::Hub { dir: dir.clone(), maps: Default::default(), cfg: cfg.clone(), db: Mutex::new(conn) });
+    let hub = Arc::new(api::Hub {
+        dir: dir.clone(),
+        cfg_path: cfg_path.clone(),
+        maps: Default::default(),
+        cfg: std::sync::RwLock::new(cfg.clone()),
+        pending: Default::default(),
+        seen: Default::default(),
+        db: Mutex::new(conn),
+    });
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(async move {
@@ -97,7 +96,7 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
         }
         logf!("DriveLink Hub (rust) listening on {}, {} servers, database {}", where_.join(" + "), cfg.servers.len(), db_path.display());
         if let Some(w) = where_.first() {
-            logf!("map editor: {}/admin (password: hub.json adminPassword)", w.replace("0.0.0.0", "localhost"));
+            logf!("web app (servers, map, setup): {}/admin", w.replace("0.0.0.0", "localhost"));
         }
         if console {
             tokio::select! {
