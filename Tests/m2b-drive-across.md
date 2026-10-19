@@ -40,3 +40,14 @@ Pass/fail per step, all SCRIPT (E) lines, and what you saw in game (seat, parts,
 | Chernarus -> Livonia by car with the fixes (21:01) | PASS: 22/22, 35/35, bleeding kept, seated |
 | Livonia -> Chernarus by car with the fixes (21:03) | PASS: parked on Livonia, removed with empty seats, 22/22, 35/35, fluids exact, seated |
 Not tested yet: refusals (passenger / second person in the car), hub stopped while driving in.
+
+## Solo session 2026-10-18 21:12-21:24 (M3 code, 99233-byte build)
+| Check | Result |
+|---|---|
+| Solo car trips on the M3 code path (4 trips) | PASS: 29/29 parts/items, 35/35 items, fluids exact, seated every time |
+| Empty-seat delete while the logout holds the driver 13 s | PASS twice (21:12, 21:22): waited, removed, no crash |
+| Hub stopped while driving in | PASS: "Travel failed" after 2 s, player + car stayed |
+| Zone cooldown after a failure | PASS: one attempt in > 1 min in the zone; stepped out/in with the hub up -> trip went |
+| Failed arrival (target with 0 arrival points) | PASS: ARRIVAL FAILED + hub FAILED, transfer kept, player sent to the menu with the reason |
+| DriveLinkHub.exe transfers / return | PASS: listed "FAILED 1x: ...", return turned it around, rejoin -> first arrival point, 35/35 + car 29/29 |
+Not tested: alone in the passenger seat (refusal), the main-menu dialog text itself (log shows it was sent).
