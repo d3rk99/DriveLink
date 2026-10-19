@@ -266,6 +266,10 @@ class DL_Journey
 	{
 		if (!c)
 			return "car";
+		// the name players know (config displayName); "#STR_..." needs the client's language table, so not that
+		string n = g_Game.ConfigGetTextOut("CfgVehicles " + c.type + " displayName");
+		if (n != "" && n.IndexOf("#") != 0)
+			return n;
 		return c.type;
 	}
 
