@@ -53,3 +53,25 @@ For a trip that is `Your travel data arrived late...` in the main menu; rejoinin
 
 ## Report
 Pass/fail per step, every SCRIPT (E) line (both servers + client), the hub window text, inventory screenshots.
+
+## Results 2026-10-18 (Derk, same PC, hub on SQLite; a176888)
+Trips 18:06 -> 19:03, Chernarus <-> Livonia, every one `A of A bytes` and `N/N items restored, 0 on the ground`.
+| Check | Result |
+|---|---|
+| Snapshot transport (/api/payload) | PASS, every trip (1886 .. 10711 bytes) |
+| Worn clothing + weapons in slots | PASS |
+| Items inside clothing, exact grid spot, rotated item | PASS after a176888 (CollectTree; before: cargo was never captured) |
+| Attachment on attachment (optic on B95) | PASS |
+| Quantities (eaten apple/mushroom, half bottle of water) | PASS |
+| Loose ammo piles | PASS after a176888 (before: arrived with 0 rounds, combining crashed CombineItems) |
+| MP5K: attached mag 8 rounds + chambered round, fires | PASS |
+| Flashlight ON with battery (in hands and in cargo) | PASS |
+| Quickbar slots 1-3 | PASS |
+| Bleeding (1 source) | PASS |
+| Stomach contents | PASS (stomach 1 on arrival) |
+| Anti-dupe: join the old server -> redirected to owner | PASS |
+| Hub stopped -> "Travel failed", gear kept | PASS (retry every 5 s while in zone -> cooldown added in a176888, not retested) |
+| Cuffed travel, both ways (`cuffed true`) | PASS 19:10 + 19:11 + 19:13 |
+| Rejoin the server you just left (cuffed run) | FAIL 19:06 "Player with same UID is already in game": the 1.5 s cleanup deleted the still-connected character mid-logout, vanilla never called DisconnectPlayer. Fixed (vanilla PlayerDisconnected path), PASS 19:11 + 19:13 |
+Not tested yet: unconscious travel, failed-arrival kick dialog + `DriveLinkHub.exe return`, late hub answer,
+zone cooldown after a failure.

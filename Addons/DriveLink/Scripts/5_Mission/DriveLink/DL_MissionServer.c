@@ -547,13 +547,21 @@ modded class MissionServer
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveTraveller, 1500, false, sid);
 	}
 
+	// Normally the client is gone by now and vanilla's logout ends in PlayerDisconnected -> HandleBody (doomed ->
+	// DL_Forget). If he is STILL connected, run that same vanilla path ourselves (missionserver.c PlayerDisconnected:
+	// save, CharacterExit, HandleBody, g_Game.DisconnectPlayer). Test 2026-10-18 19:03: a bare Delete() here while his
+	// logout was still running made vanilla log "Skipping player, already removed" and never call DisconnectPlayer,
+	// so the engine kept his UID "in game" and the server refused him ("Player with same UID is already in game")
+	// until a restart.
 	protected void DL_RemoveTraveller(string sid)
 	{
-		PlayerBase pb = DL_FindPlayer(sid);
 		m_DL_Leaving.Remove(sid);
-		if (pb)
-			m_DL_Doomed.Remove(pb);
-		DL_Forget(pb);
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb || !pb.GetIdentity())
+			return;
+		Print(DL_Const.LOG_TAG + sid + " still connected after the hand-over, disconnecting him the vanilla way");
+		m_DL_Doomed.Set(pb, true); // HandleBody -> DL_Forget
+		PlayerDisconnected(pb, pb.GetIdentity(), pb.GetIdentity().GetId());
 	}
 
 	// Remove a character that now lives on another server. It must also be marked dead in THIS server's own
