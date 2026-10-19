@@ -16,6 +16,8 @@ Everything is OFF by default (distance 0 = today's free, instant trip) and is se
 | Car wear | engine 2%, wheels 3% per 10 km | health taken from the engine and every wheel |
 | Travel time | off | on = the character is on the road (section 3) |
 | Speed on foot / by car | 5 / 40 km/h | travel time = distance / speed (real minutes) |
+| Spare needed above (refuse mode) | 0 km (off) | car trips longer than this need a spare wheel or a TireRepairKit |
+| Flat tyre chance (weakened mode) | 3% per 10 km | higher on worn wheels; fixed by a spare or kit, else the car is abandoned |
 | Road events (weakened mode only) | see section 4 | chances for luck and danger |
 
 ## 2. Cost check + charge (source server, when the countdown starts and again at departure)
@@ -55,6 +57,19 @@ happened, and the story text) goes into each traveller's snapshot. The target sh
   "Food ran low: everyone had to ration." (arrive with no food, hungry)
   "Ran out of gas on the road, had to abandon the vehicle. Britney died from a bite."
 - **Refuse mode has no random events.** It only charges the costs and the wear.
+
+## 4b. Flat tyres (agreed 2026-10-19, both modes)
+- **Fixes**, in this order:
+  1. A **spare wheel** of the right type (e.g. `HatchbackWheel` for the OffroadHatchback) in the trunk or carried by
+     the crew. It is swapped on, and the flat goes into the trunk as `..._Ruined`.
+  2. A **TireRepairKit**: the flat is patched to damaged health, and the kit loses a use.
+- **Refuse mode** (no luck involved): a car trip longer than **spare needed above N km** (server setting, 0 = off)
+  only starts with a spare wheel or a repair kit aboard: "This trip needs a spare wheel or a tyre repair kit".
+- **Weakened mode**: a chance per 10 km (server setting), higher for worn wheels (chance x (2 - wheel health
+  fraction)). A flat uses a spare or a kit. With **neither, the car is abandoned** at that point: the crew walks the
+  rest (food/water/time for the walked part, infected-attack rolls). Story:
+  "Blew a tyre near Pavlovo. Britney put on the spare." /
+  "Blew a tyre and had no spare: left the car behind and walked the last 25 km."
 
 ## 5. Who does what
 - **Hub**: stores the zone distances and per-server travel rules (sent to the servers with the layout, live
