@@ -97,10 +97,16 @@ modded class MissionServer
 		if (m_DL_Cfg.hubKey != "")
 		{
 			// boot check: one /api/hello so the log says right away whether this server can reach the hub
-			DL_ArriveReq h = new DL_ArriveReq();
+			// ...and it carries this server's zones/arrival points (the hub imports them once, see DL_HelloReq)
+			DL_HelloReq h = new DL_HelloReq();
 			h.serverId = m_DL_Cfg.serverId;
 			h.key = m_DL_Cfg.hubKey;
-			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ArriveJson(h), new DL_HelloWaiter(this), "OnAnswer", "hello");
+			h.zones = m_DL_Cfg.zones;
+			h.arrivals = m_DL_Cfg.arrivals;
+			string hj;
+			string herr;
+			JsonFileLoader<DL_HelloReq>.MakeData(h, hj, herr, false);
+			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/hello?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, hj, new DL_HelloWaiter(this), "OnAnswer", "hello");
 		}
 		DL_LoadDebug();
 		Print(DL_Const.LOG_TAG + "v" + DL_Const.VERSION + " server '" + m_DL_Cfg.serverId + "', hub " + m_DL_Cfg.hubUrl + ", " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points, key set " + (m_DL_Cfg.hubKey != "").ToString());
@@ -261,10 +267,71 @@ modded class MissionServer
 
 	void DL_OnHello(bool ok, string body)
 	{
-		if (ok)
-			Print(DL_Const.LOG_TAG + "hub hello OK: " + body.Substring(0, Math.Min(160, body.Length())));
-		else
+		if (!ok)
+		{
 			Print(DL_Const.LOG_TAG + "hub hello FAILED - check hubUrl, that the hub runs, and the hub window/log");
+			return;
+		}
+		Print(DL_Const.LOG_TAG + "hub hello OK: " + body.Substring(0, Math.Min(160, body.Length())));
+		DL_HelloResp r;
+		string err;
+		JsonSerializer js = new JsonSerializer();
+		if (js.ReadFromString(r, body, err) && r && r.layout)
+			DL_ApplyLayout(r.layout, "hello");
+		// from now on: ask for edits every 30 s (only a rev number goes over the wire when nothing changed)
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_PollLayout, 30000, true);
+	}
+
+	// ---------------- zones + arrival points from the hub (map editor) ----------------
+
+	protected int m_DL_LayoutRev;
+
+	protected void DL_PollLayout()
+	{
+		DL_LayoutReq q = new DL_LayoutReq();
+		q.serverId = m_DL_Cfg.serverId;
+		q.key = m_DL_Cfg.hubKey;
+		q.rev = m_DL_LayoutRev;
+		string json;
+		string err;
+		JsonFileLoader<DL_LayoutReq>.MakeData(q, json, err, false);
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/layout?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, json, new DL_LayoutWaiter(this), "OnAnswer", "layout");
+	}
+
+	void DL_OnLayout(bool ok, string body)
+	{
+		if (!ok)
+			return; // hub down: keep what we have
+		DL_Layout l;
+		string err;
+		JsonSerializer js = new JsonSerializer();
+		if (js.ReadFromString(l, body, err) && l && l.changed)
+			DL_ApplyLayout(l, "edit on the hub");
+	}
+
+	// The hub's copy replaces the zones/arrival points; config.json gets it too, so a boot without the hub uses
+	// the latest layout. Zones only need x/z; arrival heights are taken from the terrain when someone arrives.
+	protected void DL_ApplyLayout(DL_Layout l, string why)
+	{
+		if (!l || l.rev <= 0 || !l.zones || !l.arrivals || l.rev == m_DL_LayoutRev)
+			return;
+		m_DL_LayoutRev = l.rev;
+		m_DL_Cfg.zones = l.zones;
+		m_DL_Cfg.arrivals = l.arrivals;
+		m_DL_InZoneSince.Clear(); // countdowns of zones that may be gone now
+		string err;
+		JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
+		Print(DL_Const.LOG_TAG + "layout rev " + l.rev.ToString() + " from the hub (" + why + "): " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points");
+		foreach (DL_Zone z : m_DL_Cfg.zones)
+		{
+			if (z)
+				Print(DL_Const.LOG_TAG + "  zone '" + z.name + "' " + z.center.ToString() + " r " + z.radius.ToString() + " -> " + z.to + " / " + z.arrival);
+		}
+		foreach (DL_ArrivalPoint a : m_DL_Cfg.arrivals)
+		{
+			if (a)
+				Print(DL_Const.LOG_TAG + "  arrival '" + a.name + "' " + a.pos.ToString() + " yaw " + a.yaw.ToString());
+		}
 	}
 
 	protected bool DL_On()
@@ -1234,4 +1301,11 @@ class DL_DepartWaiter : Managed
 	protected string m_Sid;
 	void DL_DepartWaiter(MissionServer m, string sid) { m_M = m; m_Sid = sid; }
 	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_OnDepartAnswer(m_Sid, ok, body); }
+}
+
+class DL_LayoutWaiter : Managed
+{
+	protected MissionServer m_M;
+	void DL_LayoutWaiter(MissionServer m) { m_M = m; }
+	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_OnLayout(ok, body); }
 }

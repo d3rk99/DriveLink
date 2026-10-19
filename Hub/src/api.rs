@@ -24,6 +24,8 @@ use subtle::ConstantTimeEq;
 const MAX_BODY: usize = 4 << 20; // 4 MB per request (a player + car snapshot is ~25 kB)
 
 pub struct Hub {
+    pub dir: std::path::PathBuf, // hub.json folder (maps/ lives here)
+    pub maps: crate::maps::Status,
     pub cfg: Config,
     pub db: Mutex<Connection>,
 }
@@ -38,7 +40,9 @@ pub fn routes(h: Shared) -> Router {
         .route("/api/confirm", post(confirm))
         .route("/api/payload", post(payload))
         .route("/api/fail", post(fail))
+        .route("/api/layout", post(layout))
         .route("/health", get(health))
+        .merge(crate::admin::routes(h.clone()))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY + 1))
         .layer(axum::middleware::from_fn(log_requests))
         .with_state(h)
@@ -158,8 +162,52 @@ async fn hello(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body:
         Err(r) => return r,
     };
     let servers: Vec<Value> = h.cfg.servers.iter().map(|s| server_out(&h, &s.id)).collect();
+    // Map editor: the server sends the zones/arrival points from its config.json; the first time, they become the
+    // hub's copy. From then on the hub's copy wins (edited on the map) and goes back in "layout".
+    let sent: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let db = h.db.lock().unwrap();
+    if sent.get("zones").map(Value::is_array).unwrap_or(false) {
+        let z = crate::layout::clean_zones(&sent["zones"]).to_string();
+        let a = crate::layout::clean_arrivals(sent.get("arrivals").unwrap_or(&Value::Null)).to_string();
+        match crate::layout::import_if_missing(&db, &sid, &z, &a) {
+            Ok(true) => crate::logf!("layout of {sid} imported from its config.json"),
+            Ok(false) => {}
+            Err(e) => return db_error(e),
+        }
+    }
+    let layout = match crate::layout::get(&db, &sid) {
+        Ok(l) => l.map(|l| crate::layout::to_json(&l)).unwrap_or(Value::Null),
+        Err(e) => return db_error(e),
+    };
     crate::logf!("hello from {sid}");
-    reply(StatusCode::OK, json!({"ok": true, "servers": servers, "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)}))
+    reply(StatusCode::OK, json!({"ok": true, "servers": servers, "layout": layout, "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)}))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RevReq {
+    rev: i64,
+}
+
+// POST /api/layout  {serverId,key,rev} -> this server's zones + arrival points, or unchanged when it has that rev
+async fn layout(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body: Bytes) -> Response {
+    let sid = match check(&h, "/api/layout", &a, &q, &body) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let r: RevReq = serde_json::from_slice(&body).unwrap_or_default();
+    let db = h.db.lock().unwrap();
+    match crate::layout::get(&db, &sid) {
+        Ok(Some(l)) if l.rev != r.rev => {
+            crate::logf!("layout rev {} sent to {sid}", l.rev);
+            let mut out = crate::layout::to_json(&l);
+            out["ok"] = json!(true);
+            out["changed"] = json!(true);
+            reply(StatusCode::OK, out)
+        }
+        Ok(l) => reply(StatusCode::OK, json!({"ok": true, "changed": false, "rev": l.map(|l| l.rev).unwrap_or(0)})),
+        Err(e) => db_error(e),
+    }
 }
 
 #[derive(Deserialize)]

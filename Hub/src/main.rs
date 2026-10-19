@@ -7,10 +7,13 @@
 //
 // First start writes hub.json with a random server key and stops: put that key in every DayZ server's
 // DriveLink config. Same API, database and hub.json as the Go hub it replaces.
+mod admin;
 mod api;
 mod config;
 mod db;
+mod layout;
 mod log;
+mod maps;
 mod numfix;
 #[cfg(windows)]
 mod service;
@@ -27,7 +30,8 @@ fn config_path(args: &mut Vec<String>) -> PathBuf {
         if i + 1 < args.len() {
             let p = PathBuf::from(args.remove(i + 1));
             args.remove(i);
-            return if p.is_absolute() { p } else { dir.join(p) };
+            // relative to where you run it (2026-10-18: relative to the exe made a stray hub.json in target\release)
+            return if p.is_absolute() { p } else { std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p) };
         }
     }
     dir.join("hub.json")
@@ -40,7 +44,12 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
     let cfg_path = CONFIG.get().cloned().unwrap_or_else(|| PathBuf::from("hub.json"));
     let dir = cfg_path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     log::init(dir.join("hub.log"), console);
-    let (cfg, created) = config::load_or_create(&cfg_path)?;
+    let (mut cfg, created) = config::load_or_create(&cfg_path)?;
+    if !created {
+        if let Some(p) = config::ensure_admin_password(&cfg_path, &mut cfg)? {
+            logf!("map editor password made (hub.json adminPassword): {p}");
+        }
+    }
     if created {
         let msg = format!(
             "First start: wrote {}\n1. Check the \"servers\" list (id, lanHost, publicHost, port).\n2. Put this in EVERY DayZ server's DriveLink config as hubKey:\n     {}\nThen start the hub again.",
@@ -61,7 +70,7 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
     };
     let mut conn = db::open(&db_path)?;
     db::migrate(&mut conn)?;
-    let hub = Arc::new(api::Hub { cfg: cfg.clone(), db: Mutex::new(conn) });
+    let hub = Arc::new(api::Hub { dir: dir.clone(), maps: Default::default(), cfg: cfg.clone(), db: Mutex::new(conn) });
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(async move {
@@ -87,6 +96,9 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
             where_.push(format!("https://{addr}"));
         }
         logf!("DriveLink Hub (rust) listening on {}, {} servers, database {}", where_.join(" + "), cfg.servers.len(), db_path.display());
+        if let Some(w) = where_.first() {
+            logf!("map editor: {}/admin (password: hub.json adminPassword)", w.replace("0.0.0.0", "localhost"));
+        }
         if console {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
@@ -126,6 +138,26 @@ fn admin(cmd: &str, rest: &[String]) -> Result<(), String> {
             let out = rest.first().map(PathBuf::from).unwrap_or_else(|| dir.join("last-payload.json"));
             db::dump(&c, &out)
         }
+        "map" => {
+            // DriveLinkHub.exe map            -> list maps found in the game files
+            // DriveLinkHub.exe map <name>     -> build its tiles now (what the editor's button does)
+            let avail = maps::available(&cfg.dayz_path);
+            let Some(name) = rest.first() else {
+                for (m, p) in &avail {
+                    println!("{m}: {}{}", p.display(), if maps::meta(&dir, m).is_some() { "  (built)" } else { "" });
+                }
+                if avail.is_empty() {
+                    println!("no worlds_*_data.pbo found; set dayzPath in hub.json");
+                }
+                return Ok(());
+            };
+            let pbo = avail.get(name).cloned().ok_or(format!("no worlds_{name}_data.pbo found"))?;
+            let tools = maps::tools_dir(&cfg.dayz_tools_path).ok_or("DayZ Tools not found; set dayzToolsPath in hub.json")?;
+            let st: maps::Status = Default::default();
+            maps::build(dir.clone(), name.clone(), pbo, tools, st.clone());
+            let s = st.lock().unwrap().get(name).cloned().unwrap_or_default();
+            if s.starts_with("FAILED") { Err(s) } else { Ok(()) }
+        }
         _ => unreachable!(),
     }
 }
@@ -145,7 +177,7 @@ fn main() {
         "install" => service::install(),
         #[cfg(windows)]
         "uninstall" => service::uninstall(),
-        "transfers" | "return" | "drop" | "dump" => admin(&cmd, &args[1..]),
+        "transfers" | "return" | "drop" | "dump" | "map" => admin(&cmd, &args[1..]),
         other => Err(format!("unknown command {other:?} (none = run here, install, uninstall, transfers, return <steamId>, drop <steamId>, dump [file])")),
     };
     if let Err(e) = res {

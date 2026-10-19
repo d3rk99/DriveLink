@@ -36,6 +36,26 @@ pub struct Config {
     pub server_key: String,
     #[serde(default)]
     pub servers: Vec<ServerEntry>,
+    /// password for the map editor at /admin (made on the first start when empty)
+    #[serde(default)]
+    pub admin_password: String,
+    /// optional: a DayZ (client or server) folder for the map images; empty = look in the Steam libraries
+    #[serde(default)]
+    pub dayz_path: String,
+    /// optional: the "DayZ Tools" folder; empty = look in the Steam libraries
+    #[serde(default)]
+    pub dayz_tools_path: String,
+}
+
+/// Fills in an admin password when there is none; returns it when it was just made.
+pub fn ensure_admin_password(path: &Path, c: &mut Config) -> Result<Option<String>, String> {
+    if !c.admin_password.is_empty() {
+        return Ok(None);
+    }
+    let b: [u8; 9] = rand::random();
+    c.admin_password = hex::encode(b);
+    save(path, c)?;
+    Ok(Some(c.admin_password.clone()))
 }
 
 pub const DEFAULT_DATABASE: &str = "drivelink.db";
@@ -66,6 +86,9 @@ pub fn load_or_create(path: &Path) -> Result<(Config, bool), String> {
                     ServerEntry { id: "chernarus".into(), name: "Chernarus".into(), lan_host: "192.168.1.133".into(), port: 2302, ..Default::default() },
                     ServerEntry { id: "livonia".into(), name: "Livonia".into(), lan_host: "192.168.1.133".into(), port: 2402, ..Default::default() },
                 ],
+                admin_password: String::new(),
+                dayz_path: String::new(),
+                dayz_tools_path: String::new(),
             };
             save(path, &c)?;
             return Ok((c, true));

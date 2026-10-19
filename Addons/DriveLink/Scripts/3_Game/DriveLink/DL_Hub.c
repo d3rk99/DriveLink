@@ -14,6 +14,38 @@ class DL_ArriveReq
 	string steamId;
 }
 
+// Map editor: zones + arrival points live in the hub. /api/hello sends this server's config.json copy (the hub
+// imports it the first time) and gets the hub's layout back; /api/layout polls it by rev (live edits, no restart).
+class DL_HelloReq
+{
+	string serverId;
+	string key;
+	ref array<ref DL_Zone> zones;
+	ref array<ref DL_ArrivalPoint> arrivals;
+}
+
+class DL_Layout
+{
+	int rev;
+	string world; // "map" is a type name in Enforce
+	bool changed;
+	ref array<ref DL_Zone> zones;
+	ref array<ref DL_ArrivalPoint> arrivals;
+}
+
+class DL_HelloResp
+{
+	bool ok;
+	ref DL_Layout layout;
+}
+
+class DL_LayoutReq
+{
+	string serverId;
+	string key;
+	int rev;
+}
+
 // /api/payload, /api/confirm and /api/fail all name one transfer by its token.
 class DL_TokenReq
 {
