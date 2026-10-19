@@ -25,6 +25,7 @@ modded class MissionServer
 	protected ref map<string, ref DL_Pending> m_DL_Pending = new map<string, ref DL_Pending>;    // steamId -> hub answer
 	protected ref map<string, int> m_DL_InZoneSince = new map<string, int>;                     // steamId -> ms
 	protected ref map<string, bool> m_DL_Leaving = new map<string, bool>;  // steamIds being sent away (zone check skips them)
+	protected ref map<string, bool> m_DL_MustLeaveZone = new map<string, bool>; // trip failed: no new countdown until he steps out
 	protected ref map<PlayerBase, bool> m_DL_Doomed = new map<PlayerBase, bool>; // characters that live elsewhere now: delete + CharacterKill on logout
 	protected float m_DL_Tick;
 	protected ref DL_Snapshot m_DL_Snap = new DL_Snapshot();
@@ -443,6 +444,7 @@ modded class MissionServer
 			bool had = m_DL_InZoneSince.Find(sid, since);
 			if (!z || !pb.IsAlive())
 			{
+				m_DL_MustLeaveZone.Remove(sid);
 				if (had)
 				{
 					m_DL_InZoneSince.Remove(sid);
@@ -450,6 +452,9 @@ modded class MissionServer
 				}
 				continue;
 			}
+			// a failed trip doesn't retry by itself (test 2026-10-18: "Travel failed" every 5 s while standing in it)
+			if (m_DL_MustLeaveZone.Contains(sid))
+				continue;
 			if (!had)
 			{
 				m_DL_InZoneSince.Set(sid, now);
@@ -522,7 +527,8 @@ modded class MissionServer
 			if (pb)
 			{
 				pb.SetAllowDamage(true);
-				NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 6, "DriveLink", "Travel failed: " + why, "");
+				m_DL_MustLeaveZone.Set(sid, true);
+			NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 8, "DriveLink", "Travel failed: " + why + ". Step out of the zone and back in to try again.", "");
 			}
 			return;
 		}

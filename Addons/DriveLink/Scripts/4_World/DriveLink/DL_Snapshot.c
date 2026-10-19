@@ -1,8 +1,8 @@
 // DriveLink v0.2 - a player's whole state <-> DL_PlayerData. Server only. NO RECURSION anywhere.
-// Research/R1 (how UniversalApi does it, read only): the engine lists the whole inventory in one call and every item
-// is put back at its exact place, with a ground fallback so nothing is ever lost silently.
+// Research/R1 (how UniversalApi does it, read only): every item is put back at its exact place, with a ground fallback
+// so nothing is ever lost silently.
 // Engine calls (vanilla 1.29 scripts):
-//   GameInventory.EnumerateInventory(InventoryTraversalType.LEVELORDER, out items)  inventory.c:127 / gameplay.c:5-11
+//   Inventory tree walked by DL_Snapshot.CollectTree (attachments + cargo + hands; NOT EnumerateInventory, see there)
 //   EntityAI.GetHierarchyParent  entityai.c:881;  InventoryLocation GetType/GetSlot/GetIdx/GetRow/GetCol/GetFlip  inventorylocation.c:43-95
 //   GameInventory.CreateAttachmentEx/CreateEntityInCargoEx(type,idx,row,col,flip)/CreateEntityInCargo/CreateInInventory  inventory.c:143-150
 //   HumanInventory.CreateInHands  humaninventory.c:44
@@ -150,12 +150,48 @@ class DL_Snapshot
 		}
 	}
 
-	// LEVELORDER = the player's direct items first, then their children, then grandchildren: every parent is in the list
-	// before its children, so the rebuild can go straight down the list.
+	// Every item under root, parents before children (breadth first), root itself not included. NO recursion: the list
+	// is its own work queue. In-game test 2026-10-18: EnumerateInventory(LEVELORDER) on a PLAYER returned only the 12
+	// worn items, nothing inside them (jacket cargo lost, no "parent not in list" lines), so we walk the tree ourselves:
+	// GameInventory.AttachmentCount/GetAttachmentFromIndex (inventory.c:205,220), GetCargo (inventory.c:138),
+	// CargoBase.GetItemCount/GetItem (cargo.c:28,32), and the item in hands, which is no attachment of the player.
+	static void CollectTree(EntityAI root, array<EntityAI> outList)
+	{
+		array<EntityAI> queue = new array<EntityAI>;
+		queue.Insert(root);
+		PlayerBase p = PlayerBase.Cast(root);
+		if (p && p.GetHumanInventory().GetEntityInHands())
+			queue.Insert(p.GetHumanInventory().GetEntityInHands());
+		for (int q = 0; q < queue.Count() && queue.Count() <= DL_Const.MAX_ITEMS + 1; q++)
+		{
+			GameInventory inv = queue[q].GetInventory();
+			if (!inv)
+				continue;
+			for (int a = 0; a < inv.AttachmentCount(); a++)
+			{
+				EntityAI att = inv.GetAttachmentFromIndex(a);
+				if (att)
+					queue.Insert(att);
+			}
+			CargoBase cargo = inv.GetCargo();
+			if (!cargo)
+				continue;
+			for (int c = 0; c < cargo.GetItemCount(); c++)
+			{
+				EntityAI inCargo = cargo.GetItem(c);
+				if (inCargo)
+					queue.Insert(inCargo);
+			}
+		}
+		for (int i = 1; i < queue.Count(); i++)
+			outList.Insert(queue[i]);
+	}
+
+	// CollectTree order = every parent is in the list before its children, so the rebuild can go straight down the list.
 	protected void CaptureItems(PlayerBase p, DL_PlayerData d)
 	{
 		array<EntityAI> all = new array<EntityAI>;
-		p.GetInventory().EnumerateInventory(InventoryTraversalType.LEVELORDER, all);
+		CollectTree(p, all);
 		map<EntityAI, int> ids = new map<EntityAI, int>;
 		ids.Set(p, 0);
 		EntityAI inHands = p.GetHumanInventory().GetEntityInHands();
@@ -441,8 +477,12 @@ class DL_Snapshot
 		if (food && food.HasFoodStage() && d.foodStage >= 0 && food.GetFoodStageType() != d.foodStage)
 			food.ChangeFoodStage(d.foodStage);
 
+		// Decide by the item, NOT by "d.rounds != null": after the JSON round trip every array comes back as an empty
+		// array (test 2026-10-18: two Ammo_380 piles of 17/18 rounds arrived EMPTY, combining them then crashed
+		// vanilla Magazine.CombineItems with "Division by zero"). Real magazine = its rounds (an empty list = an empty
+		// mag), loose ammo pile = just the count.
 		Magazine mag = Magazine.Cast(e);
-		if (mag && d.rounds)
+		if (mag && !mag.IsAmmoPile() && d.rounds)
 		{
 			mag.ServerSetAmmoCount(0);
 			for (int r = 0; r < d.rounds.Count(); r++)
@@ -452,7 +492,7 @@ class DL_Snapshot
 			}
 			mag.SetSynchDirty();
 		}
-		else if (mag && d.quantity >= 0)
+		else if (mag && mag.IsAmmoPile() && d.quantity >= 0)
 			mag.ServerSetAmmoCount(d.quantity);
 
 		Weapon_Base w = Weapon_Base.Cast(e);
@@ -493,7 +533,7 @@ class DL_Snapshot
 	void FixWeapons(PlayerBase p)
 	{
 		array<EntityAI> all = new array<EntityAI>;
-		p.GetInventory().EnumerateInventory(InventoryTraversalType.LEVELORDER, all);
+		CollectTree(p, all);
 		for (int i = 0; i < all.Count(); i++)
 		{
 			Weapon_Base w = Weapon_Base.Cast(all[i]);
