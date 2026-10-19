@@ -12,6 +12,7 @@ class DL_ArriveReq
 	string serverId;
 	string key;
 	string steamId;
+	string name;              // shown on the hub's Players page
 }
 
 // Map editor: zones + arrival points live in the hub. /api/hello sends this server's config.json copy (the hub

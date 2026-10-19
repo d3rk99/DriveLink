@@ -19,7 +19,7 @@
   table { width:100%; border-collapse:collapse; }
   td, th { text-align:left; padding:7px 6px; border-bottom:1px solid var(--line); font-size:13px; }
   th { color:var(--dim); font-weight:normal; }
-  tr.click { cursor:pointer; } tr.click:hover { background:#262b31; }
+  tr.click { cursor:pointer; } tr.click:hover, tr.click.sel { background:#262b31; }
   .ok { color:var(--arr); } .warn { color:#ffcc4d; } .badtxt { color:var(--bad); }
   code, pre { font:12px/1.45 Consolas, monospace; background:#0f1215; border:1px solid var(--line); border-radius:6px; }
   code { padding:1px 5px; } pre { padding:8px 10px; white-space:pre-wrap; word-break:break-all; margin:6px 0; }
@@ -63,6 +63,7 @@
 <div id="top">
   <b>DriveLink Hub</b>
   <button class="nav tab-nav" data-view="servers">Servers<span id="pendBadge"></span></button>
+  <button class="nav tab-nav" data-view="players">Players</button>
   <button class="nav tab-nav" data-view="map">Map</button>
   <button class="nav tab-nav" data-view="setup">Setup</button>
 </div>
@@ -361,6 +362,7 @@ function setView(v) {
     if (!cur || !srv()) cur = S.servers[0].id;
     render(true);
   } else if (v === "servers") renderServers();
+  else if (v === "players") { $("pageBody").innerHTML = ""; renderPlayers(); }
   else renderSetup();
 }
 document.querySelectorAll(".nav").forEach(b => b.onclick = () => setView(b.dataset.view));
@@ -540,6 +542,96 @@ function renderFirewall(msg, bad) {
 async function loadFirewall() {
   try { const r = await fetch("/admin/api/firewall", { cache: "no-store" }); fw = await r.json(); renderFirewall(); }
   catch (e) { const el = $("fwBody"); if (el) el.textContent = "Could not check: " + e.message; }
+}
+
+// ---------- Players ----------
+let players = [], playerSel = null, playerQ = "";
+const srvName = id => { const s = S.servers.find(x => x.id === id); return s ? s.name : id; };
+const since = t => { if (!t) return ""; const d = (Date.now() - Date.parse(t.replace(" ", "T") + "Z")) / 1000; return d < 90 ? "just now" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : `${Math.round(d / 86400)} d ago`; };
+function whereText(p) {
+  if (p.pending) return `<span class="warn">travelling ${esc(srvName(p.pending.from))} → ${esc(srvName(p.pending.to))}</span>${p.pending.failCount ? ` <span class="badtxt">(failed ${p.pending.failCount}x)</span>` : ""}`;
+  if (p.owner) return `<span class="ok">${esc(srvName(p.owner))}</span>`;
+  return `<span class="hint">not assigned (next login anywhere)</span>`;
+}
+
+async function loadPlayers() {
+  const r = await fetch(`/admin/api/players?q=${encodeURIComponent(playerQ)}`, { cache: "no-store" });
+  players = (await r.json()).players || [];
+}
+
+async function renderPlayers() {
+  const b = $("pageBody");
+  if (!$("plQ")) {
+    b.innerHTML = `<h2 class="big">Players</h2>
+      <div class="box"><input id="plQ" placeholder="Search by name or steam id" value="${esc(playerQ)}"><div id="plList" style="margin-top:8px"></div></div>
+      <div id="plDetail"></div>`;
+    let t = null;
+    $("plQ").oninput = e => { clearTimeout(t); t = setTimeout(async () => { playerQ = e.target.value; await loadPlayers(); drawPlayerList(); }, 250); };
+  }
+  await loadPlayers();
+  drawPlayerList();
+  if (playerSel) showPlayer(playerSel);
+}
+
+function drawPlayerList() {
+  const el = $("plList");
+  if (!el) return;
+  if (!players.length) { el.innerHTML = `<div class="hint">${playerQ ? "Nobody matches." : "No players yet: the hub learns a player the first time he logs in on a DriveLink server."}</div>`; return; }
+  el.innerHTML = `<table><tr><th>Player</th><th>Character is on</th><th>Last login</th><th>Trips</th></tr>${players.map((p, i) => `
+    <tr class="click ${p.steamId === playerSel ? "sel" : ""}" data-pl="${i}"><td><b>${esc(p.name || "(name not sent yet)")}</b><div class="hint">${esc(p.steamId)}</div></td>
+    <td>${whereText(p)}</td><td>${p.lastLogin ? `${esc(srvName(p.lastServer))} <span class="hint">${since(p.lastLogin)}</span>` : `<span class="hint">-</span>`}</td><td>${p.trips}</td></tr>`).join("")}</table>`;
+  el.querySelectorAll("[data-pl]").forEach(x => x.onclick = () => { playerSel = players[+x.dataset.pl].steamId; drawPlayerList(); showPlayer(playerSel); });
+}
+
+async function showPlayer(sid) {
+  const box = $("plDetail");
+  const r = await fetch(`/admin/api/players/${encodeURIComponent(sid)}`, { cache: "no-store" });
+  if (!r.ok) { box.innerHTML = `<div class="box badtxt">${esc(await r.text())}</div>`; return; }
+  const p = await r.json();
+  const pend = p.trips.find(t => t.state === "pending");
+  const opts = S.servers.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
+  const sn = p.snapshot;
+  let h = `<div class="box"><h2>${esc(p.name || p.steamId)}</h2>
+    <div class="grid3">
+      <div><label>Steam id</label><div>${esc(p.steamId)} ${copyBtn(p.steamId)}</div></div>
+      <div><label>Character is on</label><div>${pend ? `<span class="warn">travelling ${esc(srvName(pend.from))} → ${esc(srvName(pend.to))}</span>` : p.owner ? `<span class="ok">${esc(srvName(p.owner))}</span>` : `<span class="hint">not assigned</span>`}</div></div>
+      <div><label>Last login</label><div>${p.lastLogin ? `${esc(srvName(p.lastServer))}, ${since(p.lastLogin)}` : "-"}</div></div>
+    </div>`;
+  if (pend && pend.failCount) h += `<div class="badtxt" style="margin-top:8px">The target failed to build him ${pend.failCount}x: ${esc(pend.lastError || "")}</div>`;
+  h += `<h2 style="margin-top:14px">Fix</h2>`;
+  if (pend) {
+    h += `<div class="hint">A trip is waiting: his gear is in it. Send it to another server (he arrives there at its first arrival point next time he joins), or throw it away.</div>
+      <div class="btns"><select id="plSrv" style="width:auto">${opts}</select><button class="primary" id="plSend">Send the trip there</button><button class="danger" id="plDrop">Drop the trip</button></div>`;
+  } else {
+    h += `<div class="hint">Assign = that server holds his character from now on: joining any other server sends him there. Use it when his character really is on that server (its own save). Release = the hub forgets: his next login anywhere is a normal one there.</div>
+      <div class="btns"><select id="plSrv" style="width:auto">${opts}</select><button class="primary" id="plAssign">Assign to this server</button><button id="plRelease">Release</button></div>`;
+  }
+  h += `<div class="status" id="plMsg"></div>`;
+  if (sn && !sn.error) {
+    h += `<h2 style="margin-top:14px">Snapshot <span class="hint" style="text-transform:none">(${esc(sn.from)})</span></h2>
+      <div class="grid3"><div><label>Character</label>${esc(sn.charType || "?")}</div><div><label>Health / blood</label>${Math.round(sn.health)} / ${Math.round(sn.blood)}</div><div><label>Water / food</label>${Math.round(sn.water)} / ${Math.round(sn.energy)}</div>
+      <div><label>Items</label>${sn.items}</div><div><label>Bleeding</label>${sn.bleeding}${sn.restrained ? ", cuffed" : ""}</div><div><label>Car</label>${sn.car ? `${esc(sn.car.type)} (${sn.car.parts} parts${sn.car.fuel != null ? ", fuel " + Math.round(sn.car.fuel * 100) + "%" : ""})` : sn.passengerOf ? "passenger" : "on foot"}</div></div>
+      <details style="margin-top:8px"><summary class="hint">Items (${sn.items})</summary><div style="columns:3;font-size:12px;margin-top:6px">${sn.itemTypes.map(t => `<div>${t.n > 1 ? t.n + "× " : ""}${esc(t.type)}</div>`).join("")}</div></details>`;
+  } else if (sn && sn.error) h += `<div class="badtxt">${esc(sn.error)}</div>`;
+  h += `<h2 style="margin-top:14px">Trips</h2>${p.trips.length ? `<table><tr><th>When</th><th>From → to</th><th>State</th><th>Size</th></tr>${p.trips.map(t => `<tr><td>${esc(t.at)} <span class="hint">UTC</span></td><td>${esc(srvName(t.from))} → ${esc(srvName(t.to))}${t.arrival ? ` <span class="hint">(${esc(t.arrival)})</span>` : ""}</td><td class="${t.state === "claimed" ? "ok" : t.state === "pending" ? "warn" : "hint"}">${t.state === "claimed" ? "arrived" : t.state === "pending" ? "waiting" : esc(t.state)}${t.failCount ? ` <span class="badtxt">failed ${t.failCount}x</span>` : ""}</td><td class="hint">${Math.round(t.bytes / 1024)} kB</td></tr>`).join("")}</table>` : `<div class="hint">none</div>`}`;
+  if (p.log.length) h += `<h2 style="margin-top:14px">Admin changes</h2>${p.log.map(l => `<div class="hint">${esc(l.at)} UTC - ${esc(l.detail)}</div>`).join("")}`;
+  h += `</div>`;
+  box.innerHTML = h;
+  wireCopy(box);
+  const act = async (action, sure) => {
+    const server = $("plSrv") ? $("plSrv").value : "";
+    if (!confirm(sure.replace("{srv}", srvName(server)))) return;
+    try {
+      const out = await post(`/admin/api/players/${encodeURIComponent(sid)}/action`, { action, server });
+      await loadPlayers(); drawPlayerList(); await showPlayer(sid);
+      const m = $("plMsg"); if (m) { m.textContent = "Done: " + out.detail; m.className = "status ok"; }
+    } catch (e) { const m = $("plMsg"); if (m) { m.textContent = e.message; m.className = "status badtxt"; } }
+  };
+  const on = (id, f) => { const e = $(id); if (e) e.onclick = f; };
+  on("plSend", () => act("send", "Send his waiting trip to {srv}? He arrives there (first arrival point) with the gear in the trip when he next joins."));
+  on("plDrop", () => act("drop", "Drop the waiting trip? The gear in it is LOST: the character on the server he left was already removed."));
+  on("plAssign", () => act("assign", "Assign him to {srv}? Joining any other server sends him there. If he is online somewhere else right now, he can't travel until he logs out."));
+  on("plRelease", () => act("release", "Release him? His next login on ANY server is a normal login (that server's own save of him, or a fresh spawn)."));
 }
 
 // keep Servers status fresh (join requests appear by themselves)

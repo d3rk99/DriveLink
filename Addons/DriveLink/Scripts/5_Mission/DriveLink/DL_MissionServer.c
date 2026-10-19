@@ -418,6 +418,7 @@ modded class MissionServer
 		q.serverId = m_DL_Cfg.serverId;
 		q.key = m_DL_Cfg.hubKey;
 		q.steamId = sid;
+		q.name = identity.GetName(); // for the hub's Players page
 		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/arrive?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.ArriveJson(q), new DL_ArriveWaiter(this, sid), "OnAnswer", "arrive " + sid);
 		// the client keeps loading while we wait; give the hub time before the character is made
 		if (preloadTimeout < 10)

@@ -93,6 +93,25 @@ expect "settings: short password refused" "$(apost /admin/api/settings '{"adminP
 code=$(curl -s -m 20 -o "$T/body" -w "%{http_code}" "$U/admin/api/firewall"); expect "firewall check" "$code" 200
 has "firewall: hub rule listed" '"DriveLink Hub"'
 
+# Players page
+P2=76561198000000042
+post /api/arrive "$(req chernarus ",\"steamId\":\"$P2\",\"name\":\"Tester\"")" >/dev/null
+post /api/arrive "$(req chernarus ",\"steamId\":\"$P2\",\"name\":\"Tester\"")" >/dev/null
+curl -s -m 5 "$U/admin/api/players?q=Tester" > "$T/body"; has "players: listed with name" '"name":"Tester"'
+has "players: last login server" '"lastServer":"chernarus"'
+expect "players: assign" "$(apost /admin/api/players/$P2/action '{"action":"assign","server":"livonia"}')" 200
+post /api/arrive "$(req chernarus ",\"steamId\":\"$P2\"")" >/dev/null; has "players: assigned = redirected" '"action":"redirect"'
+expect "players: release" "$(apost /admin/api/players/$P2/action '{"action":"release"}')" 200
+post /api/arrive "$(req chernarus ",\"steamId\":\"$P2\"")" >/dev/null; has "players: released = normal login" '"action":"normal"'
+expect "players: depart" "$(post /api/depart "$(req chernarus ",\"steamId\":\"$P2\",\"to\":\"livonia\",\"arrival\":\"x\",\"payload\":$PAY")")" 200
+expect "players: assign refused while a trip waits" "$(apost /admin/api/players/$P2/action '{"action":"assign","server":"chernarus"}')" 409
+expect "players: send trip elsewhere" "$(apost /admin/api/players/$P2/action '{"action":"send","server":"chernarus"}')" 200
+post /api/arrive "$(req chernarus ",\"steamId\":\"$P2\"")" >/dev/null; has "players: sent trip offered on chernarus" '"action":"transfer"'
+curl -s -m 5 "$U/admin/api/players/$P2" > "$T/body"; has "players: detail snapshot" '"charType":"SurvivorM_Boris"'
+has "players: detail admin log" '"action":"send"'
+expect "players: drop" "$(apost /admin/api/players/$P2/action '{"action":"drop"}')" 200
+expect "players: unknown steam id" "$(apost /admin/api/players/1/action '{"action":"release"}')" 404
+
 # HTTPS (self-signed, so -k)
 code=$(curl -s -k -m 5 -o "$T/body" -w "%{http_code}" --data-binary "$(req chernarus "")" https://127.0.0.1:17291/api/hello)
 expect "HTTPS hello (self-signed)" "$code" 200

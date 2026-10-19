@@ -1,6 +1,7 @@
 // The hub's web app: /admin (HTML page + Leaflet, embedded in the exe) and its JSON API.
 //   Map      - leaving zones + arrival points per server (layouts table); servers pick edits up within ~30 s
 //   Servers  - add / edit / remove DayZ servers, approve new ones that asked to join (saved to hub.json at once)
+//   Players  - who is where, trips, snapshot contents; move / release / drop (src/players.rs)
 //   Setup    - what a DayZ server needs in its config.json, hub settings, Windows Firewall rules
 // Password = hub.json adminPassword (browser login box, any user name); none needed on the hub's own machine.
 use crate::api::Shared;
@@ -37,6 +38,9 @@ pub fn routes(h: Shared) -> Router<Shared> {
         .route("/admin/api/settings", post(save_settings))
         .route("/admin/api/firewall", get(firewall_state))
         .route("/admin/api/firewall/apply", post(firewall_apply))
+        .route("/admin/api/players", get(crate::players::list))
+        .route("/admin/api/players/{sid}", get(crate::players::detail))
+        .route("/admin/api/players/{sid}/action", post(crate::players::action))
         .layer(axum::middleware::from_fn_with_state(h, auth))
 }
 

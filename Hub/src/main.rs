@@ -17,6 +17,7 @@ mod log;
 mod maps;
 mod net;
 mod numfix;
+mod players;
 #[cfg(windows)]
 mod service;
 mod tls;

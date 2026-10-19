@@ -390,6 +390,15 @@ struct SteamReq {
     steam_id: String,
     token: String,
     reason: String,
+    name: String, // /api/arrive: the player's name (newer mod builds), for the Players page
+}
+
+// every login: remember his name and where he logged in (only for a steam id the hub knows already)
+fn touch(tx: &rusqlite::Transaction, r: &SteamReq, here: &str) -> rusqlite::Result<usize> {
+    tx.execute(
+        "UPDATE characters SET name=COALESCE(NULLIF(?2,''),name), last_server=?3, last_login=CURRENT_TIMESTAMP WHERE steam_id=?1",
+        params![r.steam_id, r.name, here],
+    )
 }
 
 // POST /api/arrive  every server asks this when a player connects:
@@ -412,6 +421,9 @@ async fn arrive(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
         Ok(t) => t,
         Err(e) => return db_error(e),
     };
+    if let Err(e) = touch(&tx, &r, &here) {
+        return db_error(e);
+    }
     let pending: Option<(String, String, String, String, String)> = match tx
         .query_row(
             "SELECT token,from_server,to_server,arrival,payload_text FROM transfers WHERE steam_id=?1 AND state='pending' ORDER BY created_at DESC, rowid DESC LIMIT 1",
@@ -425,10 +437,12 @@ async fn arrive(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
     };
     if let Some((token, from, to, arrival, text)) = pending {
         if to != here {
+            let _ = tx.commit();
             crate::logf!("arrive {} on {here}: travelling to {to}, redirect", r.steam_id);
             return reply(StatusCode::OK, json!({"ok": true, "action": "redirect", "target": server_out(&h, &to)}));
         }
         // two-phase: stays pending until the target confirms it BUILT him; asking again returns the same trip
+        let _ = tx.commit();
         crate::logf!("arrive {} on {here} from {from} ({arrival}): transfer offered, waiting for confirm", r.steam_id);
         return reply(StatusCode::OK, json!({"ok": true, "action": "transfer", "token": token, "from": from, "arrival": arrival, "bytes": plain_numbers(&text).len()}));
     }
@@ -441,11 +455,12 @@ async fn arrive(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
     };
     if let Some(Some(o)) = &owner {
         if *o != here && h.cfg().server(o).is_some() {
+            let _ = tx.commit();
             crate::logf!("arrive {} on {here}: owned by {o}, redirect", r.steam_id);
             return reply(StatusCode::OK, json!({"ok": true, "action": "redirect", "target": server_out(&h, o)}));
         }
     }
-    if let Err(e) = set_owner(&tx, &r.steam_id, Some(&here)) {
+    if let Err(e) = set_owner(&tx, &r.steam_id, Some(&here)).and_then(|_| touch(&tx, &r, &here)) {
         return db_error(e);
     }
     if let Err(e) = tx.commit() {
