@@ -15,3 +15,14 @@ Zones/arrival points drawn in the hub's /admin editor (y = 0, the mod puts them 
 
 Notes: the hub's payload size can differ by a few bytes from the depart size (numfix rewrites numbers); all items still arrive.
 Keep arrival points well outside their own server's leaving zone (Chernarus arrival_1 is ~11 m from the "To Livonia" edge).
+
+## Two-machine test 2026-10-19 (Chernarus on Derk's PC, "Livonia FzB TEST" = livonia2 on a Linux server at 204.8.71.111)
+| Check | Result |
+|---|---|
+| Remote server joins with hubUrl + hubKey only, approved on the Servers page | PASS 11:58 -> 12:03 (asked from 204.8.71.111, approved as livonia2) |
+| Chernarus (LAN) -> livonia2 on foot | PASS 12:21, 12:33 (36 items) |
+| livonia2 -> Chernarus, first try | FAIL 12:22: client sent to Chernarus's PUBLIC IP, router can't loop back ("unreachable"); character safe, arrived after a manual LAN connect |
+| Fix d194a17: client remembers LAN servers it joined | PASS 12:33 "remembered 192.168.1.133", 12:34 "joined via 204.8.71.111 -> using 192.168.1.133:2302" |
+| livonia2 -> Chernarus with the fix | PASS 12:35: 36/36 items, health 100 |
+| DriveLink on a LINUX DayZ server | PASS (livonia2) |
+Not tested yet: a car across machines, players coming from the internet into Chernarus.
