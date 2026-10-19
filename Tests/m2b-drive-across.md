@@ -50,4 +50,5 @@ Not tested yet: refusals (passenger / second person in the car), hub stopped whi
 | Zone cooldown after a failure | PASS: one attempt in > 1 min in the zone; stepped out/in with the hub up -> trip went |
 | Failed arrival (target with 0 arrival points) | PASS: ARRIVAL FAILED + hub FAILED, transfer kept, player sent to the menu with the reason |
 | DriveLinkHub.exe transfers / return | PASS: listed "FAILED 1x: ...", return turned it around, rejoin -> first arrival point, 35/35 + car 29/29 |
+| Target server down when the trip starts (21:24) | PASS: connect failed, rejoin anywhere -> hub "travelling to livonia" redirect -> arrived 35/35 + car 29/29 once it was up |
 Not tested: alone in the passenger seat (refusal), the main-menu dialog text itself (log shows it was sent).
