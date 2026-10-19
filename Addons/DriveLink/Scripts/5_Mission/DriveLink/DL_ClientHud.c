@@ -9,6 +9,8 @@ modded class MissionGameplay
 {
 	protected Widget m_DL_WaitRoot;
 	protected TextWidget m_DL_WaitText;
+	protected MultilineTextWidget m_DL_StoryText;
+	protected string m_DL_Story;
 	protected bool m_DL_WaitWanted;
 	protected bool m_DL_WaitShown;
 	protected string m_DL_WaitMsg;
@@ -39,6 +41,11 @@ modded class MissionGameplay
 			bool engine;
 			if (!ctx.Read(phase) || !ctx.Read(msg) || !ctx.Read(engine))
 				return;
+			string story;
+			if (!ctx.Read(story)) // an older server sends no story
+				story = "";
+			if (phase == DL_Const.WAIT_SHOW)
+				m_DL_Story = story;
 			m_DL_WaitAge = 0;
 			if (phase == DL_Const.WAIT_SHOW)
 			{
@@ -121,9 +128,15 @@ modded class MissionGameplay
 			m_DL_WaitText = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, h / 2 - 20, w, 50, flags | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 255, 255, 255), 1, m_DL_WaitRoot));
 			if (m_DL_WaitText)
 				m_DL_WaitText.SetTextExactSize(34);
+			// the road's story (travel step 4), a few lines under the status
+			m_DL_StoryText = MultilineTextWidget.Cast(ws.CreateWidget(MultilineTextWidgetTypeID, w / 2 - 450, h / 2 + 50, 900, 260, flags | WidgetFlags.CENTER, ARGB(255, 230, 210, 170), 1, m_DL_WaitRoot));
+			if (m_DL_StoryText)
+				m_DL_StoryText.SetTextExactSize(24);
 		}
 		if (m_DL_WaitText)
 			m_DL_WaitText.SetText(msg);
+		if (m_DL_StoryText)
+			m_DL_StoryText.SetText(m_DL_Story);
 		if (!m_DL_WaitShown)
 		{
 			m_DL_WaitShown = true;

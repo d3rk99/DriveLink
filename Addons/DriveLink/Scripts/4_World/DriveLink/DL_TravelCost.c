@@ -169,6 +169,13 @@ class DL_TravelCost
 		return types;
 	}
 
+	static bool IsSpareSlot(string slot)
+	{
+		string sl = slot;
+		sl.ToLower();
+		return sl.Contains("spare");
+	}
+
 	static string WheelTypeText(CarScript car)
 	{
 		array<string> t = WheelTypes(car);
@@ -187,8 +194,9 @@ class DL_TravelCost
 		{
 			foreach (DL_ItemData c : cd.items)
 			{
-				// parent 0 + a slot that isn't cargo = mounted on the car (its wheels, doors, battery...)
-				if (c && !(c.parent == 0 && c.slot != DL_Const.SLOT_CARGO))
+				// parent 0 + a slot that isn't cargo = mounted on the car (its wheels, doors, battery...); a wheel in a
+				// spare slot (OffroadHatchback "...Spare...") IS a spare
+				if (c && (!(c.parent == 0 && c.slot != DL_Const.SLOT_CARGO) || IsSpareSlot(c.slot)))
 					all.Insert(c);
 			}
 		}
@@ -321,6 +329,14 @@ class DL_TravelCost
 	// Changes the snapshots; returns what was eaten for the log.
 	static string Eat(DL_PlayerData d, DL_CarData car, float needFood, float needWater)
 	{
+		float uf;
+		float uw;
+		return EatEx(d, car, needFood, needWater, uf, uw);
+	}
+
+	// Eat + what neither the supplies nor the bars could pay (unpaid > 0 only when the bars hit 0)
+	static string EatEx(DL_PlayerData d, DL_CarData car, float needFood, float needWater, out float unpaidFood, out float unpaidWater)
+	{
 		string eaten = "";
 		foreach (DL_StomachItem s : d.stomach)
 		{
@@ -363,6 +379,8 @@ class DL_TravelCost
 					it.quantity = 0;
 			}
 		}
+		unpaidFood = Math.Max(0, needFood - d.energy); // what nothing could pay (weakened mode: hunger/thirst)
+		unpaidWater = Math.Max(0, needWater - d.water);
 		d.energy = Math.Max(0, d.energy - needFood);
 		d.water = Math.Max(0, d.water - needWater);
 		if (eaten == "")

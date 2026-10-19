@@ -200,6 +200,10 @@ class DL_PlayerData
 	string carGroup;
 	// waiting room: how many players were in the car when it left (driver included). 0 = an old snapshot, no waiting.
 	int crewCount;
+	// travel step 4 (weakened mode): what happened on the road (shown on the arrival black screen), and whether he
+	// died there (the target then gives him a fresh character: the road kept his gear)
+	string journey;
+	bool diedOnRoad;
 }
 
 // A car (M2). Parts (wheels, doors, battery, plugs, radiator...) are attachments and the trunk is cargo, so they are

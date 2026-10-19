@@ -28,6 +28,7 @@ class DL_CrewTrip
 	int waiting;                               // passenger answers still to come
 	int total;                                 // players in the car, driver included
 	ref DL_TravelPrice price;                  // what the trip costs each of them (null = free)
+	ref DL_Journey journey;                    // weakened mode: the road, played once for all of them
 	ref array<string> refused = new array<string>;
 }
 
@@ -54,6 +55,7 @@ class DL_Room
 	float carYaw;
 	int since;                                      // g_Game.GetTime() when the first member came
 	bool going;                                     // car being built / crew being seated
+	string story;                                   // what happened on the road (weakened mode), shown on the black screen
 }
 
 modded class MissionServer
@@ -690,6 +692,8 @@ modded class MissionServer
 	protected PlayerBase DL_BuildArrival(PlayerIdentity identity, DL_ArriveResp r, PlayerBase oldChar = null)
 	{
 		DL_PlayerData d = r.payload;
+		if (d.diedOnRoad)
+			return DL_BuildDiedOnRoad(identity, r, oldChar);
 		DL_ArrivalPoint ap = m_DL_Cfg.FindArrival(r.arrival);
 		if (!ap && m_DL_Cfg.arrivals.Count() > 0)
 		{
@@ -799,6 +803,8 @@ modded class MissionServer
 		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + ap.name + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString() + carText);
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
 		string sid = identity.GetPlainId();
+		if (d.journey != "" && !car && d.carGroup == "")
+			DL_StoryScreen(sid, d.journey);
 		if (car)
 		{
 			// seated once his client is in (same juncture path as the seat spike, DL_PlayerSeat.c)
@@ -820,6 +826,51 @@ modded class MissionServer
 			NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 10, "DriveLink", "Your driver is still on the way. You get your seat when the car arrives.", "");
 		}
 		return player;
+	}
+
+	// ---------------- travel step 4: the road's story, death on the road ----------------
+
+	// He died on the way: the road kept his gear. A fresh character (vanilla starting gear) at the arrival point, the
+	// trip is claimed (he is here now), and the black screen tells what happened.
+	protected PlayerBase DL_BuildDiedOnRoad(PlayerIdentity identity, DL_ArriveResp r, PlayerBase oldChar)
+	{
+		DL_PlayerData d = r.payload;
+		string sid = identity.GetPlainId();
+		vector pos = "0 0 0";
+		DL_ArrivalPoint ap = m_DL_Cfg.FindArrival(r.arrival);
+		if (!ap && m_DL_Cfg.arrivals.Count() > 0)
+			ap = m_DL_Cfg.arrivals[0];
+		if (ap)
+			pos = ap.pos;
+		pos[1] = g_Game.SurfaceY(pos[0], pos[2]);
+		PlayerBase player = CreateCharacter(identity, pos, null, d.charType);
+		if (!player)
+		{
+			m_DL_BuildError = "could not create the character " + d.charType;
+			return null;
+		}
+		if (oldChar)
+		{
+			if (GetHive())
+				GetHive().CharacterKill(oldChar);
+			oldChar.Delete();
+		}
+		StartingEquipSetup(player, true);
+		m_DL_Leaving.Remove(sid);
+		DL_Confirm(sid, r.token);
+		Print(DL_Const.LOG_TAG + sid + " died on the road from " + r.from + ": fresh character at " + pos.ToString() + " (his gear is gone)");
+		DL_StoryScreen(sid, "You died on the road.\n" + d.journey);
+		return player;
+	}
+
+	// the black screen with the road's story for a few seconds (arrivals that don't go through a waiting room)
+	protected void DL_StoryScreen(string sid, string story)
+	{
+		if (story == "")
+			return;
+		for (int i = 0; i < 9; i++)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 2000 + 1000 * i, false, sid, DL_Const.WAIT_SHOW, "On the road", false, story);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 12000, false, sid, DL_Const.WAIT_DONE, "", false, "");
 	}
 
 	// ---------------- M3 waiting room ----------------
@@ -848,6 +899,8 @@ modded class MissionServer
 		}
 		if (d.crewCount > room.expected)
 			room.expected = d.crewCount;
+		if (d.journey != "")
+			room.story = d.journey;
 		vector fwd = Vector(room.carYaw, 0, 0).AnglesToVector();
 		vector right = Vector(room.carYaw + 90, 0, 0).AnglesToVector();
 		vector pos;
@@ -897,8 +950,12 @@ modded class MissionServer
 		if (!room.going && room.car && room.here.Count() >= room.expected)
 		{
 			room.going = true;
-			// 2 s: his client is still loading; the seat juncture needs the character to exist there
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomGo, 2000, false, group);
+			// 2 s: his client is still loading; the seat juncture needs the character to exist there. With a story
+			// from the road, 9 s: time to read it on the black screen.
+			int goDelay = 2000;
+			if (room.story != "")
+				goDelay = 9000;
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomGo, goDelay, false, group);
 		}
 		if (!m_DL_RoomTicking)
 		{
@@ -929,7 +986,7 @@ modded class MissionServer
 			if (room.going)
 				text = "Everyone is here. Getting in...";
 			foreach (string m : room.here)
-				DL_SendWait(m, DL_Const.WAIT_SHOW, text, false);
+				DL_SendWait(m, DL_Const.WAIT_SHOW, text, false, room.story);
 		}
 		foreach (string gs : startNow)
 		{
@@ -947,7 +1004,7 @@ modded class MissionServer
 		}
 	}
 
-	protected void DL_SendWait(string sid, int phase, string text, bool startEngine)
+	protected void DL_SendWait(string sid, int phase, string text, bool startEngine, string story)
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !pb.GetIdentity())
@@ -956,6 +1013,7 @@ modded class MissionServer
 		rpc.Write(phase);
 		rpc.Write(text);
 		rpc.Write(startEngine);
+		rpc.Write(story); // older clients stop reading after startEngine
 		rpc.Send(null, DL_Const.RPC_CREW_WAIT, true, pb.GetIdentity());
 	}
 
@@ -1024,8 +1082,8 @@ modded class MissionServer
 			if (car && car.CrewMemberIndex(pb) >= 0)
 				seated++;
 			bool engine = car != null && m == group && car.CrewDriver() == pb;
-			DL_SendWait(m, DL_Const.WAIT_DONE, "", engine);
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 1500, false, m, DL_Const.WAIT_DONE, "", engine); // in case the first is lost
+			DL_SendWait(m, DL_Const.WAIT_DONE, "", engine, "");
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 1500, false, m, DL_Const.WAIT_DONE, "", engine, ""); // in case the first is lost
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, pb);
 		}
 		if (serverStarts && car.CrewDriver())
@@ -1060,7 +1118,7 @@ modded class MissionServer
 			PlayerBase pb = DL_FindPlayer(m);
 			if (!pb)
 				continue;
-			DL_SendWait(m, DL_Const.WAIT_DONE, "", false);
+			DL_SendWait(m, DL_Const.WAIT_DONE, "", false, "");
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, pb);
 			NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 10, "DriveLink", "No car: " + why + ". You continue on foot.", "");
 		}
@@ -1381,6 +1439,17 @@ modded class MissionServer
 		}
 		m_DL_Leaving.Set(sid, true);
 		pb.SetAllowDamage(false);
+		// weakened mode: the road is played now, once for the whole crew (Research/travel-cost-design.md section 4)
+		DL_Journey journey;
+		if (price && !DL_RefusesShortTrips())
+		{
+			journey = DL_Journey.Run(m_DL_Cfg.travel, z, crew, car, m_DL_Snap, m_DL_CarSnap, true);
+			string jtext = journey.Story();
+			if (jtext == "")
+				jtext = "(an uneventful trip)";
+			jtext.Replace("\n", " | ");
+			Print(DL_Const.LOG_TAG + sid + "'s road to " + z.to + ": driven " + Math.Round(journey.drivenKm).ToString() + " km, walked " + Math.Round(journey.walkedKm).ToString() + " km, " + journey.Alive().ToString() + "/" + journey.crew.Count().ToString() + " alive, car lost " + journey.carLost.ToString() + ", " + journey.seconds.ToString() + " s: " + jtext);
+		}
 		if (car)
 		{
 			// stop it where it is while the hub answers: engine off, handbrake, no damage (Car.EngineStop/SetHandbrake,
@@ -1394,7 +1463,7 @@ modded class MissionServer
 			int alone = 0;
 			if (car)
 				alone = 1;
-			DL_SendDepart(pb, z, car, "", -1, alone, price);
+			DL_SendDepart(pb, z, car, "", -1, alone, price, journey);
 			return;
 		}
 		DL_CrewTrip trip = new DL_CrewTrip();
@@ -1403,6 +1472,7 @@ modded class MissionServer
 		trip.zone = z;
 		trip.total = crew.Count();
 		trip.price = price;
+		trip.journey = journey;
 		for (int i = 1; i < crew.Count(); i++)
 		{
 			PlayerBase m = crew[i];
@@ -1411,7 +1481,7 @@ modded class MissionServer
 			m.SetAllowDamage(false);
 			trip.waiting++;
 			m_DL_TripOf.Set(msid, trip);
-			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m), crew.Count(), price);
+			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m), crew.Count(), price, journey);
 		}
 		Print(DL_Const.LOG_TAG + sid + " drives " + car.GetType() + " to " + z.to + " with " + trip.waiting.ToString() + " passenger(s): their trips first, his own once all are taken");
 	}
@@ -1419,7 +1489,8 @@ modded class MissionServer
 	// One player's trip. car = the car he drives (it goes inside his trip), carGroup/seat = a passenger's tag.
 	// crewCount = players in the car (driver included) for the target's waiting room, 0 = on foot.
 	// price = the trip's cost (null = free): taken off the snapshot that travels, never off the live character/car
-	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat, int crewCount, DL_TravelPrice price)
+	// journey != null (weakened mode): his snapshot was made and charged by the road already, use it as it is
+	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat, int crewCount, DL_TravelPrice price, DL_Journey journey)
 	{
 		string sid = pb.GetIdentity().GetPlainId();
 		DL_DepartReq q = new DL_DepartReq();
@@ -1428,26 +1499,43 @@ modded class MissionServer
 		q.steamId = sid;
 		q.to = z.to;
 		q.arrival = z.arrival;
-		q.payload = m_DL_Snap.Capture(pb);
-		q.payload.crewCount = crewCount;
-		if (price)
-			q.travelSeconds = price.seconds;
+		DL_Traveller jt;
+		if (journey)
+			jt = journey.Find(sid);
+		if (jt)
+		{
+			q.payload = jt.d;
+			q.travelSeconds = journey.seconds;
+		}
+		else
+		{
+			q.payload = m_DL_Snap.Capture(pb);
+			q.payload.crewCount = crewCount;
+			if (price)
+				q.travelSeconds = price.seconds;
+		}
 		string carText = "on foot";
-		if (car)
+		if (car && jt)
+		{
+			// the road decided about the car (in his snapshot, a passenger's, or left behind); it still goes from here
+			m_DL_TravelCar.Set(sid, car);
+			carText = "driving " + car.GetType() + " (road: car lost " + journey.carLost.ToString() + ")";
+		}
+		else if (car)
 		{
 			q.payload.car = m_DL_CarSnap.Capture(car);
 			q.payload.carSeat = car.CrewMemberIndex(pb);
 			m_DL_TravelCar.Set(sid, car);
 			carText = "driving " + car.GetType() + " (" + q.payload.car.items.Count().ToString() + " parts/items, " + DL_CarSnapshot.FluidText(q.payload.car.fluids) + ")";
 		}
-		else if (carGroup != "")
+		else if (carGroup != "" && !jt)
 		{
 			q.payload.carGroup = carGroup;
 			q.payload.carSeat = seat;
 			carText = "passenger in seat " + seat.ToString() + " of " + carGroup + "'s car";
 		}
 		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " items, " + q.payload.bleeding.Count().ToString() + " bleeding, " + q.payload.modifiers.Count().ToString() + " modifiers, " + carText);
-		if (price)
+		if (price && !jt)
 		{
 			// the driver's snapshot holds the car: he eats from its trunk too, canisters top up the tank
 			string paid = DL_TravelCost.ChargePlayer(q.payload, price, q.payload.car);
@@ -1469,7 +1557,7 @@ modded class MissionServer
 		PlayerBase driver = DL_FindPlayer(trip.driverSid);
 		if (trip.refused.Count() == 0 && driver && trip.car && DL_CarOf(driver) == trip.car)
 		{
-			DL_SendDepart(driver, trip.zone, trip.car, "", -1, trip.total, trip.price);
+			DL_SendDepart(driver, trip.zone, trip.car, "", -1, trip.total, trip.price, trip.journey);
 			return;
 		}
 		string why = "a passenger could not travel";
