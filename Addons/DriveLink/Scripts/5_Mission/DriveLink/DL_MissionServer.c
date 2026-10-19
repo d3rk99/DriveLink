@@ -19,8 +19,29 @@ class DL_Pending
 	ref DL_ArriveResp resp;
 }
 
+// M3: a car leaving with passengers. Their trips go first; the driver's (with the car) when all are answered.
+class DL_CrewTrip
+{
+	string driverSid;
+	CarScript car;
+	ref DL_Zone zone;
+	int waiting;                               // passenger answers still to come
+	ref array<string> refused = new array<string>;
+}
+
+// M3, target side: a passenger who arrived before his driver's car exists here.
+class DL_SeatWait
+{
+	string group;                              // the driver's steam id
+	int seat;
+	int since;                                 // g_Game.GetTime() when he arrived
+}
+
 modded class MissionServer
 {
+	protected ref map<string, ref DL_CrewTrip> m_DL_TripOf = new map<string, ref DL_CrewTrip>; // passenger sid -> his car trip
+	protected ref map<string, CarScript> m_DL_GroupCar = new map<string, CarScript>;         // driver sid -> the car he brought here
+	protected ref map<string, ref DL_SeatWait> m_DL_SeatWait = new map<string, ref DL_SeatWait>; // passenger sid -> waiting for that car
 	protected ref DL_Config m_DL_Cfg;
 	protected ref map<string, ref DL_Pending> m_DL_Pending = new map<string, ref DL_Pending>;    // steamId -> hub answer
 	protected ref map<string, int> m_DL_InZoneSince = new map<string, int>;                     // steamId -> ms
@@ -556,6 +577,26 @@ modded class MissionServer
 				Print(DL_Const.LOG_TAG + "WARNING could not create the car " + d.car.type + " for " + identity.GetPlainId() + ", he arrives on foot");
 			}
 		}
+		// M3: a passenger. His driver's car is here already -> next to it (right side) and seated; else he waits on
+		// foot 6 m to the right of the arrival point (where the car will appear) and is brought in when it comes.
+		CarScript rideCar;
+		bool waitForCar;
+		if (!car && d.carGroup != "")
+		{
+			rideCar = m_DL_GroupCar.Get(d.carGroup);
+			if (rideCar)
+			{
+				vector rideOri = rideCar.GetOrientation();
+				pos = rideCar.GetPosition() + Vector(rideOri[0] + 90, 0, 0).AnglesToVector() * 3;
+				carText = ", passenger: " + d.carGroup + "'s " + rideCar.GetType() + " is here, seat " + d.carSeat.ToString();
+			}
+			else
+			{
+				waitForCar = true;
+				pos = ap.pos + Vector(ap.yaw + 90, 0, 0).AnglesToVector() * 6;
+				carText = ", passenger: waiting for " + d.carGroup + "'s car (seat " + d.carSeat.ToString() + ")";
+			}
+		}
 		pos[1] = g_Game.SurfaceY(pos[0], pos[2]);
 		// CreateCharacter (missionserver.c:486): CreatePlayer + SelectPlayer, same as a fresh spawn but his own body
 		PlayerBase player = CreateCharacter(identity, pos, null, d.charType);
@@ -588,13 +629,63 @@ modded class MissionServer
 		DL_Confirm(identity.GetPlainId(), r.token);
 		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + ap.name + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString() + carText);
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
+		string sid = identity.GetPlainId();
 		if (car)
 		{
 			// seated once his client is in (same juncture path as the seat spike, DL_PlayerSeat.c)
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatTraveller, 3000, false, identity.GetPlainId(), car, d.carSeat);
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatTraveller, 3000, false, sid, car, d.carSeat);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndCarProtection, (m_DL_Cfg.arrivalProtectSeconds + 3) * 1000, false, car);
+			// M3: his passengers find the car here; the ones already waiting are brought in after him
+			m_DL_GroupCar.Set(sid, car);
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_BringWaitingCrew, 5000, false, sid, car);
+		}
+		else if (rideCar)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatTraveller, 3000, false, sid, rideCar, d.carSeat);
+		else if (waitForCar)
+		{
+			DL_SeatWait w = new DL_SeatWait();
+			w.group = d.carGroup;
+			w.seat = d.carSeat;
+			w.since = g_Game.GetTime();
+			m_DL_SeatWait.Set(sid, w);
+			NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 10, "DriveLink", "Your driver is still on the way. You get your seat when the car arrives.", "");
 		}
 		return player;
+	}
+
+	// M3: the driver's car just arrived; seat the passengers who got here before it (one per second)
+	protected void DL_BringWaitingCrew(string driverSid, CarScript car)
+	{
+		if (!car)
+			return;
+		array<string> mine = new array<string>;
+		foreach (string psid, DL_SeatWait w : m_DL_SeatWait)
+		{
+			if (w && w.group == driverSid)
+				mine.Insert(psid);
+		}
+		int k = 0;
+		foreach (string p : mine)
+		{
+			DL_SeatWait sw = m_DL_SeatWait.Get(p);
+			m_DL_SeatWait.Remove(p);
+			if (g_Game.GetTime() - sw.since > 300000)
+				continue; // waited over 5 min: he has walked off by now
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_BringToCar, 1000 * k, false, p, car, sw.seat);
+			k++;
+		}
+		if (mine.Count() > 0)
+			Print(DL_Const.LOG_TAG + driverSid + "'s car is here, bringing in " + k.ToString() + " waiting passenger(s)");
+	}
+
+	protected void DL_BringToCar(string psid, CarScript car, int seat)
+	{
+		PlayerBase pb = DL_FindPlayer(psid);
+		if (!pb || !car || pb.GetCommand_Vehicle())
+			return;
+		vector ori = car.GetOrientation();
+		pb.SetPosition(car.GetPosition() + Vector(ori[0] + 90, 0, 0).AnglesToVector() * 3);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatTraveller, 1500, false, psid, car, seat);
 	}
 
 	protected void DL_SeatTraveller(string sid, CarScript car, int seat)
@@ -675,14 +766,20 @@ modded class MissionServer
 				if (had)
 				{
 					m_DL_InZoneSince.Remove(sid);
-					DL_Countdown(pb.GetIdentity(), 0, "");
+					DL_CrewCountdown(pb, 0, "");
 				}
 				continue;
 			}
 			// a failed trip doesn't retry by itself (test 2026-10-18: "Travel failed" every 5 s while standing in it)
 			if (m_DL_MustLeaveZone.Contains(sid))
 				continue;
-			// M2 (driver only): in a vehicle only the driver of a car with nobody else in it travels, car included
+			// M3: in a car the DRIVER's countdown sends the whole crew; a passenger with a player at the wheel waits
+			if (DL_IsCrewPassenger(pb))
+			{
+				if (had)
+					m_DL_InZoneSince.Remove(sid);
+				continue;
+			}
 			string carProblem = DL_CarProblem(pb);
 			if (carProblem != "")
 			{
@@ -695,7 +792,7 @@ modded class MissionServer
 			if (!had)
 			{
 				m_DL_InZoneSince.Set(sid, now);
-				DL_Countdown(pb.GetIdentity(), m_DL_Cfg.countdownSeconds, z.name);
+				DL_CrewCountdown(pb, m_DL_Cfg.countdownSeconds, z.name);
 				continue;
 			}
 			if (now - since >= m_DL_Cfg.countdownSeconds * 1000)
@@ -704,6 +801,59 @@ modded class MissionServer
 				DL_Depart(pb, z);
 			}
 		}
+		// a driver who left the zone (or got out) cancelled it for his passengers too
+		array<string> cancel = new array<string>;
+		foreach (string csid, int cs : m_DL_InZoneSince)
+		{
+			PlayerBase cpb = DL_FindPlayer(csid);
+			if (!cpb || !DL_ZoneAt(cpb.GetPosition()))
+				cancel.Insert(csid);
+		}
+		foreach (string gone : cancel)
+		{
+			m_DL_InZoneSince.Remove(gone);
+			PlayerBase gpb = DL_FindPlayer(gone);
+			if (gpb)
+				DL_CrewCountdown(gpb, 0, "");
+		}
+	}
+
+	// The countdown (or its cancel, seconds 0) goes to him and, at the wheel of a car, to everyone in it.
+	protected void DL_CrewCountdown(PlayerBase pb, int seconds, string zoneName)
+	{
+		array<PlayerBase> crew = DL_CrewOf(pb);
+		foreach (PlayerBase c : crew)
+		{
+			if (c && c.GetIdentity())
+				DL_Countdown(c.GetIdentity(), seconds, zoneName);
+		}
+	}
+
+	// pb plus, when he drives a car, every other player in it (seat order)
+	protected array<PlayerBase> DL_CrewOf(PlayerBase pb)
+	{
+		array<PlayerBase> crew = new array<PlayerBase>;
+		crew.Insert(pb);
+		CarScript car = DL_CarOf(pb);
+		if (!car || car.CrewDriver() != pb)
+			return crew;
+		for (int c = 0; c < car.CrewSize(); c++)
+		{
+			PlayerBase m = PlayerBase.Cast(car.CrewMember(c));
+			if (m && m != pb)
+				crew.Insert(m);
+		}
+		return crew;
+	}
+
+	// a passenger of a car with a player at the wheel: that driver's trip takes him
+	protected bool DL_IsCrewPassenger(PlayerBase pb)
+	{
+		CarScript car = DL_CarOf(pb);
+		if (!car || car.CrewDriver() == pb)
+			return false;
+		PlayerBase driver = PlayerBase.Cast(car.CrewDriver());
+		return driver && driver.GetIdentity() && driver.IsAlive();
 	}
 
 	// The car he drives, or null (on foot / not a car). HumanCommandVehicle.GetTransport (human.c:716 in 1.30).
@@ -715,7 +865,7 @@ modded class MissionServer
 		return CarScript.Cast(vc.GetTransport());
 	}
 
-	// "" = may travel (on foot, or alone at the wheel of a car), else the reason he can't (M2 = driver only).
+	// "" = may travel (on foot, or at the wheel of a car whose crew are all players who can travel), else the reason.
 	protected string DL_CarProblem(PlayerBase pb)
 	{
 		HumanCommandVehicle vc = pb.GetCommand_Vehicle();
@@ -725,12 +875,15 @@ modded class MissionServer
 		if (!car)
 			return "Only cars can travel for now. Get out to travel on foot.";
 		if (car.CrewDriver() != pb)
-			return "Only the driver can take a car to another server. Get out to travel on foot.";
+			return "Only a car with a player at the wheel can travel. Get out to travel on foot.";
 		for (int c = 0; c < car.CrewSize(); c++)
 		{
 			Human h = car.CrewMember(c);
-			if (h && h != pb)
-				return "Passengers can't travel yet: they have to get out first.";
+			if (!h || h == pb)
+				continue;
+			PlayerBase m = PlayerBase.Cast(h);
+			if (!m || !m.GetIdentity() || !m.IsAlive() || m_DL_Leaving.Contains(m.GetIdentity().GetPlainId()))
+				return "Everyone in the car must be a living player who can travel.";
 		}
 		return "";
 	}
@@ -757,11 +910,50 @@ modded class MissionServer
 		rpc.Send(null, DL_Const.RPC_COUNTDOWN, true, id);
 	}
 
+	// On foot or alone in a car: one trip. With passengers (M3): the passengers' trips go first, the driver's (with
+	// the car) only once the hub has taken ALL of them - a refused passenger cancels the driver's trip, so the car
+	// never leaves without its crew being accounted for. Passengers who were taken already arrive on foot then.
 	protected void DL_Depart(PlayerBase pb, DL_Zone z)
 	{
+		CarScript car = DL_CarOf(pb);
+		array<PlayerBase> crew = DL_CrewOf(pb);
 		string sid = pb.GetIdentity().GetPlainId();
 		m_DL_Leaving.Set(sid, true);
 		pb.SetAllowDamage(false);
+		if (car)
+		{
+			// stop it where it is while the hub answers: engine off, handbrake, no damage (Car.EngineStop/SetHandbrake,
+			// car.c:236/209 in 1.30). Anything that changes after the driver's snapshot doesn't travel.
+			car.EngineStop();
+			car.SetHandbrake(1);
+			car.SetAllowDamage(false);
+		}
+		if (!car || crew.Count() <= 1)
+		{
+			DL_SendDepart(pb, z, car, "", -1);
+			return;
+		}
+		DL_CrewTrip trip = new DL_CrewTrip();
+		trip.driverSid = sid;
+		trip.car = car;
+		trip.zone = z;
+		for (int i = 1; i < crew.Count(); i++)
+		{
+			PlayerBase m = crew[i];
+			string msid = m.GetIdentity().GetPlainId();
+			m_DL_Leaving.Set(msid, true);
+			m.SetAllowDamage(false);
+			trip.waiting++;
+			m_DL_TripOf.Set(msid, trip);
+			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m));
+		}
+		Print(DL_Const.LOG_TAG + sid + " drives " + car.GetType() + " to " + z.to + " with " + trip.waiting.ToString() + " passenger(s): their trips first, his own once all are taken");
+	}
+
+	// One player's trip. car = the car he drives (it goes inside his trip), carGroup/seat = a passenger's tag.
+	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat)
+	{
+		string sid = pb.GetIdentity().GetPlainId();
 		DL_DepartReq q = new DL_DepartReq();
 		q.serverId = m_DL_Cfg.serverId;
 		q.key = m_DL_Cfg.hubKey;
@@ -770,21 +962,50 @@ modded class MissionServer
 		q.arrival = z.arrival;
 		q.payload = m_DL_Snap.Capture(pb);
 		string carText = "on foot";
-		CarScript car = DL_CarOf(pb);
 		if (car)
 		{
-			// stop it where it is while the hub answers: engine off, handbrake, no damage (Car.EngineStop/SetHandbrake,
-			// car.c:236/209 in 1.30). The snapshot is taken now; anything that changes after this doesn't travel.
-			car.EngineStop();
-			car.SetHandbrake(1);
-			car.SetAllowDamage(false);
 			q.payload.car = m_DL_CarSnap.Capture(car);
 			q.payload.carSeat = car.CrewMemberIndex(pb);
 			m_DL_TravelCar.Set(sid, car);
 			carText = "driving " + car.GetType() + " (" + q.payload.car.items.Count().ToString() + " parts/items, " + DL_CarSnapshot.FluidText(q.payload.car.fluids) + ")";
 		}
+		else if (carGroup != "")
+		{
+			q.payload.carGroup = carGroup;
+			q.payload.carSeat = seat;
+			carText = "passenger in seat " + seat.ToString() + " of " + carGroup + "'s car";
+		}
 		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " items, " + q.payload.bleeding.Count().ToString() + " bleeding, " + q.payload.modifiers.Count().ToString() + " modifiers, " + carText);
 		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.DepartJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
+	}
+
+	// a passenger's answer is in: once all are in, send the driver (all taken) or call the trip off for him
+	protected void DL_CrewAnswered(DL_CrewTrip trip, string psid, bool taken)
+	{
+		trip.waiting--;
+		if (!taken)
+			trip.refused.Insert(psid);
+		if (trip.waiting > 0)
+			return;
+		PlayerBase driver = DL_FindPlayer(trip.driverSid);
+		if (trip.refused.Count() == 0 && driver && trip.car && DL_CarOf(driver) == trip.car)
+		{
+			DL_SendDepart(driver, trip.zone, trip.car, "", -1);
+			return;
+		}
+		string why = "a passenger could not travel";
+		if (!driver || DL_CarOf(driver) != trip.car)
+			why = "the driver is no longer at the wheel";
+		Print(DL_Const.LOG_TAG + trip.driverSid + "'s car trip called off: " + why + " (refused: " + trip.refused.Count().ToString() + ")");
+		m_DL_Leaving.Remove(trip.driverSid);
+		if (trip.car)
+			trip.car.SetAllowDamage(true);
+		if (driver)
+		{
+			driver.SetAllowDamage(true);
+			m_DL_MustLeaveZone.Set(trip.driverSid, true);
+			NotificationSystem.SendNotificationToPlayerIdentityExtended(driver.GetIdentity(), 8, "DriveLink", "Car trip called off: " + why + ". Step out of the zone and back in to try again.", "");
+		}
 	}
 
 	void DL_OnDepartAnswer(string sid, bool ok, string body)
@@ -797,6 +1018,12 @@ modded class MissionServer
 		JsonSerializer js = new JsonSerializer();
 		if (ok)
 			js.ReadFromString(r, body, err);
+		DL_CrewTrip trip = m_DL_TripOf.Get(sid);
+		if (trip)
+		{
+			m_DL_TripOf.Remove(sid);
+			DL_CrewAnswered(trip, sid, ok && r && r.ok && r.target);
+		}
 		if (!ok || !r || !r.ok || !r.target)
 		{
 			// Nothing was handed over: he stays here with everything he has, the car too.

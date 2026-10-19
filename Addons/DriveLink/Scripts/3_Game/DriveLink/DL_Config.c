@@ -163,6 +163,9 @@ class DL_PlayerData
 	// JSON as an EMPTY object, so "has a car" = car && car.type != "".
 	ref DL_CarData car;
 	int carSeat = -1;
+	// M3: a passenger travels WITHOUT the car: carGroup = the driver's steam id, carSeat = his seat. The target seats
+	// him in the car the driver brings (only the driver's trip holds the car, so it can only be built once).
+	string carGroup;
 }
 
 // A car (M2). Parts (wheels, doors, battery, plugs, radiator...) are attachments and the trunk is cargo, so they are
