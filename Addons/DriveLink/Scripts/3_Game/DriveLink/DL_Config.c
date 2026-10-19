@@ -11,6 +11,9 @@ class DL_Const
 	static const int RPC_REDIRECT = 4810001;   // server -> client: go to this server
 	static const int RPC_COUNTDOWN = 4810002;  // server -> client: leaving in N s (0 = cancelled)
 	static const int RPC_KICK = 4810003;       // server -> client: show this message (caption, text) and leave the server
+	static const int RPC_CREW_WAIT = 4810004;  // server -> client: crew waiting room (phase, here, expected, text, start engine)
+	static const int WAIT_SHOW = 1;            // black screen + "n/m connected"
+	static const int WAIT_DONE = 2;            // lift the black screen (and the driver starts the engine)
 	static const string SLOT_CARGO = "#cargo";
 	static const string SLOT_HANDS = "#hands";
 	static const int MAX_ITEMS = 600;
@@ -44,6 +47,9 @@ class DL_Config
 	int countdownSeconds = 5;
 	float checkEverySeconds = 1;
 	int arrivalProtectSeconds = 10;             // no damage right after arriving
+	// M3 waiting room: a car crew arriving here waits (black screen) until all of them are in, at most this long;
+	// then the car is built with whoever made it (no driver by then = the passengers go on on foot).
+	int crewWaitSeconds = 120;
 	// M2: a car that left is moved here (ground height) until its seats are empty and it can be deleted, so nobody
 	// can loot its trunk in the meantime (those items would exist twice). Pick a spot far from players. "0 0 0" = off.
 	vector parkingSpot;
@@ -166,6 +172,8 @@ class DL_PlayerData
 	// M3: a passenger travels WITHOUT the car: carGroup = the driver's steam id, carSeat = his seat. The target seats
 	// him in the car the driver brings (only the driver's trip holds the car, so it can only be built once).
 	string carGroup;
+	// waiting room: how many players were in the car when it left (driver included). 0 = an old snapshot, no waiting.
+	int crewCount;
 }
 
 // A car (M2). Parts (wheels, doors, battery, plugs, radiator...) are attachments and the trunk is cargo, so they are

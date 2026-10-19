@@ -153,7 +153,8 @@ class DL_Hub
 		s_Alive.Insert(cb); // keep it alive until the engine calls it
 		if (s_Alive.Count() > 64)
 			s_Alive.RemoveOrdered(0);
-		Print(DL_Const.LOG_TAG + "POST " + baseUrl + path.Substring(0, path.IndexOf("?")) + " (" + json.Length().ToString() + " bytes) for " + what);
+		if (what != "layout") // the 30 s layout poll would fill the log
+			Print(DL_Const.LOG_TAG + "POST " + baseUrl + path.Substring(0, path.IndexOf("?")) + " (" + json.Length().ToString() + " bytes) for " + what);
 		ctx.POST(cb, "", json);
 	}
 

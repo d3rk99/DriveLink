@@ -26,6 +26,7 @@ class DL_CrewTrip
 	CarScript car;
 	ref DL_Zone zone;
 	int waiting;                               // passenger answers still to come
+	int total;                                 // players in the car, driver included
 	ref array<string> refused = new array<string>;
 }
 
@@ -37,8 +38,27 @@ class DL_SeatWait
 	int since;                                 // g_Game.GetTime() when he arrived
 }
 
+// M3 waiting room, target side: one per car crew (key = the driver's steam id). Each member is built on foot beside
+// the spot where the car will stand, black screen, no damage. When all who were in the car are here (or after
+// crewWaitSeconds) the car is built, everyone is seated, the driver's engine starts and the screen clears.
+class DL_Room
+{
+	string group;                                   // the driver's steam id
+	int expected;                                   // players in the car when it left (driver included)
+	ref array<string> here = new array<string>;     // members built here so far
+	ref map<string, int> seats = new map<string, int>;
+	ref DL_CarData car;                             // from the driver's snapshot; null = driver not here yet
+	string driverToken;                             // his transfer is confirmed only once the car exists
+	vector carPos;
+	float carYaw;
+	int since;                                      // g_Game.GetTime() when the first member came
+	bool going;                                     // car being built / crew being seated
+}
+
 modded class MissionServer
 {
+	protected ref map<string, ref DL_Room> m_DL_Rooms = new map<string, ref DL_Room>;
+	protected bool m_DL_RoomTicking;
 	protected ref map<string, ref DL_CrewTrip> m_DL_TripOf = new map<string, ref DL_CrewTrip>; // passenger sid -> his car trip
 	protected ref map<string, CarScript> m_DL_GroupCar = new map<string, CarScript>;         // driver sid -> the car he brought here
 	protected ref map<string, ref DL_SeatWait> m_DL_SeatWait = new map<string, ref DL_SeatWait>; // passenger sid -> waiting for that car
@@ -612,6 +632,17 @@ modded class MissionServer
 			m_DL_BuildError = "this server has no arrival points in config.json";
 			return null;
 		}
+		// M3 waiting room: a car crew (driver with the car, or passenger) whose snapshot says how many were in it.
+		// A passenger whose driver's car is already standing here (came late) takes the old path below.
+		bool roomCar = d.car != null && d.car.type != "";
+		string roomGroup = "";
+		if (roomCar)
+			roomGroup = identity.GetPlainId();
+		else if (d.carGroup != "")
+			roomGroup = d.carGroup;
+		bool lateRider = !roomCar && !m_DL_Rooms.Contains(roomGroup) && m_DL_GroupCar.Get(roomGroup) != null;
+		if (roomGroup != "" && d.crewCount > 0 && !lateRider)
+			return DL_BuildIntoRoom(identity, r, ap, oldChar, roomGroup);
 		vector pos = ap.pos;
 		float yaw = ap.yaw;
 		// M2: his car first, at carPos or else at the arrival point (he then stands 3 m to its left = driver side)
@@ -718,6 +749,256 @@ modded class MissionServer
 			NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 10, "DriveLink", "Your driver is still on the way. You get your seat when the car arrives.", "");
 		}
 		return player;
+	}
+
+	// ---------------- M3 waiting room ----------------
+
+	protected PlayerBase DL_BuildIntoRoom(PlayerIdentity identity, DL_ArriveResp r, DL_ArrivalPoint ap, PlayerBase oldChar, string group)
+	{
+		DL_PlayerData d = r.payload;
+		string sid = identity.GetPlainId();
+		bool isDriver = d.car != null && d.car.type != "";
+		DL_Room room = m_DL_Rooms.Get(group);
+		bool newRoom = room == null;
+		if (newRoom)
+		{
+			room = new DL_Room();
+			room.group = group;
+			room.since = g_Game.GetTime();
+			// the car will stand on carPos (or the arrival point), the crew waits beside that spot
+			room.carPos = ap.carPos;
+			room.carYaw = ap.carYaw;
+			if (room.carPos[0] == 0 && room.carPos[2] == 0)
+			{
+				room.carPos = ap.pos;
+				room.carYaw = ap.yaw;
+			}
+			room.carPos[1] = g_Game.SurfaceY(room.carPos[0], room.carPos[2]);
+		}
+		if (d.crewCount > room.expected)
+			room.expected = d.crewCount;
+		vector fwd = Vector(room.carYaw, 0, 0).AnglesToVector();
+		vector right = Vector(room.carYaw + 90, 0, 0).AnglesToVector();
+		vector pos;
+		if (isDriver)
+			pos = room.carPos - right * 3;                                           // driver side
+		else
+			pos = room.carPos + right * 3 + fwd * (1.5 - 1.5 * room.here.Count());   // passengers in a row on the right
+		pos[1] = g_Game.SurfaceY(pos[0], pos[2]);
+		PlayerBase player = CreateCharacter(identity, pos, null, d.charType);
+		if (!player)
+		{
+			m_DL_BuildError = "could not create the character " + d.charType;
+			return null;
+		}
+		if (newRoom)
+			m_DL_Rooms.Set(group, room);
+		if (oldChar)
+		{
+			// only now that the new one exists (same as DL_BuildArrival)
+			if (GetHive())
+				GetHive().CharacterKill(oldChar);
+			oldChar.Delete();
+		}
+		player.SetOrientation(Vector(room.carYaw, 0, 0));
+		int dropped;
+		int made = m_DL_Snap.Apply(player, d, dropped);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(m_DL_Snap.FixWeapons, 500, false, player);
+		player.SetAllowDamage(false); // until the black screen lifts (+ arrivalProtectSeconds)
+		m_DL_Leaving.Remove(sid);
+		if (room.here.Find(sid) < 0)
+			room.here.Insert(sid);
+		room.seats.Set(sid, d.carSeat);
+		string carText;
+		if (isDriver)
+		{
+			room.car = d.car;
+			room.driverToken = r.token; // confirmed in DL_RoomGo: until then a crash replays the whole trip, car included
+			carText = ", driving " + d.car.type + " (" + d.car.items.Count().ToString() + " parts/items, built once the crew is in)";
+		}
+		else
+		{
+			DL_Confirm(sid, r.token);
+			carText = ", passenger in seat " + d.carSeat.ToString() + " of " + group + "'s car";
+		}
+		Print(DL_Const.LOG_TAG + sid + " arrived from " + r.from + " at " + ap.name + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString() + carText + ", waiting room " + room.here.Count().ToString() + "/" + room.expected.ToString());
+		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
+		if (!room.going && room.car && room.here.Count() >= room.expected)
+		{
+			room.going = true;
+			// 2 s: his client is still loading; the seat juncture needs the character to exist there
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomGo, 2000, false, group);
+		}
+		if (!m_DL_RoomTicking)
+		{
+			m_DL_RoomTicking = true;
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomTick, 1000, true);
+		}
+		return player;
+	}
+
+	// every second: tell each member how many are in (a client that is still loading misses some; the next one comes),
+	// and end rooms that waited too long
+	protected void DL_RoomTick()
+	{
+		int now = g_Game.GetTime();
+		array<string> release = new array<string>;
+		array<string> startNow = new array<string>;
+		foreach (string g, DL_Room room : m_DL_Rooms)
+		{
+			if (!room.going && now - room.since > m_DL_Cfg.crewWaitSeconds * 1000)
+			{
+				if (room.car)
+					startNow.Insert(g);
+				else
+					release.Insert(g);
+				continue;
+			}
+			string text = "Waiting for your crew: " + room.here.Count().ToString() + "/" + room.expected.ToString() + " connected";
+			if (room.going)
+				text = "Everyone is here. Getting in...";
+			foreach (string m : room.here)
+				DL_SendWait(m, DL_Const.WAIT_SHOW, text, false);
+		}
+		foreach (string gs : startNow)
+		{
+			DL_Room rs = m_DL_Rooms.Get(gs);
+			Print(DL_Const.LOG_TAG + "waiting room of " + gs + ": waited " + m_DL_Cfg.crewWaitSeconds.ToString() + " s, going with " + rs.here.Count().ToString() + "/" + rs.expected.ToString());
+			rs.going = true;
+			DL_RoomGo(gs);
+		}
+		foreach (string gr : release)
+			DL_RoomRelease(gr, "your driver did not arrive in time");
+		if (m_DL_Rooms.Count() == 0)
+		{
+			m_DL_RoomTicking = false;
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_RoomTick);
+		}
+	}
+
+	protected void DL_SendWait(string sid, int phase, string text, bool startEngine)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb || !pb.GetIdentity())
+			return;
+		ScriptRPC rpc = new ScriptRPC();
+		rpc.Write(phase);
+		rpc.Write(text);
+		rpc.Write(startEngine);
+		rpc.Send(null, DL_Const.RPC_CREW_WAIT, true, pb.GetIdentity());
+	}
+
+	// all in (or waited long enough): build the car, confirm the driver's trip, seat the driver then each passenger
+	protected void DL_RoomGo(string group)
+	{
+		DL_Room room = m_DL_Rooms.Get(group);
+		if (!room)
+			return;
+		room.going = true;
+		int made;
+		int dropped;
+		CarScript car = m_DL_CarSnap.Build(room.car, room.carPos, Vector(room.carYaw, 0, 0), made, dropped);
+		string carText;
+		if (car)
+		{
+			car.SetAllowDamage(false);
+			m_DL_GroupCar.Set(group, car);
+			// passengers who come after this get seated in it (old path) for a while, then the tag is forgotten
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ForgetGroupCar, m_DL_Cfg.crewWaitSeconds * 2000, false, group, car);
+			carText = car.GetType() + " built (" + made.ToString() + "/" + room.car.items.Count().ToString() + " parts/items, " + dropped.ToString() + " on the ground)";
+		}
+		else
+			carText = "could NOT create the car " + room.car.type + ", they arrive on foot";
+		if (room.driverToken != "")
+		{
+			DL_Confirm(group, room.driverToken);
+			room.driverToken = "";
+		}
+		Print(DL_Const.LOG_TAG + "waiting room of " + group + ": " + room.here.Count().ToString() + "/" + room.expected.ToString() + " here, " + carText);
+		int i = 0;
+		if (car)
+		{
+			array<string> order = new array<string>;
+			if (room.here.Find(group) >= 0)
+				order.Insert(group);
+			foreach (string m : room.here)
+			{
+				if (m != group)
+					order.Insert(m);
+			}
+			foreach (string o : order)
+			{
+				g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatTraveller, 1500 + 800 * i, false, o, car, room.seats.Get(o));
+				i++;
+			}
+		}
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomReveal, 1500 + 800 * i + 2500, false, group, car);
+	}
+
+	// everyone seated: lift the black screen; the driver's client starts the engine (PHYSICS cars are simulated on the
+	// driver's machine, so vanilla ActionStartEngine starts them there too, actionstartengine.c:51-65)
+	protected void DL_RoomReveal(string group, CarScript car)
+	{
+		DL_Room room = m_DL_Rooms.Get(group);
+		if (!room)
+			return;
+		m_DL_Rooms.Remove(group);
+		bool serverStarts = car != null && car.GetNetworkMoveStrategy() != NetworkMoveStrategy.PHYSICS;
+		int seated = 0;
+		foreach (string m : room.here)
+		{
+			PlayerBase pb = DL_FindPlayer(m);
+			if (!pb)
+				continue;
+			if (car && car.CrewMemberIndex(pb) >= 0)
+				seated++;
+			bool engine = car != null && m == group && car.CrewDriver() == pb;
+			DL_SendWait(m, DL_Const.WAIT_DONE, "", engine);
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 1500, false, m, DL_Const.WAIT_DONE, "", engine); // in case the first is lost
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, pb);
+		}
+		if (serverStarts && car.CrewDriver())
+			car.EngineStart();
+		string how = "driver's client";
+		if (serverStarts)
+			how = "server";
+		Print(DL_Const.LOG_TAG + "waiting room of " + group + ": " + seated.ToString() + "/" + room.here.Count().ToString() + " seated, black screen lifted, engine start by the " + how);
+		if (car)
+		{
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndCarProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, car);
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomEngineCheck, 4000, false, group, car);
+		}
+	}
+
+	protected void DL_RoomEngineCheck(string group, CarScript car)
+	{
+		if (car)
+			Print(DL_Const.LOG_TAG + "waiting room of " + group + ": engine of the " + car.GetType() + " running " + car.EngineIsOn().ToString() + ", " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car)));
+	}
+
+	// no car is coming: the passengers go on on foot
+	protected void DL_RoomRelease(string group, string why)
+	{
+		DL_Room room = m_DL_Rooms.Get(group);
+		if (!room)
+			return;
+		m_DL_Rooms.Remove(group);
+		Print(DL_Const.LOG_TAG + "waiting room of " + group + " closed: " + why + " (" + room.here.Count().ToString() + "/" + room.expected.ToString() + " here, on foot)");
+		foreach (string m : room.here)
+		{
+			PlayerBase pb = DL_FindPlayer(m);
+			if (!pb)
+				continue;
+			DL_SendWait(m, DL_Const.WAIT_DONE, "", false);
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, pb);
+			NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 10, "DriveLink", "No car: " + why + ". You continue on foot.", "");
+		}
+	}
+
+	protected void DL_ForgetGroupCar(string group, CarScript car)
+	{
+		if (m_DL_GroupCar.Get(group) == car)
+			m_DL_GroupCar.Remove(group);
 	}
 
 	// M3: the driver's car just arrived; seat the passengers who got here before it (one per second)
@@ -997,13 +1278,17 @@ modded class MissionServer
 		}
 		if (!car || crew.Count() <= 1)
 		{
-			DL_SendDepart(pb, z, car, "", -1);
+			int alone = 0;
+			if (car)
+				alone = 1;
+			DL_SendDepart(pb, z, car, "", -1, alone);
 			return;
 		}
 		DL_CrewTrip trip = new DL_CrewTrip();
 		trip.driverSid = sid;
 		trip.car = car;
 		trip.zone = z;
+		trip.total = crew.Count();
 		for (int i = 1; i < crew.Count(); i++)
 		{
 			PlayerBase m = crew[i];
@@ -1012,13 +1297,14 @@ modded class MissionServer
 			m.SetAllowDamage(false);
 			trip.waiting++;
 			m_DL_TripOf.Set(msid, trip);
-			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m));
+			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m), crew.Count());
 		}
 		Print(DL_Const.LOG_TAG + sid + " drives " + car.GetType() + " to " + z.to + " with " + trip.waiting.ToString() + " passenger(s): their trips first, his own once all are taken");
 	}
 
 	// One player's trip. car = the car he drives (it goes inside his trip), carGroup/seat = a passenger's tag.
-	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat)
+	// crewCount = players in the car (driver included) for the target's waiting room, 0 = on foot.
+	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat, int crewCount)
 	{
 		string sid = pb.GetIdentity().GetPlainId();
 		DL_DepartReq q = new DL_DepartReq();
@@ -1028,6 +1314,7 @@ modded class MissionServer
 		q.to = z.to;
 		q.arrival = z.arrival;
 		q.payload = m_DL_Snap.Capture(pb);
+		q.payload.crewCount = crewCount;
 		string carText = "on foot";
 		if (car)
 		{
@@ -1057,7 +1344,7 @@ modded class MissionServer
 		PlayerBase driver = DL_FindPlayer(trip.driverSid);
 		if (trip.refused.Count() == 0 && driver && trip.car && DL_CarOf(driver) == trip.car)
 		{
-			DL_SendDepart(driver, trip.zone, trip.car, "", -1);
+			DL_SendDepart(driver, trip.zone, trip.car, "", -1, trip.total);
 			return;
 		}
 		string why = "a passenger could not travel";

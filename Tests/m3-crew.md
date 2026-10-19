@@ -22,3 +22,9 @@ Needs TWO players (a second Steam account / second PC on the LAN). Car: the debu
 
 ## Report
 Pass/fail per step, every SCRIPT (E) line on both servers, what each player saw.
+
+## Waiting room solo run 2026-10-19 02:13 (120346-byte build)
+Chernarus -> Livonia, driver alone (party of 1). Server: built into the room 1/1 (36/36), car built after (29/29, fluids exact),
+hub confirm only after the car existed, seated, "1/1 seated, black screen lifted". Client log: black screen on 02:13:20.5
+("Everyone is here. Getting in..."), off 02:13:26.0, "engine started on this client, running true"; server 4 s later: running true.
+Not tested: the n/m counter with a real crew, the crewWaitSeconds timeout, passengers released when no driver comes.
