@@ -145,9 +145,14 @@ class DL_FilmCast
 		t.ToLower();
 		string look = "4x4";
 		string colour = "grey";
-		if (t.Contains("motorbike"))
+		if (t.Contains("motorbike_01"))
 		{
-			look = "bike";                     // Motorbike_01 / Motorbike_02
+			look = "moped";                    // Motorbike_01: the moped
+			colour = "red";
+		}
+		else if (t.Contains("motorbike"))
+		{
+			look = "bike";                     // Motorbike_02: the dirt bike
 			colour = "red";
 		}
 		else if (t.Contains("boat"))

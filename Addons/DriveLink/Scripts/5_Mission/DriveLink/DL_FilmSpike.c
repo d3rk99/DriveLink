@@ -73,6 +73,11 @@ class DL_Sprite
 		m_Clip.Show(on);
 	}
 
+	void SetAlpha(float a)
+	{
+		m_Sheet.SetAlpha(a);
+	}
+
 	// show only the top part of the cell (frac 0..1 of its height): a rider on a motorbike, legs behind the tank
 	void Cut(float frac)
 	{

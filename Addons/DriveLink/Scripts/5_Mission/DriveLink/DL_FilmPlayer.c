@@ -361,7 +361,9 @@ class DL_FilmCar
 	ref DL_Sprite sprite;
 	bool truck;               // the M3S: 2 seats (cab doors), 6 wheels
 	string kind = "car";      // "car" | "bike" (2 wheels on the middle line) | "boat" (on the water: nobody gets out)
-	ref DL_Sprite over;       // open vehicles: drawn over the riders (a bike's tank + bars + front wheel, a boat's rim)
+	ref DL_Sprite over;       // open vehicles: drawn over the riders (a bike's bars + front, a boat's motor)
+	ref DL_Sprite wake;       // a boat's wake, under it
+	string look;              // the sprite: "bike" (dirt bike) | "moped" | "boat" | ...
 	float drawX;              // where it is drawn this frame (with its bob), film px
 	float w;                  // shown size, film px (with its shadow)
 	float h;
@@ -721,15 +723,26 @@ class DL_FilmPlayer
 			SetCar(c, CarTex("sedan", colour, "red"), 64, 128, 50, 78, 0.95, 0.82);
 		else if (look == "humvee")        // M1025: wide and long
 			SetCar(c, CarTex("4x4", colour, "olive"), 64, 128, 47, 76, 1.3, 1.06);
-		else if (look == "bike")          // Motorbike_01 / _02 (placeholder art)
+		else if (look == "bike")          // Motorbike_02, the dirt bike (Tools/anim_bikes.py)
 		{
 			c.kind = "bike";
-			SetCar(c, CarTex("bike", colour, "red"), 32, 64, 26, 50, 1, 1);
-			SetOver(c, OverTex("bike", "front", colour, "red"), 32, 64, 26, 50);
+			c.look = "bike";
+			SetCar(c, CarTex("bike", colour, "red"), 32, 64, 29, 58, 1, 1);
+			SetOver(c, OverTex("bike", "front", colour, "red"), 32, 64, 29, 58);
+		}
+		else if (look == "moped")         // Motorbike_01, the moped
+		{
+			c.kind = "bike";
+			c.look = "moped";
+			SetCar(c, CarTex("moped", colour, "red"), 32, 64, 30, 58, 1, 1);
+			SetOver(c, OverTex("moped", "front", colour, "red"), 32, 64, 30, 58);
 		}
 		else if (look == "boat")          // Boat_01 (placeholder art)
 		{
 			c.kind = "boat";
+			c.look = "boat";
+			// its wake first (under it): 4 frames of 96 x 128 (Tools/anim_bikes.py wake_frames)
+			c.wake = new DL_Sprite(m_Root, DIR + "wake_ca.paa", 5, 96 * m_Px, 128 * m_Px, 512, 128);
 			SetCar(c, CarTex("boat", colour, "blue"), 64, 128, 48, 92, 1, 1);
 			SetOver(c, OverTex("boat", "rim", colour, "blue"), 64, 128, 48, 92);
 		}
@@ -746,7 +759,8 @@ class DL_FilmPlayer
 	static const string PAINTS_SEDAN = ",white,black,wine,yellow,grey,red,blue,";
 	static const string PAINTS_4X4 = ",green,blue,white,olive,beige,grey,";
 	static const string PAINTS_TRUCK = ",green,blue,orange,grey,";
-	static const string PAINTS_BIKE = ",red,blue,yellow,green,grey,";
+	static const string PAINTS_BIKE = ",red,green,blue,yellow,grey,";
+	static const string PAINTS_MOPED = ",red,yellow,blue,grey,";
 	static const string PAINTS_BOAT = ",blue,black,orange,camo,grey,";
 
 	// the texture of a car body in a paint it comes in (else its default paint)
@@ -762,6 +776,8 @@ class DL_FilmPlayer
 			have = PAINTS_TRUCK;
 		else if (base == "bike")
 			have = PAINTS_BIKE;
+		else if (base == "moped")
+			have = PAINTS_MOPED;
 		else if (base == "boat")
 			have = PAINTS_BOAT;
 		if (c == "" || !have.Contains("," + c + ","))
@@ -798,12 +814,22 @@ class DL_FilmPlayer
 		if (c.kind == "bike")
 		{
 			// driver on the seat, passenger behind him; head and body only (19 of 32 rows), legs behind the tank
-			float bottom = c.Top() + 20;
+			// (Tools/anim_bikes.py DIRT_SEATS / MOPED_SEATS, in the cropped sprite's pixels)
+			float bleft = c.drawX - c.w / 2;
+			float bx = 11;
+			float by = 26;
 			if (i > 0)
-				bottom = c.Top() + 11;
+				by = 17;
+			if (c.look == "moped")
+			{
+				bx = 10;
+				by = 22;
+				if (i > 0)
+					by = 13;
+			}
 			cut = 19.0 / 32.0;
-			sx = c.drawX - 3;
-			sy = bottom - 19 + 16;
+			sx = bleft + bx;
+			sy = c.Top() + by - 19 + 16;
 			row = 0;                               // idle, facing the way it goes
 			return;
 		}
@@ -2100,6 +2126,22 @@ class DL_FilmPlayer
 			c.sprite.MoveTo(m_Ox + (c.x - c.w / 2 + bob) * m_Px, m_Oy + (c.y - c.h / 2) * m_Px);
 			if (c.over)
 				c.over.MoveTo(m_Ox + (c.x - c.w / 2 + bob) * m_Px, m_Oy + (c.y - c.h / 2) * m_Px);
+			if (c.wake)
+			{
+				// the wake: its bow at the boat's bow (y 118 of 128), its centre on the hull's (x 48 of 96);
+				// faint while it stands, full at speed, none once it is left behind
+				int wf = Math.Floor(m_T * 8);
+				wf = wf % 4;
+				c.wake.Cell(wf * 96, 0, 96, 128);
+				float hull = c.x - c.w / 2 + bob + 21;
+				c.wake.MoveTo(m_Ox + (hull - 48) * m_Px, m_Oy + (c.Top() + 88 - 118) * m_Px);
+				float wa = 0.2 + 0.8 * Math.Clamp(m_Speed / DRIVE, 0, 1);
+				if (c.driveOff)
+					wa = 1;
+				if (c.inWorld)
+					wa = 0;
+				c.wake.SetAlpha(wa);
+			}
 		}
 		// riders of open vehicles: seen in their seats (seat order = the order they ride in)
 		array<int> seatN = new array<int>;
@@ -2330,7 +2372,8 @@ class DL_FilmPlayer
 	// infected fought off, infected kill, rationing, hunger), B = a solo driver whose car is lost to a flat,
 	// C = two in the M3S (cab doors, any of its 6 wheels), D = a convoy of three (a spare from another car, a shared
 	// jerry can, a car left behind: one climbs into a free seat, one walks beside the convoy), E = a group on foot,
-	// F = a car + a motorbike (the bike's spare rides in the car), G = two boats on open water (a full one: all 4 seats)
+	// F = a car, a dirt bike and a moped with 2 (the bike's spare rides in the car), G = two boats on open water (a
+	// full one: all 4 seats)
 	static DL_Film Demo()
 	{
 		s_DemoN++;
@@ -2343,11 +2386,14 @@ class DL_FilmPlayer
 			f.car = "";
 			f.cars.Insert("4x4@green");
 			f.cars.Insert("bike@red");
+			f.cars.Insert("moped@blue");
 			f.km = 60;
 			f.biomeTo = "field";
 			f.crew.Insert(DemoActor("Derk", "def1", "gorkapants,gorkajacket,vest,mountainbackpack", "ak74rifle", "", 0));
 			f.crew.Insert(DemoActor("Britney", "kate", "sportpants@black,hoodiegray@pink,schoolbackpack@yellow", "", "", 0));
 			f.crew.Insert(DemoActor("OrionKaelin", "biker", "jeans@black,downjacket@red,helmetmoto@red", "", "sksrifle", 1));
+			f.crew.Insert(DemoActor("Mika", "def2", "workpants@brown,tshirt@orange,baseballcap@red", "", "", 2));
+			f.crew.Insert(DemoActor("Jonas", "redneck", "jeans@blue,hoodiegray@green,cowboyhat", "", "mosinnagant", 2));
 			f.Add("drive", 20);
 			f.Add("flat", 20, "OrionKaelin", "spare", 1, 0);  // the bike's spare wheel rides in the Ada
 			f.Add("drive", 20);

@@ -6,7 +6,8 @@
 # Every texture is a power-of-two PNG named *_ca.png, converted to .paa with DayZ Tools ImageToPAA (DXT5 + alpha).
 # Usage: python Tools/build-anim-assets.py
 import os, shutil, subprocess, sys, random
-import anim_boat  # Tools/anim_boat.py: the inflatable Boat_01
+import anim_boat   # Tools/anim_boat.py: the inflatable Boat_01
+import anim_bikes  # Tools/anim_bikes.py: the dirt bike (Motorbike_02), the moped (Motorbike_01), the boat wake
 from PIL import Image, ImageDraw
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -448,7 +449,8 @@ CAR_PAINTS = {
     '4x4': {'green': (90, 120, 72), 'blue': (60, 90, 152), 'white': (226, 226, 220), 'olive': (102, 110, 70),
             'beige': (188, 168, 124), 'grey': (138, 138, 138)},
     'truck': {'green': (92, 108, 70), 'blue': (68, 96, 162), 'orange': (206, 110, 42), 'grey': (138, 138, 138)},
-    'bike': {'red': (176, 44, 40), 'blue': (60, 92, 160), 'yellow': (224, 184, 50), 'green': (84, 128, 70), 'grey': (138, 138, 138)},
+    'bike': {'red': (0, 0, 0), 'green': (0, 0, 0), 'blue': (0, 0, 0), 'yellow': (0, 0, 0), 'grey': (0, 0, 0)},      # anim_bikes.DIRT
+    'moped': {'red': (0, 0, 0), 'yellow': (0, 0, 0), 'blue': (0, 0, 0), 'grey': (0, 0, 0)},                         # anim_bikes.MOPED
     'boat': {'blue': (52, 86, 150), 'black': (52, 52, 58), 'orange': (210, 112, 40), 'camo': (96, 104, 70), 'grey': (138, 138, 138)},
 }
 
@@ -516,18 +518,24 @@ def car_sprites(tmp):
     volga = clean_paint(volga, (4, 4, 56, 66))
     uaz = Image.open(os.path.join(PACK, MINIDAYZ['uaz_ca'])).convert('RGBA').crop((176, 80, 244, 154))
     drawn = {'truck': top_truck, 'bike': top_bike}
-    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None), ('bike', None), ('boat', None)):
+    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None), ('bike', None), ('moped', None), ('boat', None)):
         for name, rgb in CAR_PAINTS[base].items():
-            if base == 'boat':
-                # the inflatable is drawn per variant (its own colours), its motor is the layer over the crew
-                body, motor = anim_boat.draw(name)
+            if base in ('boat', 'bike', 'moped'):
+                # drawn per variant with its own colours; the second picture is drawn over the crew (the boat's motor,
+                # a bike's bars + front)
+                if base == 'boat':
+                    body, motor = anim_boat.draw(name)
+                elif base == 'bike':
+                    body, motor = anim_bikes.draw_dirt(name)
+                else:
+                    body, motor = anim_bikes.draw_moped(name)
                 car = reshadow(body)
                 over = Image.new('RGBA', car.size, (0, 0, 0, 0))
                 over.alpha_composite(motor.crop(body.getbbox()), (0, 0))
                 dst = os.path.join(tmp, 'car_%s_%s_ca.png' % (base, name))
                 pow2(car).save(dst)
                 made.append(dst)
-                odst = os.path.join(tmp, 'car_boatrim_%s_ca.png' % name)
+                odst = os.path.join(tmp, 'car_%s%s_%s_ca.png' % (base, 'rim' if base == 'boat' else 'front', name))
                 pow2(over).save(odst)
                 made.append(odst)
                 if name == next(iter(CAR_PAINTS[base])):
@@ -577,6 +585,9 @@ def main():
         pow2(im).save(dst)  # palette PNGs make ImageToPAA fail; pad to 2^n
         pngs.append(dst)
     pngs += car_sprites(tmp)
+    wake = os.path.join(tmp, 'wake_ca.png')
+    pow2(anim_bikes.wake_frames()).save(wake)   # 4 frames of 96 x 128 (512 x 128 sheet)
+    pngs.append(wake)
     for p in pngs:
         paa = os.path.join(OUT, os.path.basename(p)[:-4] + '.paa')
         r = subprocess.run([IMAGE_TO_PAA, p, paa], capture_output=True, text=True)
