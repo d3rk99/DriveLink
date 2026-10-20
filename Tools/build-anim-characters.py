@@ -78,14 +78,22 @@ def grey(img):
     if not lum:
         return img.copy()
     lum.sort()
-    k = 225.0 / max(lum[int(len(lum) * 0.75)], 1)
+    ref = max(lum[int(len(lum) * 0.6)], 1)        # the cloth's middle tone
+    top = max(lum[-1], ref + 1)
     out = img.copy()
     op = out.load()
     for y in range(img.height):
         for x in range(img.width):
             r, g, b, a = px[x, y]
             if a > 0:
-                v = min(255, int((0.3 * r + 0.59 * g + 0.11 * b) * k))
+                l = 0.3 * r + 0.59 * g + 0.11 * b
+                # middle tone -> 200 (the tint shows nearly as picked); darker scales down (folds, seams stay), lighter
+                # is squeezed into 200..255 instead of clipping to white (highlights stay)
+                if l <= ref:
+                    v = l / ref * 200
+                else:
+                    v = 200 + (l - ref) / (top - ref) * 55
+                v = int(min(255, v))
                 op[x, y] = (v, v, v, a)
     return out
 

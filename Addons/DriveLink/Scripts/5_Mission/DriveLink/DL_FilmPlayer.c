@@ -328,7 +328,6 @@ class DL_FilmPlayer
 	protected ref DL_Strip m_GroundA;
 	protected ref DL_Strip m_GroundB;
 	protected ref DL_Sprite m_Car;
-	protected ref DL_Sprite m_CarGlass;   // untinted windows over the tinted body
 	protected float m_CarW;       // shown size, film px (with its shadow)
 	protected float m_CarH;
 	protected bool m_DriveOff;    // the end: the car drives out of the bottom
@@ -424,7 +423,6 @@ class DL_FilmPlayer
 		m_Zed = null;
 		m_Actor = null;
 		m_Car = null;
-		m_CarGlass = null;
 		m_Tool = null;
 		m_Puff = null;
 		m_Fuel = null;
@@ -493,7 +491,6 @@ class DL_FilmPlayer
 		m_CarY = m_ViewH * 0.36;
 		m_CarInWorld = false;
 		m_Car = null;
-		m_CarGlass = null;
 		m_DriveOff = false;
 		m_Leaving = false;
 		m_CarV = 0;
@@ -521,8 +518,8 @@ class DL_FilmPlayer
 		return true;
 	}
 
-	// the car the crew drives: DL_FilmCast.CarSprite "look@colour" -> a grey body sheet tinted with the colour and the
-	// glass sheet over it (Tools/build-anim-assets.py car_sprites); "uaz" / "volga" = the old MiniDayZ sprites as they are
+	// the car the crew drives: DL_FilmCast.CarSprite "look@colour" -> that body pre-painted in that colour
+	// (Tools/build-anim-assets.py car_sprites); "uaz" / "volga" = the old MiniDayZ sprites as they are
 	protected void BuildCar()
 	{
 		string look = m_Film.car;
@@ -537,58 +534,64 @@ class DL_FilmPlayer
 		}
 		if (look == "volga")
 		{
-			SetCar(DIR + "volga_ca.paa", "", 256, 256, 178, 142, 62, 80, 1, 1, "");
+			SetOldCar(DIR + "volga_ca.paa", 178, 142, 62, 80);
 			return;
 		}
 		if (look == "uaz")
 		{
-			SetCar(DIR + "uaz_ca.paa", "", 256, 256, 176, 80, 68, 74, 1, 1, "");
+			SetOldCar(DIR + "uaz_ca.paa", 176, 80, 68, 74);
 			return;
 		}
+		// pre-painted in every paint the car comes in (Tools/build-anim-assets.py CAR_PAINTS); sizes with the shadow
 		if (look == "sedan")              // Olga 24 (Volga GAZ-24)
-			SetCar(DIR + "car_sedanw_ca.paa", DIR + "car_sedang_ca.paa", 64, 128, 0, 0, 62, 80, 1, 1, colour);
+			SetCar(CarTex("sedan", colour, "white"), 64, 128, 50, 78, 1, 1);
 		else if (look == "sarka")         // Sarka 120 (Skoda 120): a bit smaller
-			SetCar(DIR + "car_sedanw_ca.paa", DIR + "car_sedang_ca.paa", 64, 128, 0, 0, 62, 80, 0.94, 0.92, colour);
+			SetCar(CarTex("sedan", colour, "yellow"), 64, 128, 50, 78, 0.95, 0.92);
 		else if (look == "gunter")        // Gunter 2 (Golf): a short hatchback
-			SetCar(DIR + "car_sedanw_ca.paa", DIR + "car_sedang_ca.paa", 64, 128, 0, 0, 62, 80, 0.94, 0.82, colour);
+			SetCar(CarTex("sedan", colour, "red"), 64, 128, 50, 78, 0.95, 0.82);
 		else if (look == "humvee")        // M1025: wide and long
-			SetCar(DIR + "car_4x4w_ca.paa", DIR + "car_4x4g_ca.paa", 128, 128, 0, 0, 68, 74, 1.22, 1.08, colour);
+			SetCar(CarTex("4x4", colour, "olive"), 64, 128, 47, 76, 1.3, 1.06);
 		else if (look == "truck")         // M3S
-			SetCar(DIR + "car_truckw_ca.paa", DIR + "car_truckg_ca.paa", 128, 256, 0, 0, 72, 136, 1, 1, colour);
+			SetCar(CarTex("truck", colour, "green"), 128, 256, 74, 140, 1, 1);
 		else                              // Ada 4x4 (Niva) and anything else
-			SetCar(DIR + "car_4x4w_ca.paa", DIR + "car_4x4g_ca.paa", 128, 128, 0, 0, 68, 74, 0.92, 0.92, colour);
+			SetCar(CarTex("4x4", colour, "green"), 64, 128, 47, 76, 1, 0.95);
 	}
 
-	protected void SetCar(string tex, string glass, float texW, float texH, float cx, float cy, float cw, float ch, float sx, float sy, string colour)
+	static const string PAINTS_SEDAN = ",white,black,wine,yellow,grey,red,blue,";
+	static const string PAINTS_4X4 = ",green,blue,white,olive,beige,grey,";
+	static const string PAINTS_TRUCK = ",green,blue,orange,grey,";
+
+	// the texture of a car body in a paint it comes in (else its default paint)
+	protected static string CarTex(string base, string colour, string fallback)
+	{
+		string c = colour;
+		if (c == "gray")
+			c = "grey";
+		string have = PAINTS_4X4;
+		if (base == "sedan")
+			have = PAINTS_SEDAN;
+		else if (base == "truck")
+			have = PAINTS_TRUCK;
+		if (c == "" || !have.Contains("," + c + ","))
+			c = fallback;
+		return DIR + "car_" + base + "_" + c + "_ca.paa";
+	}
+
+	protected void SetCar(string tex, float texW, float texH, float cw, float ch, float sx, float sy)
 	{
 		m_CarW = cw * sx;
 		m_CarH = ch * sy;
 		m_Car = new DL_Sprite(m_Root, tex, 6, m_CarW * m_Px, m_CarH * m_Px, texW, texH);
-		m_Car.Cell(cx, cy, cw, ch);
-		if (colour != "")
-			m_Car.SetColor(CarTint(colour));
-		if (glass != "")
-		{
-			m_CarGlass = new DL_Sprite(m_Root, glass, 6, m_CarW * m_Px, m_CarH * m_Px, texW, texH);
-			m_CarGlass.Cell(cx, cy, cw, ch);
-		}
+		m_Car.Cell(0, 0, cw, ch);
 	}
 
-	// DayZ car colours (class name suffixes) as paint over the grey body
-	static int CarTint(string c)
+	// the old MiniDayZ sprites as they are (films from an older server)
+	protected void SetOldCar(string tex, float cx, float cy, float cw, float ch)
 	{
-		if (c == "green") return ARGB(255, 92, 124, 74);
-		if (c == "olive") return ARGB(255, 104, 114, 72);
-		if (c == "blue") return ARGB(255, 62, 92, 156);
-		if (c == "white") return ARGB(255, 236, 236, 230);
-		if (c == "black") return ARGB(255, 58, 58, 64);
-		if (c == "wine") return ARGB(255, 124, 32, 46);
-		if (c == "yellow") return ARGB(255, 226, 186, 52);
-		if (c == "grey" || c == "gray") return ARGB(255, 142, 142, 142);
-		if (c == "red") return ARGB(255, 178, 46, 40);
-		if (c == "orange") return ARGB(255, 212, 112, 42);
-		if (c == "beige") return ARGB(255, 192, 172, 128);
-		return DL_FilmPerson.Tint(c);
+		m_CarW = cw;
+		m_CarH = ch;
+		m_Car = new DL_Sprite(m_Root, tex, 6, m_CarW * m_Px, m_CarH * m_Px, 256, 256);
+		m_Car.Cell(cx, cy, cw, ch);
 	}
 
 	// ---------------- helpers ----------------
@@ -1393,8 +1396,6 @@ class DL_FilmPlayer
 			float carSx = m_Ox + (m_CarX - m_CarW / 2 + bob) * m_Px;
 			float carSy = m_Oy + (m_CarY - m_CarH / 2) * m_Px;
 			m_Car.MoveTo(carSx, carSy);
-			if (m_CarGlass)
-				m_CarGlass.MoveTo(carSx, carSy);
 		}
 		foreach (DL_FilmPerson p : m_Crew)
 		{

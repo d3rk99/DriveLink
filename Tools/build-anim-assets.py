@@ -237,8 +237,6 @@ def top_truck(uaz):
     im = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     rnd = random.Random(7)
-    # shadow to the right, like the MiniDayZ cars
-    d.rectangle((8, 4, W - 1, H - 2), fill=(0, 0, 0, 70))
     # the bed: canvas over hoops
     bx0, by0, bx1, by1 = 2, 0, W - 8, 92
     d.rectangle((bx0, by0, bx1, by1), fill=(30, 32, 26, 255))
@@ -283,22 +281,85 @@ def glass(im):
     return out
 
 
+# the paints each car comes in (DayZ class-name colours + the default), RGB of the paint's middle tone
+CAR_PAINTS = {
+    'sedan': {'white': (226, 224, 214), 'black': (52, 52, 58), 'wine': (118, 30, 44), 'yellow': (222, 180, 48),
+              'grey': (138, 138, 138), 'red': (172, 44, 38), 'blue': (58, 88, 156)},
+    '4x4': {'green': (90, 120, 72), 'blue': (60, 90, 152), 'white': (226, 226, 220), 'olive': (102, 110, 70),
+            'beige': (188, 168, 124), 'grey': (138, 138, 138)},
+    'truck': {'green': (96, 110, 72), 'blue': (62, 86, 140), 'orange': (206, 110, 42), 'grey': (138, 138, 138)},
+}
+
+
+def is_paint(c, base):
+    """the body paint of the source sprite (not glass, tyres, chrome, rust or outline)"""
+    r, g, b, a = c
+    if a < 250:
+        return False
+    lum = 0.3 * r + 0.59 * g + 0.11 * b
+    mx, mn = max(r, g, b), min(r, g, b)
+    sat = (mx - mn) / mx if mx else 0
+    if base == 'sedan':                 # the Volga is blue
+        return b > r + 25 and b > g and sat > 0.25 and lum > 35
+    # the UAZ (and the truck's cab) are beige; the truck canvas is greyish green
+    return lum > 70 and sat > 0.12 and r >= b and g >= b
+
+
+def paint(im, base, rgb):
+    """repaints the body pixels: the target colour plus each pixel's difference from the paint's middle tone (so dents,
+    panel lines, highlights stay), everything else (glass, trim, tyres, rust) untouched"""
+    px = im.load()
+    paint_l = sorted(0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2] for c in (px[x, y] for y in range(im.height)
+                     for x in range(im.width)) if is_paint(c, base))
+    ref = paint_l[len(paint_l) // 2] if paint_l else 128
+    out = im.copy()
+    op = out.load()
+    for y in range(im.height):
+        for x in range(im.width):
+            c = px[x, y]
+            if is_paint(c, base):
+                d = (0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]) - ref
+                op[x, y] = tuple(max(0, min(255, int(t + d * 0.85))) for t in rgb) + (255,)
+    return out
+
+
+def reshadow(im, dx=6, dy=4, alpha=90):
+    """drops the source's own shadow (uneven, with fringes on the left) and casts one even shadow from the body,
+    down-right, the same for every car; the sheet grows by (dx, dy)"""
+    body = Image.new('RGBA', im.size, (0, 0, 0, 0))
+    bp, ip = body.load(), im.load()
+    for y in range(im.height):
+        for x in range(im.width):
+            c = ip[x, y]
+            if c[3] >= 250 and not (c[0] < 8 and c[1] < 8 and c[2] < 8):
+                bp[x, y] = c
+    box = body.getbbox()
+    body = body.crop(box)
+    out = Image.new('RGBA', (body.width + dx, body.height + dy), (0, 0, 0, 0))
+    mask = body.split()[3].point(lambda v: alpha if v else 0)
+    out.paste(Image.new('RGBA', body.size, (0, 0, 0, 255)), (dx, dy), mask)
+    out.alpha_composite(body)
+    return out
+
+
 def car_sprites(tmp):
-    """the player's car in the film, one grey sheet per body, tinted in the mod per DayZ car + colour, plus an untinted
-       glass sheet (..g) drawn over it:
-         car_sedanw  the drivable Volga (graffiti painted out): Olga 24, Sarka 120, Gunter 2
-         car_4x4w    the UAZ: Ada 4x4, M1025
-         car_truckw  a top-down truck (UAZ cab + drawn canvas bed, top_truck): M3S
-       each sprite at (0, 0) of its sheet, front at the bottom; sizes in DL_FilmPlayer.CarLook"""
+    """the player's car in the film, painted here in every colour it comes in (CAR_PAINTS):
+         car_sedan_<paint>  the drivable Volga (graffiti painted out): Olga 24, Sarka 120, Gunter 2
+         car_4x4_<paint>    the UAZ: Ada 4x4, M1025
+         car_truck_<paint>  a top-down truck (UAZ cab + drawn canvas bed, top_truck): M3S
+       each sprite at (0, 0) of its sheet with one even shadow down-right, front at the bottom; sizes in
+       DL_FilmPlayer.BuildCar"""
     made = []
     volga = Image.open(os.path.join(PACK, MINIDAYZ['volga_ca'])).convert('RGBA').crop((178, 142, 240, 222))
     volga = clean_paint(volga, (4, 4, 56, 66))
     uaz = Image.open(os.path.join(PACK, MINIDAYZ['uaz_ca'])).convert('RGBA').crop((176, 80, 244, 154))
     truck = top_truck(uaz)
-    for name, im in (('car_sedan', volga), ('car_4x4', uaz), ('car_truck', truck)):
-        for suffix, layer in (('w', grey_copy(im)), ('g', glass(im))):  # w: tinted body, g: glass on top
-            dst = os.path.join(tmp, name + suffix + '_ca.png')
-            pow2(layer).save(dst)
+    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', truck)):
+        shaped = reshadow(im)
+        print('car', base, shaped.size)
+        for name, rgb in CAR_PAINTS[base].items():
+            dst = os.path.join(tmp, 'car_%s_%s_ca.png' % (base, name))
+            pow2(paint(shaped, base, rgb)).save(dst)
             made.append(dst)
     return made
 

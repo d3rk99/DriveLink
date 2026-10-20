@@ -121,11 +121,14 @@ modded class MissionGameplay
 				m_DL_WaitWanted = false;
 			}
 		}
-		if (m_DL_WaitWanted)
+		// the road film is the loading screen: the black screen stays up until it has played out (the server may be
+		// done seating sooner; Space skips the film)
+		bool filmOn = m_DL_Film && m_DL_Film.IsPlaying() && m_DL_WaitShown;
+		if (m_DL_WaitWanted || filmOn)
 			DL_WaitShow(m_DL_WaitMsg);
 		else if (m_DL_WaitShown)
 			DL_WaitHide();
-		if (m_DL_StartEngine && !m_DL_WaitWanted)
+		if (m_DL_StartEngine && !m_DL_WaitWanted && !filmOn)
 			DL_TryStartEngine();
 	}
 
