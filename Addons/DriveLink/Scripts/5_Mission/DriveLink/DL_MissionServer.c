@@ -72,6 +72,19 @@ class DL_Room
 	string story;                                   // what happened on the road (weakened mode), shown on the black screen
 	float filmSeconds;                              // the longest road film a member is watching
 	int revealAt;                                   // g_Game.GetTime(): not before the last member's film / story ends
+	string convoyId;                                // a convoy car: its convoy (rooms of a convoy are revealed together)
+	int convoyCars;
+	bool convoyReady;                               // built and seated, waiting for the rest of the convoy
+}
+
+// target side: the cars of one convoy, each in its own waiting room; the black screen lifts for all at once
+class DL_ConvoyArrival
+{
+	string id;
+	int expected;                                   // cars that arrive (the ones left on the road don't)
+	ref map<string, CarScript> ready = new map<string, CarScript>; // room group -> its car, built and seated
+	int revealAt;
+	bool timing;                                    // the give-up timer runs
 }
 
 modded class MissionServer
@@ -86,6 +99,9 @@ modded class MissionServer
 	protected ref array<ref DL_Party> m_DL_Parties = new array<ref DL_Party>;                   // forming in the zones
 	protected int m_DL_PartyN;
 	protected ref map<string, int> m_DL_SlotOf = new map<string, int>;                          // refuse mode: convoy place / group place of a leaving player
+	protected ref map<string, ref DL_ConvoyArrival> m_DL_Convoys = new map<string, ref DL_ConvoyArrival>;
+	protected ref map<string, string> m_DL_ConvoyOf = new map<string, string>;  // leaving sid -> his convoy's id
+	protected ref map<string, int> m_DL_ConvoyCarsOf = new map<string, int>;
 	static const int DL_CONVOY_MAX = 4;
 	static const int DL_GROUP_MAX = 8;
 	protected ref map<string, bool> m_DL_Leaving = new map<string, bool>;  // steamIds being sent away (zone check skips them)
@@ -140,6 +156,8 @@ modded class MissionServer
 			DL_SendHello();
 		DL_LoadDebug();
 		Print(DL_Const.LOG_TAG + "v" + DL_Const.VERSION + " server '" + m_DL_Cfg.serverId + "', hub " + m_DL_Cfg.hubUrl + ", " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points, key set " + (m_DL_Cfg.hubKey != "").ToString());
+		// once the world is up: are the arrival points' car spots (and a convoy's line behind them) free?
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_CheckCarSpots, 20000, false);
 	}
 
 	// ---------------- M2 spikes (debug.json only) ----------------
@@ -754,6 +772,7 @@ modded class MissionServer
 				carYaw = ap.yaw;
 			}
 			carPos[1] = g_Game.SurfaceY(carPos[0], carPos[2]);
+			carPos = DL_FreeCarSpot(carPos, carYaw, d.car.type, identity.GetPlainId());
 			int carMade;
 			int carDropped;
 			car = m_DL_CarSnap.Build(d.car, carPos, Vector(carYaw, 0, 0), carMade, carDropped);
@@ -992,7 +1011,11 @@ modded class MissionServer
 			if (d.convoyIdx > 0)
 				room.carPos = room.carPos - Vector(room.carYaw, 0, 0).AnglesToVector() * (10 * d.convoyIdx);
 			room.carPos[1] = g_Game.SurfaceY(room.carPos[0], room.carPos[2]);
+			room.convoyId = d.convoyId;
+			room.convoyCars = d.convoyCars;
 		}
+		if (newRoom && d.car && d.car.type != "")
+			room.carPos = DL_FreeCarSpot(room.carPos, room.carYaw, d.car.type, group);
 		if (d.crewCount > room.expected)
 			room.expected = d.crewCount;
 		if (d.journey != "")
@@ -1089,6 +1112,9 @@ modded class MissionServer
 			string text = "Waiting for your crew: " + room.here.Count().ToString() + "/" + room.expected.ToString() + " connected";
 			if (room.going)
 				text = "Everyone is here. Getting in...";
+			DL_ConvoyArrival ca = m_DL_Convoys.Get(room.convoyId);
+			if (room.convoyReady && ca)
+				text = "Waiting for the convoy: " + ca.ready.Count().ToString() + "/" + ca.expected.ToString() + " cars ready";
 			foreach (string m : room.here)
 				DL_SendWait(m, DL_Const.WAIT_SHOW, text, false, room.story);
 		}
@@ -1128,6 +1154,12 @@ modded class MissionServer
 		if (!room)
 			return;
 		room.going = true;
+		vector spot = DL_FreeCarSpot(room.carPos, room.carYaw, room.car.type, group);
+		if (vector.Distance(spot, room.carPos) > 0.5)
+		{
+			room.carPos = spot;
+			DL_MoveRoomCrew(room);
+		}
 		int made;
 		int dropped;
 		CarScript car = m_DL_CarSnap.Build(room.car, room.carPos, Vector(room.carYaw, 0, 0), made, dropped);
@@ -1167,7 +1199,210 @@ modded class MissionServer
 			}
 		}
 		int revealIn = Math.Max(1500 + 800 * i + 2500, room.revealAt - g_Game.GetTime());
-		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomReveal, revealIn, false, group, car);
+		if (room.convoyId != "" && room.convoyCars > 1)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ConvoyRoomReady, 1500 + 800 * i + 2500, false, group, car);
+		else
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomReveal, revealIn, false, group, car);
+	}
+
+	// a convoy car is built and seated: when all of the convoy's cars are (or after crewWaitSeconds), all rooms lift
+	// their black screen together
+	protected void DL_ConvoyRoomReady(string group, CarScript car)
+	{
+		DL_Room room = m_DL_Rooms.Get(group);
+		if (!room)
+			return;
+		room.convoyReady = true;
+		DL_ConvoyArrival ca = m_DL_Convoys.Get(room.convoyId);
+		if (!ca)
+		{
+			ca = new DL_ConvoyArrival();
+			ca.id = room.convoyId;
+			ca.expected = room.convoyCars;
+			m_DL_Convoys.Set(ca.id, ca);
+		}
+		ca.ready.Set(group, car);
+		ca.revealAt = Math.Max(ca.revealAt, room.revealAt);
+		Print(DL_Const.LOG_TAG + "convoy " + ca.id + ": " + group + "'s car is ready, " + ca.ready.Count().ToString() + "/" + ca.expected.ToString());
+		if (ca.ready.Count() >= ca.expected)
+		{
+			DL_ConvoyReveal(ca.id);
+			return;
+		}
+		if (!ca.timing)
+		{
+			ca.timing = true;
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ConvoyReveal, m_DL_Cfg.crewWaitSeconds * 1000, false, ca.id);
+		}
+	}
+
+	protected void DL_ConvoyReveal(string id)
+	{
+		DL_ConvoyArrival ca = m_DL_Convoys.Get(id);
+		if (!ca)
+			return;
+		m_DL_Convoys.Remove(id);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_ConvoyReveal);
+		int wait = Math.Max(0, ca.revealAt - g_Game.GetTime());
+		Print(DL_Const.LOG_TAG + "convoy " + id + ": " + ca.ready.Count().ToString() + "/" + ca.expected.ToString() + " cars ready, black screens lift in " + (wait / 1000).ToString() + " s");
+		foreach (string g, CarScript c : ca.ready)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomReveal, wait + 100, false, g, c);
+	}
+
+	// ---------------- where a car can stand ----------------
+
+	// log, per arrival point, which of the 4 convoy places behind its car spot a car fits on (admin info)
+	protected void DL_CheckCarSpots()
+	{
+		foreach (DL_ArrivalPoint ap : m_DL_Cfg.arrivals)
+		{
+			vector base = ap.carPos;
+			float yaw = ap.carYaw;
+			if (base[0] == 0 && base[2] == 0)
+			{
+				base = ap.pos;
+				yaw = ap.yaw;
+			}
+			string line = "";
+			for (int k = 0; k < 4; k++)
+			{
+				vector p = base - Vector(yaw, 0, 0).AnglesToVector() * (10 * k);
+				p[1] = g_Game.SurfaceY(p[0], p[2]);
+				string car = "free";
+				string why;
+				if (!DL_SpotFreeWhy(p, yaw, 2.2, 4.8, why))
+					car = "blocked by " + why;
+				string truck = "free";
+				if (!DL_SpotFree(p, yaw, 2.7, 7.8))
+					truck = "blocked";
+				line += " | car " + (k + 1).ToString() + ": " + car + " (truck " + truck + ")";
+			}
+			Print(DL_Const.LOG_TAG + "arrival '" + ap.name + "' car spots" + line);
+		}
+	}
+
+	// the car's box (width, length, metres) by its class
+	protected void DL_CarBox(string type, out float wid, out float len)
+	{
+		string t = type;
+		t.ToLower();
+		wid = 2.2;
+		len = 4.8;
+		if (t.Contains("truck"))
+		{
+			wid = 2.7;
+			len = 7.8;
+		}
+		else if (t.Contains("offroad_02"))
+		{
+			wid = 2.4;
+			len = 5.2;
+		}
+	}
+
+	// want if a car of this type fits there, else the nearest spot that is free: further back in the same lane, then
+	// a lane to the side (4.5 m, 9 m). Free = on dry land, not too steep, and a box of the car's size (from 0.5 m
+	// above the ground) touches nothing but players and loose items (CGame.IsBoxCollidingGeometry, as base building
+	// placement does).
+	protected vector DL_FreeCarSpot(vector want, float yaw, string type, string who)
+	{
+		float wid;
+		float len;
+		DL_CarBox(type, wid, len);
+		vector fwd = Vector(yaw, 0, 0).AnglesToVector();
+		vector right = Vector(yaw + 90, 0, 0).AnglesToVector();
+		array<float> sides = {0.0, 4.5, -4.5, 9.0, -9.0};
+		array<float> backs = {0.0, 4.0, 8.0, 12.0, 16.0};
+		foreach (float side : sides)
+		{
+			foreach (float back : backs)
+			{
+				vector p = want - fwd * back + right * side;
+				p[1] = g_Game.SurfaceY(p[0], p[2]);
+				if (DL_SpotFree(p, yaw, wid, len))
+				{
+					if (side != 0 || back != 0)
+						Print(DL_Const.LOG_TAG + who + "'s " + type + ": its spot was taken, standing " + back.ToString() + " m back, " + side.ToString() + " m to the side");
+					return p;
+				}
+			}
+		}
+		Print(DL_Const.LOG_TAG + "WARNING " + who + "'s " + type + ": no free spot near " + want.ToString() + ", using it anyway (damage is off for a while)");
+		return want;
+	}
+
+	protected bool DL_SpotFree(vector p, float yaw, float wid, float len)
+	{
+		string why;
+		return DL_SpotFreeWhy(p, yaw, wid, len, why);
+	}
+
+	// why = what is in the way ("water", "slope", or the object's class / model)
+	protected bool DL_SpotFreeWhy(vector p, float yaw, float wid, float len, out string why)
+	{
+		why = "";
+		if (g_Game.SurfaceIsSea(p[0], p[2]) || g_Game.SurfaceIsPond(p[0], p[2]))
+		{
+			why = "water";
+			return false;
+		}
+		vector fwd = Vector(yaw, 0, 0).AnglesToVector();
+		vector right = Vector(yaw + 90, 0, 0).AnglesToVector();
+		vector f = p + fwd * (len / 2);
+		vector b = p - fwd * (len / 2);
+		vector l = p - right * (wid / 2);
+		vector r = p + right * (wid / 2);
+		if (Math.AbsFloat(g_Game.SurfaceY(f[0], f[2]) - g_Game.SurfaceY(b[0], b[2])) > len * 0.35 || Math.AbsFloat(g_Game.SurfaceY(l[0], l[2]) - g_Game.SurfaceY(r[0], r[2])) > wid * 0.35)
+		{
+			why = "slope";
+			return false;
+		}
+		vector center = p;
+		center[1] = p[1] + 1.5;                         // a 2 m tall box from 0.5 m up: bumps in the road don't count
+		array<Object> hits = new array<Object>;
+		array<Object> none = new array<Object>;
+		if (!g_Game.IsBoxCollidingGeometry(center, Vector(yaw, 0, 0), Vector(wid + 0.6, 2, len + 0.8), ObjIntersectGeom, ObjIntersectView, none, hits))
+			return true;
+		foreach (Object o : hits)
+		{
+			if (!o || o.IsInherited(Man))
+				continue;                               // the crew waiting there (they move with the car)
+			if (o.IsInherited(ItemBase) && !o.IsInherited(CarScript))
+				continue;                               // loose loot
+			why = o.GetType();
+			if (why == "")
+			{
+				why = o.GetModelName();
+				if (why == "")
+					why = "an object";
+			}
+			return false;
+		}
+		return true;
+	}
+
+	// the car of a waiting room moved: its crew stand beside the new spot (driver left, passengers right)
+	protected void DL_MoveRoomCrew(DL_Room room)
+	{
+		vector fwd = Vector(room.carYaw, 0, 0).AnglesToVector();
+		vector right = Vector(room.carYaw + 90, 0, 0).AnglesToVector();
+		int n = 0;
+		foreach (string m : room.here)
+		{
+			PlayerBase pb = DL_FindPlayer(m);
+			if (!pb)
+				continue;
+			vector pos;
+			if (m == room.group)
+				pos = room.carPos - right * 3;
+			else
+			{
+				pos = room.carPos + right * 3 + fwd * (1.5 - 1.5 * n);
+				n++;
+			}
+			pos[1] = g_Game.SurfaceY(pos[0], pos[2]);
+			pb.SetPosition(pos);
+		}
 	}
 
 	// everyone seated: lift the black screen; the driver's client starts the engine (PHYSICS cars are simulated on the
@@ -1570,6 +1805,38 @@ modded class MissionServer
 			film = DL_PartyFilm(z, going);
 		if (film)
 			film.biomeFrom = DL_MyBiome();
+		if (party.convoy)
+		{
+			string cid = m_DL_Cfg.serverId + "-" + party.id.ToString() + "-" + g_Game.GetTime().ToString();
+			int cars = 0;
+			if (journey)
+			{
+				foreach (DL_JVehicle jv : journey.vehicles)
+				{
+					if (!jv.lost)
+						cars++;
+				}
+			}
+			else
+			{
+				foreach (DL_PartyUnit cu : going)
+				{
+					if (cu.car)
+						cars++;
+				}
+			}
+			foreach (DL_PartyUnit mu : going)
+			{
+				foreach (PlayerBase mm : mu.crew)
+				{
+					if (mm && mm.GetIdentity())
+					{
+						m_DL_ConvoyOf.Set(mm.GetIdentity().GetPlainId(), cid);
+						m_DL_ConvoyCarsOf.Set(mm.GetIdentity().GetPlainId(), cars);
+					}
+				}
+			}
+		}
 		int carIdx = 0;
 		int footIdx = 0;
 		for (int i = 0; i < going.Count(); i++)
@@ -1859,6 +2126,14 @@ modded class MissionServer
 		}
 		if (film)
 			q.payload.film = film;
+		string cid;
+		if (m_DL_ConvoyOf.Find(sid, cid))
+		{
+			q.payload.convoyId = cid;
+			q.payload.convoyCars = m_DL_ConvoyCarsOf.Get(sid);
+			m_DL_ConvoyOf.Remove(sid);
+			m_DL_ConvoyCarsOf.Remove(sid);
+		}
 		string carText = "on foot";
 		if (car && jt)
 		{

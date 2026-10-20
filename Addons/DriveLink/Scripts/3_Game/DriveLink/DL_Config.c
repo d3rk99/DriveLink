@@ -206,6 +206,9 @@ class DL_PlayerData
 	// a group on foot: his place beside the others at the arrival point
 	int convoyIdx;
 	int partySlot;
+	// a convoy: its id and how many of its cars arrive (the target lifts the black screen for all of them at once)
+	string convoyId;
+	int convoyCars;
 	// travel step 4 (weakened mode): what happened on the road (shown on the arrival black screen), and whether he
 	// died there (the target then gives him a fresh character: the road kept his gear)
 	string journey;
