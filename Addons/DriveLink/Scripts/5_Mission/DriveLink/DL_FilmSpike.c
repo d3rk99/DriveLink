@@ -1,28 +1,26 @@
 // DriveLink road animation - ENGINE SPIKE (Research/road-animation-research.md, build order 1). Client only.
 // F9 opens/closes a window that plays a test scene: the UAZ drives right, the road and the tree line scroll past
 // (parallax), a survivor runs along the verge. Proves: .paa textures packed in the mod, frame picking from a sprite
-// sheet with WidgetFlags.CUSTOMUV + ImageWidget.SetUV (1_core/proto/enwidgets.c:77,275), endless scrolling by sliding
-// the UV of a tiling strip, per-frame updates from MissionGameplay.OnUpdate. Debug feature: remove or gate before
+// sheet by CLIPPING (a CLIPCHILDREN frame shows one cell of the whole sheet moved behind it; ImageWidget.SetUV
+// would not take a script float[4][2]: "Incompatible parameter uv", 2026-10-20), endless scrolling by sliding copies
+// of a tiling strip inside a clipping band, per-frame updates from MissionGameplay.OnUpdate. Debug feature: remove or gate before
 // publishing. Art: road/trees = DriveLink's own; UAZ + skin = MiniDayZ, prototype only.
 
 class DL_FilmSpike
 {
-	static const string DIR = "DriveLink\\gui\\anim\\";
+	static const string DIR = "DriveLink/gui/anim/";
+	static const string PLAIN = "#(argb,8,8,3)color(1,1,1,1,CO)";
 	protected Widget m_Root;
-	protected ImageWidget m_Sky;
-	protected ImageWidget m_Trees;
-	protected ImageWidget m_Road;
-	protected ImageWidget m_Car;
-	protected ImageWidget m_Walker;
-	protected TextWidget m_Caption;
+	protected ref DL_Strip m_Trees;
+	protected ref DL_Strip m_Road;
+	protected ref DL_Sprite m_Car;
+	protected ref DL_Sprite m_Walker;
 	protected bool m_Open;
 	protected bool m_KeyWasDown;
 	protected float m_T;
-	protected float m_X;          // window
-	protected float m_Y;
 	protected float m_W;
 	protected float m_H;
-	protected float m_TreesH;
+	protected float m_RoadTop;
 	protected float m_RoadH;
 
 	void Update(float dt)
@@ -58,20 +56,26 @@ class DL_FilmSpike
 		Print(DL_Const.LOG_TAG + "film spike: open");
 	}
 
-	protected static ImageWidget Image(WorkspaceWidget ws, Widget parent, string tex, int color, int sort, bool uv)
+	static int Flags()
 	{
-		int flags = WidgetFlags.VISIBLE | WidgetFlags.EXACTPOS | WidgetFlags.EXACTSIZE | WidgetFlags.IGNOREPOINTER | WidgetFlags.NOFILTER;
-		if (uv)
-			flags = flags | WidgetFlags.CUSTOMUV;
-		else
-			flags = flags | WidgetFlags.STRETCH;
-		ImageWidget w = ImageWidget.Cast(ws.CreateWidget(ImageWidgetTypeID, 0, 0, 16, 16, flags, color, sort, parent));
-		if (!w)
+		return WidgetFlags.VISIBLE | WidgetFlags.EXACTPOS | WidgetFlags.EXACTSIZE | WidgetFlags.IGNOREPOINTER;
+	}
+
+	static ImageWidget Image(Widget parent, string tex, int color, int sort, float x, float y, float w, float h)
+	{
+		ImageWidget img = ImageWidget.Cast(g_Game.GetWorkspace().CreateWidget(ImageWidgetTypeID, x, y, w, h, Flags() | WidgetFlags.STRETCH | WidgetFlags.NOFILTER, color, sort, parent));
+		if (!img)
 			return null;
-		if (!w.LoadImageFile(0, tex))
+		if (!img.LoadImageFile(0, tex))
 			Print(DL_Const.LOG_TAG + "film spike: could not load " + tex);
-		w.SetImage(0);
-		return w;
+		img.SetImage(0);
+		img.SetColor(color);
+		return img;
+	}
+
+	static Widget Clip(Widget parent, int sort, float x, float y, float w, float h)
+	{
+		return g_Game.GetWorkspace().CreateWidget(FrameWidgetTypeID, x, y, w, h, Flags() | WidgetFlags.CLIPCHILDREN, ARGB(255, 255, 255, 255), sort, parent);
 	}
 
 	protected bool Build()
@@ -84,92 +88,108 @@ class DL_FilmSpike
 		GetScreenSize(sw, sh);
 		m_W = sw * 0.6;
 		m_H = sh * 0.42;
-		m_X = (sw - m_W) / 2;
-		m_Y = sh * 0.12;
-		int flags = WidgetFlags.VISIBLE | WidgetFlags.EXACTPOS | WidgetFlags.EXACTSIZE | WidgetFlags.IGNOREPOINTER;
-		m_Root = ws.CreateWidget(FrameWidgetTypeID, m_X, m_Y, m_W, m_H, flags, ARGB(255, 255, 255, 255), 31000);
+		m_Root = ws.CreateWidget(FrameWidgetTypeID, (sw - m_W) / 2, sh * 0.12, m_W, m_H, Flags() | WidgetFlags.CLIPCHILDREN, ARGB(255, 255, 255, 255), 31000);
 		if (!m_Root)
 			return false;
-		string plain = "#(argb,8,8,3)color(1,1,1,1,CO)";
-		ImageWidget border = Image(ws, m_Root, plain, ARGB(255, 20, 20, 20), 0, false);
-		border.SetPos(0, 0);
-		border.SetSize(m_W, m_H);
-		m_Sky = Image(ws, m_Root, plain, ARGB(255, 150, 172, 182), 1, false);
-		m_TreesH = m_H * 0.22;
+		Image(m_Root, PLAIN, ARGB(255, 20, 20, 20), 0, 0, 0, m_W, m_H);                       // frame
+		float bandTop = m_H * 0.09;
+		float treesH = m_H * 0.22;
 		m_RoadH = m_H * 0.36;
-		float bandTop = m_H * 0.08;
-		float skyH = m_H - bandTop - m_TreesH - m_RoadH - m_H * 0.06;
-		m_Sky.SetPos(4, bandTop);
-		m_Sky.SetSize(m_W - 8, skyH + m_TreesH * 0.5);
-		m_Trees = Image(ws, m_Root, DIR + "trees_ca.paa", ARGB(255, 255, 255, 255), 2, true);
-		m_Trees.SetPos(4, bandTop + skyH);
-		m_Trees.SetSize(m_W - 8, m_TreesH);
-		m_Road = Image(ws, m_Root, DIR + "road_ca.paa", ARGB(255, 255, 255, 255), 3, true);
-		m_Road.SetPos(4, bandTop + skyH + m_TreesH);
-		m_Road.SetSize(m_W - 8, m_RoadH);
-		// UAZ 3/4 view facing right: pixels (0,73)-(100,146) of the 256x256 sheet
-		m_Car = Image(ws, m_Root, DIR + "uaz_ca.paa", ARGB(255, 255, 255, 255), 5, true);
+		float skyH = m_H - bandTop - treesH - m_RoadH - m_H * 0.05;
+		Image(m_Root, PLAIN, ARGB(255, 150, 172, 182), 1, 4, bandTop, m_W - 8, skyH + treesH * 0.5); // sky
+		m_Trees = new DL_Strip(m_Root, DIR + "trees_ca.paa", 2, 4, bandTop + skyH, m_W - 8, treesH, 256, 64);
+		m_RoadTop = bandTop + skyH + treesH;
+		m_Road = new DL_Strip(m_Root, DIR + "road_ca.paa", 3, 4, m_RoadTop, m_W - 8, m_RoadH, 256, 64);
+		// UAZ 3/4 view facing right: cell (0,73) 100x73 of the 256x256 sheet
 		float carW = m_RoadH * 1.6;
-		float carH = carW * 73 / 100;
-		m_Car.SetSize(carW, carH);
-		SetFrame(m_Car, 0, 73, 100, 73, 256, 256, false);
-		// survivor: 32x32 frames, row 3 of the 128x128 sheet runs right
-		m_Walker = Image(ws, m_Root, DIR + "skin_biker_ca.paa", ARGB(255, 255, 255, 255), 6, true);
+		m_Car = new DL_Sprite(m_Root, DIR + "uaz_ca.paa", 5, carW, carW * 73 / 100, 256, 256);
+		m_Car.Cell(0, 73, 100, 73);
+		// survivor: 32x32 cells, row 3 of the 128x128 sheet runs right
 		float wh = m_RoadH * 0.7;
-		m_Walker.SetSize(wh, wh);
-		m_Caption = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, 0, m_W, m_H * 0.07, flags | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 230, 210, 170), 7, m_Root));
-		m_Caption.SetPos(0, 2);
-		m_Caption.SetText("DriveLink road film - engine test (F9 closes)");
+		m_Walker = new DL_Sprite(m_Root, DIR + "skin_biker_ca.paa", 6, wh, wh, 128, 128);
+		TextWidget cap = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, 2, m_W, m_H * 0.07, Flags() | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 230, 210, 170), 7, m_Root));
+		if (cap)
+			cap.SetText("DriveLink road film - engine test (F9 closes)");
 		return true;
-	}
-
-	// one rectangle of a sheet (pixels) onto the widget; flip = mirror left-right
-	protected static void SetFrame(ImageWidget w, float px, float py, float pw, float ph, float texW, float texH, bool flip)
-	{
-		float u0 = px / texW;
-		float u1 = (px + pw) / texW;
-		float v0 = py / texH;
-		float v1 = (py + ph) / texH;
-		if (flip)
-		{
-			float t = u0;
-			u0 = u1;
-			u1 = t;
-		}
-		float uv[4][2];
-		uv[0][0] = u0; uv[0][1] = v0;   // top left
-		uv[1][0] = u1; uv[1][1] = v0;   // top right
-		uv[2][0] = u1; uv[2][1] = v1;   // bottom right
-		uv[3][0] = u0; uv[3][1] = v1;   // bottom left
-		w.SetUV(uv);
-	}
-
-	// a tiling strip scrolled by "offset" texels; the visible span keeps the texels square
-	protected static void Scroll(ImageWidget w, float offsetPx, float widgetW, float widgetH, float texW, float texH)
-	{
-		float span = widgetW / (widgetH / texH); // texels across the widget
-		SetFrame(w, offsetPx, 0, span, texH, texW, texH, false);
 	}
 
 	protected void Animate(float dt)
 	{
 		m_T += dt;
 		// the car drives right = the world moves left; the tree line is farther away, so slower
-		Scroll(m_Road, m_T * 90, m_W - 8, m_RoadH, 256, 64);
-		Scroll(m_Trees, m_T * 35, m_W - 8, m_TreesH, 256, 64);
-		float roadTop = m_H * 0.08 + (m_H - m_H * 0.08 - m_TreesH - m_RoadH - m_H * 0.06) + m_TreesH;
+		m_Road.Scroll(m_T * 260);
+		m_Trees.Scroll(m_T * 100);
 		float carW = m_RoadH * 1.6;
 		float carH = carW * 73 / 100;
 		float bob = Math.Sin(m_T * 18) * 1.5;
-		m_Car.SetPos((m_W - carW) / 2, roadTop + m_RoadH * 0.45 - carH + bob);
-		// the survivor runs right along the near verge, slower than the scenery passes, and wraps around
+		m_Car.MoveTo((m_W - carW) / 2, m_RoadTop + m_RoadH * 0.5 - carH + bob);
+		// the survivor runs right along the near verge, slower than the scenery, and wraps around
 		int frame = Math.Floor(m_T * 10);
 		frame = frame % 4;
-		SetFrame(m_Walker, frame * 32, 96, 32, 32, 128, 128, false);
+		m_Walker.Cell(frame * 32, 96, 32, 32);
 		float wh = m_RoadH * 0.7;
 		float span = m_W + wh;
-		float wx = (m_T * 60) - wh;
+		float wx = m_T * 120;
 		wx = wx - Math.Floor(wx / span) * span - wh;
-		m_Walker.SetPos(wx, roadTop + m_RoadH - wh * 0.95);
+		m_Walker.MoveTo(wx, m_RoadTop + m_RoadH - wh * 0.95);
+	}
+}
+
+// one cell of a sprite sheet: a clipping frame of the cell's display size with the whole (scaled) sheet behind it
+class DL_Sprite
+{
+	protected Widget m_Clip;
+	protected ImageWidget m_Sheet;
+	protected float m_DW;         // display size of one cell
+	protected float m_DH;
+	protected float m_TexW;
+	protected float m_TexH;
+
+	void DL_Sprite(Widget parent, string tex, int sort, float dispW, float dispH, float texW, float texH)
+	{
+		m_DW = dispW;
+		m_DH = dispH;
+		m_TexW = texW;
+		m_TexH = texH;
+		m_Clip = DL_FilmSpike.Clip(parent, sort, 0, 0, dispW, dispH);
+		m_Sheet = DL_FilmSpike.Image(m_Clip, tex, ARGB(255, 255, 255, 255), 0, 0, 0, dispW, dispH);
+	}
+
+	// show sheet pixels (px,py)-(px+pw,py+ph) in the display box
+	void Cell(float px, float py, float pw, float ph)
+	{
+		float sx = m_DW / pw;
+		float sy = m_DH / ph;
+		m_Sheet.SetSize(m_TexW * sx, m_TexH * sy);
+		m_Sheet.SetPos(-px * sx, -py * sy);
+	}
+
+	void MoveTo(float x, float y)
+	{
+		m_Clip.SetPos(x, y);
+	}
+}
+
+// a tiling strip that scrolls left forever: copies side by side inside a clipping band
+class DL_Strip
+{
+	protected Widget m_Clip;
+	protected ref array<ImageWidget> m_Tiles = new array<ImageWidget>;
+	protected float m_TileW;
+
+	void DL_Strip(Widget parent, string tex, int sort, float x, float y, float w, float h, float texW, float texH)
+	{
+		m_Clip = DL_FilmSpike.Clip(parent, sort, x, y, w, h);
+		m_TileW = texW * (h / texH); // square texels
+		int n = Math.Ceil(w / m_TileW) + 1;
+		for (int i = 0; i < n; i++)
+			m_Tiles.Insert(DL_FilmSpike.Image(m_Clip, tex, ARGB(255, 255, 255, 255), 0, i * m_TileW, 0, m_TileW + 1, h));
+	}
+
+	void Scroll(float offsetPx)
+	{
+		float o = offsetPx - Math.Floor(offsetPx / m_TileW) * m_TileW;
+		for (int i = 0; i < m_Tiles.Count(); i++)
+			m_Tiles[i].SetPos(i * m_TileW - o, 0);
 	}
 }
