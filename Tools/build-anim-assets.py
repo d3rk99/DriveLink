@@ -391,6 +391,34 @@ def top_bike(rgb):
     return im
 
 
+BIKE_FRONT_ROW = 27   # rows from here down (tank front, handlebar, front wheel) are drawn over the rider
+
+
+def bike_front(im):
+    """the bike's front, to draw over its rider (the rider sits on the seat, the tank and bars are in front)"""
+    out = Image.new('RGBA', im.size, (0, 0, 0, 0))
+    px, op = im.load(), out.load()
+    for y in range(BIKE_FRONT_ROW, im.height):
+        for x in range(im.width):
+            c = px[x, y]
+            if c[3] == 255:                                     # the body only, not its shadow
+                op[x, y] = c
+    return out
+
+
+def boat_rim(im):
+    """the boat's rim (hull sides, bow, stern, engine) to draw over the crouching crew: they sit IN the boat"""
+    out = Image.new('RGBA', im.size, (0, 0, 0, 0))
+    px, op = im.load(), out.load()
+    floor = {(168, 160, 142), (118, 96, 70), (146, 122, 92)}    # top_boat's floor and benches
+    for y in range(im.height):
+        for x in range(im.width):
+            c = px[x, y]
+            if c[3] == 255 and c[:3] not in floor:
+                op[x, y] = c
+    return out
+
+
 def top_boat(rgb):
     """PLACEHOLDER top-down boat (Boat_01), bow at the bottom: a painted hull, a light floor with 3 benches, the
     outboard engine sticking out at the stern. 34 x 80"""
@@ -498,6 +526,16 @@ def car_sprites(tmp):
             dst = os.path.join(tmp, 'car_%s_%s_ca.png' % (base, name))
             pow2(car).save(dst)
             made.append(dst)
+            # open vehicles: the part drawn OVER the riders (same sheet size and place as the body)
+            over = None
+            if base == 'bike':
+                over = bike_front(car)
+            elif base == 'boat':
+                over = boat_rim(car)
+            if over is not None:
+                odst = os.path.join(tmp, 'car_%s%s_%s_ca.png' % (base, 'front' if base == 'bike' else 'rim', name))
+                pow2(over).save(odst)
+                made.append(odst)
     return made
 
 

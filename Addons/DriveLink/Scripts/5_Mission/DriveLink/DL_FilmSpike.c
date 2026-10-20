@@ -73,6 +73,12 @@ class DL_Sprite
 		m_Clip.Show(on);
 	}
 
+	// show only the top part of the cell (frac 0..1 of its height): a rider on a motorbike, legs behind the tank
+	void Cut(float frac)
+	{
+		m_Clip.SetSize(m_DW, m_DH * frac);
+	}
+
 	// multiplies the sheet's colours (tinted clothing)
 	void SetColor(int argb)
 	{

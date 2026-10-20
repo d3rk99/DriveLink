@@ -36,6 +36,7 @@ class DL_FilmPerson
 	float homeX;                   // its car door
 	float homeY;
 	float animT;
+	bool rideShown;                // drawn in a seat of an open vehicle (bike, boat) while "in" it
 	ref array<vector> path = new array<vector>;
 
 	void DL_FilmPerson(Widget parent, int sort, float px, DL_FilmActor a, string zedSkin)
@@ -188,10 +189,64 @@ class DL_FilmPerson
 		moving = true;
 	}
 
+	// in a seat of a motorbike or a boat: drawn there (centre x, y), cut to its top part (a bike rider's legs are
+	// behind the tank), not walking
+	void RideAt(float px, float ox, float oy, float rx, float ry, int row, int frame, float cut)
+	{
+		rideShown = true;
+		float sx = ox + (rx - 16) * px;
+		float sy = oy + (ry - 16) * px;
+		foreach (DL_Sprite s : layers)
+			Seat(s, frame, row, cut, sx, sy);
+		if (back)
+			Seat(back, 0, 17, cut, sx, sy);
+		if (hand)
+			Seat(hand, frame, row, cut, sx, sy);
+	}
+
+	protected void Seat(DL_Sprite s, int frame, int row, float cut, float sx, float sy)
+	{
+		s.Show(true);
+		s.Cut(cut);
+		s.Cell(frame * 32, row * 32, 32, 32);
+		s.MoveTo(sx, sy);
+	}
+
+	void HideRide()
+	{
+		rideShown = false;
+		foreach (DL_Sprite s : layers)
+		{
+			s.Cut(1);
+			s.Show(false);
+		}
+		if (back)
+		{
+			back.Cut(1);
+			back.Show(false);
+		}
+		if (hand)
+		{
+			hand.Cut(1);
+			hand.Show(false);
+		}
+	}
+
 	void Update(float dt, float px, float ox, float oy)
 	{
 		if (!shown)
 			return;
+		if (rideShown)
+		{
+			// out of the seat: whole again
+			rideShown = false;
+			foreach (DL_Sprite rs : layers)
+				rs.Cut(1);
+			if (back)
+				back.Cut(1);
+			if (hand)
+				hand.Cut(1);
+		}
 		animT += dt;
 		bool run = moving || marching;
 		int row = dir;
@@ -306,6 +361,8 @@ class DL_FilmCar
 	ref DL_Sprite sprite;
 	bool truck;               // the M3S: 2 seats (cab doors), 6 wheels
 	string kind = "car";      // "car" | "bike" (2 wheels on the middle line) | "boat" (on the water: nobody gets out)
+	ref DL_Sprite over;       // open vehicles: drawn over the riders (a bike's tank + bars + front wheel, a boat's rim)
+	float drawX;              // where it is drawn this frame (with its bob), film px
 	float w;                  // shown size, film px (with its shadow)
 	float h;
 	float x;                  // centre, film px
@@ -668,11 +725,13 @@ class DL_FilmPlayer
 		{
 			c.kind = "bike";
 			SetCar(c, CarTex("bike", colour, "red"), 32, 64, 26, 50, 1, 1);
+			SetOver(c, OverTex("bike", "front", colour, "red"), 32, 64, 26, 50);
 		}
 		else if (look == "boat")          // Boat_01 (placeholder art)
 		{
 			c.kind = "boat";
 			SetCar(c, CarTex("boat", colour, "blue"), 64, 128, 36, 83, 1.1, 1.1);
+			SetOver(c, OverTex("boat", "rim", colour, "blue"), 64, 128, 36, 83);
 		}
 		else if (look == "truck")         // M3S
 		{
@@ -716,6 +775,45 @@ class DL_FilmPlayer
 		c.h = ch * sy;
 		c.sprite = new DL_Sprite(m_Root, tex, 6, c.w * m_Px, c.h * m_Px, texW, texH);
 		c.sprite.Cell(0, 0, cw, ch);
+	}
+
+	// the layer over the riders (Tools/build-anim-assets.py bike_front / boat_rim), same size and place as the body
+	protected void SetOver(DL_FilmCar c, string tex, float texW, float texH, float cw, float ch)
+	{
+		c.over = new DL_Sprite(m_Root, tex, 9, c.w * m_Px, c.h * m_Px, texW, texH);
+		c.over.Cell(0, 0, cw, ch);
+	}
+
+	protected static string OverTex(string base, string part, string colour, string fallback)
+	{
+		string t = CarTex(base, colour, fallback);
+		t.Replace("car_" + base + "_", "car_" + base + part + "_");
+		return t;
+	}
+
+	// where the i-th rider of an open vehicle sits (centre of his 32 px cell, film px) and how much of him shows
+	protected void SeatPos(DL_FilmCar c, int i, out float sx, out float sy, out float cut, out int row)
+	{
+		float k = c.h / 83.0;                      // the boat sprite is shown 1.1x
+		if (c.kind == "bike")
+		{
+			// driver on the seat, passenger behind him; head and body only (19 of 32 rows), legs behind the tank
+			float bottom = c.Top() + 20;
+			if (i > 0)
+				bottom = c.Top() + 11;
+			cut = 19.0 / 32.0;
+			sx = c.drawX - 3;
+			sy = bottom - 19 + 16;
+			row = 0;                               // idle, facing the way it goes
+			return;
+		}
+		// a boat: crouching in a line, the driver at the engine, the others on the benches
+		array<float> ys = {18.0, 32.0, 46.0, 60.0};
+		int j = Math.Min(i, 3);
+		sx = c.drawX - 3 * k;
+		sy = c.Top() + ys[j] * k;
+		cut = 1;
+		row = 16;                                  // crouched (MiniDayZ "using_item")
 	}
 
 	// the old MiniDayZ sprites as they are (films from an older server)
@@ -1986,7 +2084,32 @@ class DL_FilmPlayer
 			float bob = 0;
 			if ((m_Speed > 20 || c.driveOff) && !c.inWorld)
 				bob = Math.Sin(m_T * 18 + c.idx * 1.7) * 0.5;
+			c.drawX = c.x + bob;
 			c.sprite.MoveTo(m_Ox + (c.x - c.w / 2 + bob) * m_Px, m_Oy + (c.y - c.h / 2) * m_Px);
+			if (c.over)
+				c.over.MoveTo(m_Ox + (c.x - c.w / 2 + bob) * m_Px, m_Oy + (c.y - c.h / 2) * m_Px);
+		}
+		// riders of open vehicles: seen in their seats (seat order = the order they ride in)
+		array<int> seatN = new array<int>;
+		for (int sn = 0; sn < m_Cars.Count(); sn++)
+			seatN.Insert(0);
+		foreach (DL_FilmPerson rp : m_Crew)
+		{
+			DL_FilmCar rc = FilmCar(rp.car);
+			bool riding = !rp.down && !rp.shown && rc && rc.over && !rc.inWorld;
+			if (!riding)
+			{
+				if (rp.rideShown && !rp.shown)
+					rp.HideRide();
+				continue;
+			}
+			float rx;
+			float ry;
+			float cut;
+			int row;
+			SeatPos(rc, seatN[rc.idx], rx, ry, cut, row);
+			seatN[rc.idx] = seatN[rc.idx] + 1;
+			rp.RideAt(m_Px, m_Ox, m_Oy, rx, ry, row, 0, cut);
 		}
 		foreach (DL_FilmPerson p : m_Crew)
 		{
