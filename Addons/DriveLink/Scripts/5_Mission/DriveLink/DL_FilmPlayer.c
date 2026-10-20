@@ -328,6 +328,7 @@ class DL_FilmPlayer
 	protected ref DL_Strip m_GroundA;
 	protected ref DL_Strip m_GroundB;
 	protected ref DL_Sprite m_Car;
+	protected bool m_Truck;       // the M3S: 2 seats (cab doors), 6 wheels
 	protected float m_CarW;       // shown size, film px (with its shadow)
 	protected float m_CarH;
 	protected bool m_DriveOff;    // the end: the car drives out of the bottom
@@ -523,6 +524,7 @@ class DL_FilmPlayer
 	protected void BuildCar()
 	{
 		string look = m_Film.car;
+		m_Truck = false;
 		if (look == "")
 			return;
 		string colour = "";
@@ -552,7 +554,10 @@ class DL_FilmPlayer
 		else if (look == "humvee")        // M1025: wide and long
 			SetCar(CarTex("4x4", colour, "olive"), 64, 128, 47, 76, 1.3, 1.06);
 		else if (look == "truck")         // M3S
+		{
+			m_Truck = true;
 			SetCar(CarTex("truck", colour, "green"), 64, 128, 58, 111, 1, 1);
+		}
 		else                              // Ada 4x4 (Niva) and anything else
 			SetCar(CarTex("4x4", colour, "green"), 64, 128, 47, 76, 1, 0.95);
 	}
@@ -595,6 +600,17 @@ class DL_FilmPlayer
 	}
 
 	// ---------------- helpers ----------------
+
+	// the truck sprite's own rows (Tools/build-anim-assets.py top_truck), as film y: top of the sheet + row
+	static const float TRUCK_DOOR_ROW = 69;
+	static const float TRUCK_FRONT_AXLE = 91;
+	static const float TRUCK_REAR_AXLE_1 = 31;
+	static const float TRUCK_REAR_AXLE_2 = 16;
+
+	protected float CarTop()
+	{
+		return m_CarY - m_CarH / 2;
+	}
 
 	// half the car body (without its shadow strip on the right)
 	protected float CarHalfW()
@@ -663,7 +679,8 @@ class DL_FilmPlayer
 		m_InCar = m_Car != null && !m_CarInWorld;
 	}
 
-	// out of the car: each by his door (driver front left, then front right, rear left, rear right)
+	// out of the car: each by his door (driver front left, then front right, rear left, rear right); the truck has its
+	// two cab doors only (anyone more climbs down off the back of the bed)
 	protected void GetOut()
 	{
 		int i = 0;
@@ -677,6 +694,15 @@ class DL_FilmPlayer
 			int rowN = i / 2;
 			p.homeX = m_CarX + side * (CarHalfW() + 9);
 			p.homeY = m_CarY + 8 - rowN * 20;
+			if (m_Truck)
+			{
+				p.homeY = CarTop() + TRUCK_DOOR_ROW;
+				if (rowN > 0)
+				{
+					p.homeX = m_CarX + side * 10;          // off the back of the bed
+					p.homeY = CarTop() - 8;
+				}
+			}
 			p.x = p.homeX;
 			p.y = p.homeY;
 			p.dir = 0;
@@ -970,13 +996,25 @@ class DL_FilmPlayer
 		if (m_Step == 0)
 		{
 			m_Target = 0;
-			int wheel = Math.RandomInt(0, 4);   // 0 front left, 1 front right, 2 rear left, 3 rear right (screen)
+			int wheels = 4;
+			if (m_Truck)
+				wheels = 6;
+			int wheel = Math.RandomInt(0, wheels);   // even = left, odd = right (screen); wheel / 2 = the axle
 			m_WheelSide = -1;
 			if (wheel % 2 == 1)
 				m_WheelSide = 1;
+			int axle = wheel / 2;
 			m_WheelY = m_CarY + hh - 15;     // the car drives down: its front is at the bottom
-			if (wheel >= 2)
+			if (axle >= 1)
 				m_WheelY = m_CarY - hh + 15;
+			if (m_Truck)
+			{
+				m_WheelY = CarTop() + TRUCK_FRONT_AXLE;
+				if (axle == 1)
+					m_WheelY = CarTop() + TRUCK_REAR_AXLE_1;
+				else if (axle == 2)
+					m_WheelY = CarTop() + TRUCK_REAR_AXLE_2;
+			}
 			m_Puff.x = m_CarX + m_WheelSide * (hw - 3);
 			m_Puff.y = m_WheelY;
 			m_Puff.sprite.Show(true);
@@ -1555,15 +1593,30 @@ class DL_FilmPlayer
 		return a;
 	}
 
-	// F9 alternates: A = a crew of three through every scene the road has (2 flats, fuel found, fuel lost, walking,
-	// infected fought off, infected kill, rationing, hunger), B = a solo driver whose car is lost to a flat
+	// F9 cycles: A = a crew of three through every scene the road has (2 flats, fuel found, fuel lost, walking,
+	// infected fought off, infected kill, rationing, hunger), B = a solo driver whose car is lost to a flat,
+	// C = two in the M3S (cab doors, any of its 6 wheels), driving off at the end
 	static DL_Film Demo()
 	{
 		s_DemoN++;
 		DL_Film f = new DL_Film();
 		f.car = "4x4@green";
 		f.biomeFrom = "forest";
-		if (s_DemoN % 2 == 1)
+		if (s_DemoN % 3 == 0)
+		{
+			f.car = "truck@blue";
+			f.km = 70;
+			f.biomeTo = "field";
+			f.crew.Insert(DemoActor("Derk", "veteran", "orelpants,oreljacket,razgruz,hunterbackpack,helmetarmy", "akmrifle", ""));
+			f.crew.Insert(DemoActor("OrionKaelin", "biker", "jeans@black,downjacket@red,taloonbackpack@orange,warmhat@black", "", "sksrifle"));
+			f.Add("drive", 20);
+			f.Add("flat", 20, "OrionKaelin", "spare");
+			f.Add("drive", 15);
+			f.Add("flat", 35, "Derk", "kit");
+			f.Add("drive", 35);
+			return f;
+		}
+		if (s_DemoN % 3 == 1)
 		{
 			f.km = 160;
 			f.biomeTo = "desert";

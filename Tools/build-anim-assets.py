@@ -323,6 +323,17 @@ def top_truck(rgb):
     # bumper
     d.rounded_rectangle((3, 102, W - 4, 106), radius=2, fill=(58, 58, 58, 255))
     d.line((5, 102, W - 6, 102), fill=(92, 92, 92, 255))
+    # a little wear, like the MiniDayZ cars (less is more): a few rust specks on the paint, one dent in the left wing
+    rust, rust_dark = (122, 70, 38, 255), (88, 50, 30, 255)
+    px = im.load()
+    for x, y, big in ((40, 63, True), (8, 70, False), (33, 89, False), (44, 93, True), (14, 84, False)):
+        if px[x, y][:3] == paint:
+            px[x, y] = rust_dark
+            if big:
+                px[x + 1, y] = rust
+                px[x, y + 1] = rust
+    d.arc((6, 90, 11, 95), 200, 340, fill=dark + (255,))     # the dent: a shadowed hollow with a lit lower lip
+    d.point((8, 94), fill=light + (255,))
     return im
 
 
