@@ -191,7 +191,7 @@ class DL_FilmPerson
 
 	// in a seat of a motorbike or a boat: drawn there (centre x, y), cut to its top part (a bike rider's legs are
 	// behind the tank), not walking
-	void RideAt(float px, float ox, float oy, float rx, float ry, int row, int frame, float cut)
+	void RideAt(float px, float ox, float oy, float rx, float ry, int row, int frame, float cut, int backRow)
 	{
 		rideShown = true;
 		float sx = ox + (rx - 16) * px;
@@ -199,7 +199,7 @@ class DL_FilmPerson
 		foreach (DL_Sprite s : layers)
 			Seat(s, frame, row, cut, sx, sy);
 		if (back)
-			Seat(back, 0, 17, cut, sx, sy);
+			Seat(back, 0, backRow, cut, sx, sy);
 		if (hand)
 			Seat(hand, frame, row, cut, sx, sy);
 	}
@@ -730,8 +730,8 @@ class DL_FilmPlayer
 		else if (look == "boat")          // Boat_01 (placeholder art)
 		{
 			c.kind = "boat";
-			SetCar(c, CarTex("boat", colour, "blue"), 64, 128, 36, 83, 1.1, 1.1);
-			SetOver(c, OverTex("boat", "rim", colour, "blue"), 64, 128, 36, 83);
+			SetCar(c, CarTex("boat", colour, "blue"), 64, 128, 48, 92, 1, 1);
+			SetOver(c, OverTex("boat", "rim", colour, "blue"), 64, 128, 48, 92);
 		}
 		else if (look == "truck")         // M3S
 		{
@@ -792,9 +792,9 @@ class DL_FilmPlayer
 	}
 
 	// where the i-th rider of an open vehicle sits (centre of his 32 px cell, film px) and how much of him shows
-	protected void SeatPos(DL_FilmCar c, int i, out float sx, out float sy, out float cut, out int row)
+	protected void SeatPos(DL_FilmCar c, int i, out float sx, out float sy, out float cut, out int row, out int backRow)
 	{
-		float k = c.h / 83.0;                      // the boat sprite is shown 1.1x
+		backRow = 17;                              // a slung weapon, facing down
 		if (c.kind == "bike")
 		{
 			// driver on the seat, passenger behind him; head and body only (19 of 32 rows), legs behind the tank
@@ -807,13 +807,25 @@ class DL_FilmPlayer
 			row = 0;                               // idle, facing the way it goes
 			return;
 		}
-		// a boat: crouching in a line, the driver at the engine, the others on the benches
-		array<float> ys = {18.0, 32.0, 46.0, 60.0};
+		// the inflatable (Tools/anim_boat.py SEATS, from the in-game seats): the driver on the left tube by the motor,
+		// one on the right tube, one on the left, one at the bow facing back
+		array<float> seatX = {11.0, 31.0, 11.0, 21.0};
+		array<float> seatBottom = {24.0, 40.0, 54.0, 82.0};
 		int j = Math.Min(i, 3);
-		sx = c.drawX - 3 * k;
-		sy = c.Top() + ys[j] * k;
-		cut = 1;
-		row = 16;                                  // crouched (MiniDayZ "using_item")
+		float left = c.drawX - c.w / 2;
+		sx = left + seatX[j];
+		if (j == 3)
+		{
+			cut = 0.62;                            // seen from behind: head and back
+			row = 1;                               // idle, facing up (back to the bow)
+			backRow = 18;
+		}
+		else
+		{
+			cut = 1;
+			row = 16;                              // crouched on the tube (MiniDayZ "using_item")
+		}
+		sy = c.Top() + seatBottom[j] - 32 * cut + 16;
 	}
 
 	// the old MiniDayZ sprites as they are (films from an older server)
@@ -2107,9 +2119,10 @@ class DL_FilmPlayer
 			float ry;
 			float cut;
 			int row;
-			SeatPos(rc, seatN[rc.idx], rx, ry, cut, row);
+			int backRow;
+			SeatPos(rc, seatN[rc.idx], rx, ry, cut, row, backRow);
 			seatN[rc.idx] = seatN[rc.idx] + 1;
-			rp.RideAt(m_Px, m_Ox, m_Oy, rx, ry, row, 0, cut);
+			rp.RideAt(m_Px, m_Ox, m_Oy, rx, ry, row, 0, cut, backRow);
 		}
 		foreach (DL_FilmPerson p : m_Crew)
 		{
@@ -2317,7 +2330,7 @@ class DL_FilmPlayer
 	// infected fought off, infected kill, rationing, hunger), B = a solo driver whose car is lost to a flat,
 	// C = two in the M3S (cab doors, any of its 6 wheels), D = a convoy of three (a spare from another car, a shared
 	// jerry can, a car left behind: one climbs into a free seat, one walks beside the convoy), E = a group on foot,
-	// F = a car + a motorbike (the bike's spare rides in the car), G = two boats on open water
+	// F = a car + a motorbike (the bike's spare rides in the car), G = two boats on open water (a full one: all 4 seats)
 	static DL_Film Demo()
 	{
 		s_DemoN++;
@@ -2346,11 +2359,13 @@ class DL_FilmPlayer
 		{
 			f.car = "";
 			f.cars.Insert("boat@orange");
-			f.cars.Insert("boat@camo");
+			f.cars.Insert("boat@blue");
 			f.km = 40;
 			f.biomeTo = "forest";
 			f.crew.Insert(DemoActor("Derk", "veteran", "orelpants,oreljacket,razgruz,helmetarmy", "akmrifle", "", 0));
 			f.crew.Insert(DemoActor("Britney", "kate", "sportpants@black,raincoatblue,warmhat@lightblue", "", "", 0));
+			f.crew.Insert(DemoActor("OrionKaelin", "biker", "jeans@black,downjacket@red,helmetmoto@red", "", "sksrifle", 0));
+			f.crew.Insert(DemoActor("Jonas", "redneck", "jeans@blue,hoodiegray@green,cowboyhat", "", "mosinnagant", 0));
 			f.crew.Insert(DemoActor("Mika", "def2", "workpants@brown,tshirt@orange,baseballcap@red", "glockpistol", "", 1));
 			f.Add("drive", 15);
 			f.Add("fuel", 15, "Derk", "shared", 1, 0);        // the second boat runs dry: a can from the first

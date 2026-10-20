@@ -6,6 +6,7 @@
 # Every texture is a power-of-two PNG named *_ca.png, converted to .paa with DayZ Tools ImageToPAA (DXT5 + alpha).
 # Usage: python Tools/build-anim-assets.py
 import os, shutil, subprocess, sys, random
+import anim_boat  # Tools/anim_boat.py: the inflatable Boat_01
 from PIL import Image, ImageDraw
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -514,9 +515,24 @@ def car_sprites(tmp):
     volga = Image.open(os.path.join(PACK, MINIDAYZ['volga_ca'])).convert('RGBA').crop((178, 142, 240, 222))
     volga = clean_paint(volga, (4, 4, 56, 66))
     uaz = Image.open(os.path.join(PACK, MINIDAYZ['uaz_ca'])).convert('RGBA').crop((176, 80, 244, 154))
-    drawn = {'truck': top_truck, 'bike': top_bike, 'boat': top_boat}
+    drawn = {'truck': top_truck, 'bike': top_bike}
     for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None), ('bike', None), ('boat', None)):
         for name, rgb in CAR_PAINTS[base].items():
+            if base == 'boat':
+                # the inflatable is drawn per variant (its own colours), its motor is the layer over the crew
+                body, motor = anim_boat.draw(name)
+                car = reshadow(body)
+                over = Image.new('RGBA', car.size, (0, 0, 0, 0))
+                over.alpha_composite(motor.crop(body.getbbox()), (0, 0))
+                dst = os.path.join(tmp, 'car_%s_%s_ca.png' % (base, name))
+                pow2(car).save(dst)
+                made.append(dst)
+                odst = os.path.join(tmp, 'car_boatrim_%s_ca.png' % name)
+                pow2(over).save(odst)
+                made.append(odst)
+                if name == next(iter(CAR_PAINTS[base])):
+                    print('car', base, car.size)
+                continue
             if base in drawn:
                 car = reshadow(drawn[base](rgb))
             else:
@@ -530,8 +546,7 @@ def car_sprites(tmp):
             over = None
             if base == 'bike':
                 over = bike_front(car)
-            elif base == 'boat':
-                over = boat_rim(car)
+
             if over is not None:
                 odst = os.path.join(tmp, 'car_%s%s_%s_ca.png' % (base, 'front' if base == 'bike' else 'rim', name))
                 pow2(over).save(odst)
