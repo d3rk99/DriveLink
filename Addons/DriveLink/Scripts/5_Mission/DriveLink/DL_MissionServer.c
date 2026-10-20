@@ -1078,11 +1078,20 @@ modded class MissionServer
 			if (m && m.GetIdentity())
 				f.crew.Insert(DL_FilmCast.From(m.GetIdentity().GetName(), m.GetIdentity().GetPlainId(), m_DL_Snap.Capture(m)));
 		}
+		f.km = DL_FilmKm(z);
 		if (car)
-			f.Add("drive", z.distanceKm);
+			f.Add("drive", f.km);
 		else
-			f.Add("walk", z.distanceKm);
+			f.Add("walk", f.km);
 		return f;
+	}
+
+	// the distance a film shows: the zone's, at least 1 km (a free zone with no distance set still plays a short trip)
+	protected float DL_FilmKm(DL_Zone z)
+	{
+		if (z.distanceKm < 1)
+			return 1;
+		return z.distanceKm;
 	}
 
 	// the arriving traveller's client gets his film once it has loaded (sent twice, the client plays it once);
@@ -1155,6 +1164,8 @@ modded class MissionServer
 			room.landYaw = ap.yaw;
 			if (room.boat)
 			{
+				// the crew waits on dry land: an arrival point set out on the water would build them on the sea floor
+				room.landPos = DL_LandNear(ap.pos, group);
 				float byaw;
 				room.carPos = DL_BoatSpot(ap, d.convoyIdx, group, byaw);
 				room.carYaw = byaw;
@@ -1184,12 +1195,16 @@ modded class MissionServer
 			// there: nobody goes into the water
 			vector landRight = Vector(room.landYaw + 90, 0, 0).AnglesToVector();
 			pos = room.landPos + landRight * (1.5 * room.here.Count());
+			if (DL_Veh.WaterY(pos[0], pos[2], 0.05) >= 0)
+				pos = room.landPos;                 // the row would step into the water: wait on the same dry spot
 		}
 		else if (isDriver)
 			pos = room.carPos - right * 3;                                           // driver side
 		else
 			pos = room.carPos + right * 3 + fwd * (1.5 - 1.5 * room.here.Count());   // passengers in a row on the right
 		pos[1] = g_Game.SurfaceY(pos[0], pos[2]);
+		if (room.boat)
+			pos[1] = Math.Max(pos[1], room.landPos[1]);   // never under the water surface
 		PlayerBase player = CreateCharacter(identity, pos, null, d.charType);
 		if (!player)
 		{
@@ -1528,6 +1543,28 @@ modded class MissionServer
 			return false;
 		}
 		return true;
+	}
+
+	// p if it is dry land, else the nearest dry ground within 150 m (rings of 5 m, 16 directions); else on the water
+	protected vector DL_LandNear(vector p, string who)
+	{
+		if (DL_Veh.WaterY(p[0], p[2], 0.05) < 0)
+			return p;
+		for (float r = 5; r <= 150; r += 5)
+		{
+			for (int i = 0; i < 16; i++)
+			{
+				vector q = p + Vector(i * 22.5, 0, 0).AnglesToVector() * r;
+				if (DL_Veh.WaterY(q[0], q[2], 0.05) < 0)
+				{
+					q[1] = g_Game.SurfaceY(q[0], q[2]);
+					Print(DL_Const.LOG_TAG + who + ": the arrival point is on the water, the boat crew waits on the shore " + r.ToString() + " m away " + q.ToString());
+					return q;
+				}
+			}
+		}
+		Print(DL_Const.LOG_TAG + who + ": no dry land within 150 m of the arrival point, the boat crew waits on the water");
+		return DL_OnWater(p);
 	}
 
 	// p on the water surface (a little above it, it settles)
@@ -2148,7 +2185,8 @@ modded class MissionServer
 			DL_PartyUnit u = new DL_PartyUnit();
 			u.leader = pb;
 			u.car = DL_CarOf(pb);
-			foreach (PlayerBase c : DL_CrewOf(pb))
+			array<PlayerBase> pbCrew = DL_CrewOf(pb);
+			foreach (PlayerBase c : pbCrew)
 				u.crew.Insert(c);
 			units.Insert(u);
 		}
@@ -2198,10 +2236,13 @@ modded class MissionServer
 		DL_Film film;
 		if (journey)
 			film = journey.film;
-		else if (prices[0])
-			film = DL_PartyFilm(z, going);
+		else
+			film = DL_PartyFilm(z, going);      // also a free (0 km) trip, e.g. a short boat crossing: they still see it
 		if (film)
+		{
 			film.biomeFrom = DL_MyBiome();
+			film.biomeVia = z.viaBiome;
+		}
 		string pid = m_DL_Cfg.serverId + "-" + party.id.ToString() + "-" + g_Game.GetTime().ToString();
 		foreach (DL_PartyUnit pu : going)
 		{
@@ -2293,10 +2334,11 @@ modded class MissionServer
 		}
 		if (f.cars.Count() == 1)
 			f.car = f.cars[0];
+		f.km = DL_FilmKm(z);
 		if (cars)
-			f.Add("drive", z.distanceKm);
+			f.Add("drive", f.km);
 		else
-			f.Add("walk", z.distanceKm);
+			f.Add("walk", f.km);
 		return f;
 	}
 
@@ -2443,8 +2485,8 @@ modded class MissionServer
 		DL_Film film;
 		if (journey)
 			film = journey.film;
-		else if (price)
-			film = DL_PlainFilm(z, crew, car);
+		else
+			film = DL_PlainFilm(z, crew, car);  // also a free (0 km) trip, e.g. a short boat crossing
 		if (film)
 		{
 			film.biomeFrom = DL_MyBiome();

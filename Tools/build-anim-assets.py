@@ -7,6 +7,7 @@
 # Usage: python Tools/build-anim-assets.py
 import os, shutil, subprocess, sys, random
 import anim_boat   # Tools/anim_boat.py: the inflatable Boat_01
+import anim_humvee # Tools/anim_humvee.py: the M1025 (Offroad_02)
 import anim_bikes  # Tools/anim_bikes.py: the dirt bike (Motorbike_02), the moped (Motorbike_01), the boat wake
 from PIL import Image, ImageDraw
 
@@ -451,6 +452,7 @@ CAR_PAINTS = {
     'truck': {'green': (92, 108, 70), 'blue': (68, 96, 162), 'orange': (206, 110, 42), 'grey': (138, 138, 138)},
     'bike': {'red': (0, 0, 0), 'green': (0, 0, 0), 'blue': (0, 0, 0), 'yellow': (0, 0, 0), 'grey': (0, 0, 0)},      # anim_bikes.DIRT
     'moped': {'red': (0, 0, 0), 'yellow': (0, 0, 0), 'blue': (0, 0, 0), 'grey': (0, 0, 0)},                         # anim_bikes.MOPED
+    'humvee': {'camo': (0, 0, 0), 'beige': (0, 0, 0), 'grey': (0, 0, 0)},                                         # anim_humvee
     'boat': {'blue': (52, 86, 150), 'black': (52, 52, 58), 'orange': (210, 112, 40), 'camo': (96, 104, 70), 'grey': (138, 138, 138)},
 }
 
@@ -509,7 +511,8 @@ def reshadow(im, dx=6, dy=4, alpha=90):
 def car_sprites(tmp):
     """the player's car in the film, painted here in every colour it comes in (CAR_PAINTS):
          car_sedan_<paint>  the drivable Volga (graffiti painted out): Olga 24, Sarka 120, Gunter 2
-         car_4x4_<paint>    the UAZ: Ada 4x4, M1025
+         car_4x4_<paint>    the UAZ: Ada 4x4
+         car_humvee_<paint> DriveLink's own M1025 (anim_humvee), camo / beige
          car_truck_<paint>  DriveLink's own top-down M3S (top_truck), white canvas on every paint
        each sprite at (0, 0) of its sheet with one even shadow down-right, front at the bottom; sizes in
        DL_FilmPlayer.BuildCar"""
@@ -518,7 +521,7 @@ def car_sprites(tmp):
     volga = clean_paint(volga, (4, 4, 56, 66))
     uaz = Image.open(os.path.join(PACK, MINIDAYZ['uaz_ca'])).convert('RGBA').crop((176, 80, 244, 154))
     drawn = {'truck': top_truck, 'bike': top_bike}
-    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None), ('bike', None), ('moped', None), ('boat', None)):
+    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None), ('humvee', None), ('bike', None), ('moped', None), ('boat', None)):
         for name, rgb in CAR_PAINTS[base].items():
             if base in ('boat', 'bike', 'moped'):
                 # drawn per variant with its own colours; the second picture is drawn over the crew (the boat's motor,
@@ -541,7 +544,9 @@ def car_sprites(tmp):
                 if name == next(iter(CAR_PAINTS[base])):
                     print('car', base, car.size)
                 continue
-            if base in drawn:
+            if base == 'humvee':
+                car = reshadow(anim_humvee.draw(name))
+            elif base in drawn:
                 car = reshadow(drawn[base](rgb))
             else:
                 car = paint(reshadow(im), base, rgb)

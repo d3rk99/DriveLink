@@ -620,7 +620,8 @@ class DL_Journey
 		{
 			bool taken;
 			taken = false;
-			foreach (DL_Traveller t : In(v.idx))
+			array<DL_Traveller> inV = In(v.idx);
+			foreach (DL_Traveller t : inV)
 			{
 				if (t.seat == s)
 					taken = true;

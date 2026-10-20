@@ -72,7 +72,8 @@ class DL_FilmCast
 		string ct = d.charType;
 		ct.ToLower();
 		array<string> skins = new array<string>;
-		foreach (string s : DL_FilmCatalog.List(DL_FilmCatalog.SKIN))
+		array<string> all = DL_FilmCatalog.List(DL_FilmCatalog.SKIN);   // held in a local: a foreach over a return value is freed under it
+		foreach (string s : all)
 		{
 			bool f = FEMALE.Contains("," + s + ",");
 			if (f == ct.Contains("survivorf"))
@@ -184,8 +185,8 @@ class DL_FilmCast
 		}
 		else if (t.Contains("offroad_02"))
 		{
-			look = "humvee";                   // M1025
-			colour = "olive";
+			look = "humvee";                   // M1025: Offroad_02 is the woodland camo one, _Beige the desert one
+			colour = "camo";
 		}
 		else if (t.Contains("truck"))
 			look = "truck";

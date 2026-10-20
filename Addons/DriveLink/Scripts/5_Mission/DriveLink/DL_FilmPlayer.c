@@ -761,8 +761,8 @@ class DL_FilmPlayer
 			SetCar(c, CarTex("sedan", colour, "yellow"), 64, 128, 50, 78, 0.95, 0.92);
 		else if (look == "gunter")        // Gunter 2 (Golf): a short hatchback
 			SetCar(c, CarTex("sedan", colour, "red"), 64, 128, 50, 78, 0.95, 0.82);
-		else if (look == "humvee")        // M1025: wide and long
-			SetCar(c, CarTex("4x4", colour, "olive"), 64, 128, 47, 76, 1.3, 1.06);
+		else if (look == "humvee")        // M1025 (Tools/anim_humvee.py): woodland camo or desert beige
+			SetCar(c, CarTex("humvee", colour, "camo"), 64, 128, HUMVEE_W, HUMVEE_H, 1, 1);
 		else if (look == "bike")          // Motorbike_02, the dirt bike (Tools/anim_bikes.py)
 		{
 			c.kind = "bike";
@@ -802,6 +802,9 @@ class DL_FilmPlayer
 	static const string PAINTS_BIKE = ",red,green,blue,yellow,grey,";
 	static const string PAINTS_MOPED = ",red,yellow,blue,grey,";
 	static const string PAINTS_BOAT = ",blue,black,orange,camo,grey,";
+	static const string PAINTS_HUMVEE = ",camo,beige,grey,";
+	static const float HUMVEE_W = 62;     // the M1025 sprite with its shadow (Tools/build-anim-assets.py prints it)
+	static const float HUMVEE_H = 85;
 
 	// the texture of a car body in a paint it comes in (else its default paint)
 	protected static string CarTex(string base, string colour, string fallback)
@@ -820,6 +823,8 @@ class DL_FilmPlayer
 			have = PAINTS_MOPED;
 		else if (base == "boat")
 			have = PAINTS_BOAT;
+		else if (base == "humvee")
+			have = PAINTS_HUMVEE;
 		if (c == "" || !have.Contains("," + c + ","))
 			c = fallback;
 		return DIR + "car_" + base + "_" + c + "_ca.paa";
@@ -2447,7 +2452,7 @@ class DL_FilmPlayer
 		if (pick == 5)
 		{
 			f.car = "";
-			f.cars.Insert("4x4@green");
+			f.cars.Insert("humvee@beige");
 			f.cars.Insert("bike@red");
 			f.cars.Insert("moped@blue");
 			f.km = 60;
@@ -2485,7 +2490,7 @@ class DL_FilmPlayer
 		{
 			f.car = "";
 			f.cars.Insert("truck@green");
-			f.cars.Insert("4x4@blue");
+			f.cars.Insert("humvee@camo");
 			f.cars.Insert("sedan@white");
 			f.km = 90;
 			f.biomeTo = "field";
