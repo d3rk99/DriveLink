@@ -498,6 +498,7 @@ function travelBox(f) {
     <div class="hint">Costs for trips that START on this server, per 10 km of the zone's distance (set on the Map page; 0 km = free + instant). Food and water are % of a full bar. <b>Saved now, charged in game from the next build step.</b></div>
     <div class="grid2" style="margin-top:6px">
       <div><label>When a player is short of food, water or fuel</label><select id="tMode"><option value="refuse" ${t.mode !== "weakened" ? "selected" : ""}>Refuse the trip</option><option value="weakened" ${t.mode === "weakened" ? "selected" : ""}>Travel anyway, arrive weakened (the road decides)</option></select></div>
+      <div><label>Look in the road film (where trips start/end here)</label><select id="tBiome">${["", "forest", "field", "desert", "snow"].map(b => `<option value="${b}" ${(t.biome || "") === b ? "selected" : ""}>${b ? b[0].toUpperCase() + b.slice(1) : "From the map"}</option>`).join("")}</select></div>
       <div><label>Travel time</label><select id="tTime"><option value="0" ${!t.timeEnabled ? "selected" : ""}>Off: arrive at once</option><option value="1" ${t.timeEnabled ? "selected" : ""}>On: on the road for distance / speed, no login anywhere meanwhile</option></select></div>
     </div>
     <div class="grid3">${TRAVEL_FIELDS.map(([k, label, unit]) => `<div><label>${label} <span class="hint">(${unit})</span></label><input id="t_${k}" type="number" step="0.5" min="0" value="${t[k] ?? 0}"></div>`).join("")}</div>
@@ -507,7 +508,7 @@ function wireTravel(f) {
   const b = $("tSave");
   if (!b) return;
   b.onclick = async () => {
-    const t = { mode: $("tMode").value, timeEnabled: $("tTime").value === "1" };
+    const t = { mode: $("tMode").value, timeEnabled: $("tTime").value === "1", biome: $("tBiome").value };
     TRAVEL_FIELDS.forEach(([k]) => t[k] = +$("t_" + k).value);
     try {
       const out = await post(`/admin/api/servers/${encodeURIComponent(f.id)}/travel`, t);

@@ -106,8 +106,16 @@ def main():
              '// infected also attack down/up/right/left).',
              'class DL_FilmCatalog', '{']
     for cat, names in made.items():
-        lines.append('\tstatic ref array<string> %s = {%s};' % (cat.upper(), ', '.join('"%s"' % n for n in names)))
-    lines += ['}', '']
+        lines.append('\tstatic const string %s = "%s";' % (cat.upper(), ','.join(names)))
+    lines += ['',
+              '\t// the names of one category (SKIN, BODY...) as an array',
+              '\tstatic array<string> List(string csv)',
+              '\t{',
+              '\t\tarray<string> a = new array<string>;',
+              '\t\tcsv.Split(",", a);',
+              '\t\treturn a;',
+              '\t}',
+              '}', '']
     open(CATALOG, 'w', encoding='utf-8').write('\n'.join(lines))
     print({c: len(v) for c, v in made.items()})
 

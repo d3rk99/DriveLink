@@ -3,13 +3,21 @@
 // infected also attack down/up/right/left).
 class DL_FilmCatalog
 {
-	static ref array<string> SKIN = {"aika", "bandit", "biker", "boxer", "def1", "def2", "def3", "doc", "ganzo", "jasmine", "kate", "maniac", "redneck", "survivalist", "veteran"};
-	static ref array<string> BODY = {"downjacket", "gorkajacket", "hunterjacket", "oreljacket", "paramedicjacket", "raiderjacket", "sportjacket", "shirtgray", "shirtgreen", "tshirt", "hoodiegray", "hoodiered", "raincoatblue", "sweater", "cloakbrown", "dress"};
-	static ref array<string> LEGS = {"gorkapants", "hunterpants", "orelpants", "paramedicpants", "sportpants", "workpants", "jeans"};
-	static ref array<string> HEAD = {"gorkahelmet", "helmetarmy", "helmethard", "helmetmoto", "helmetmotored", "helmetnvg", "cowboyhat", "policehat", "warmhat", "baseballcap", "ushanka", "beretred", "bandana", "balaklava", "headlamp"};
-	static ref array<string> MASK = {"gasmask", "weldingmask"};
-	static ref array<string> BACK = {"hunterbackpack", "improvisedbackpack", "mountainbackpack", "schoolbackpack", "taloonbackpack", "improvisedbag"};
-	static ref array<string> VEST = {"vest", "vestpress", "razgruz", "razgruzbig"};
-	static ref array<string> WEAPON = {"ak74rifle", "akmrifle", "aks74urifle", "augrifle", "m4rifle", "fncalrifle", "l85rifle", "rpkrifle", "grozarifle", "svdrifle", "sv98rifle", "vssrifle", "sksrifle", "mosinnagant", "sawedmosin", "repeaterrifle", "sporterrifle", "bm16shotgun", "r670shotgun", "saigashotgun", "sawedizh", "mp5smg", "bizonsmg", "mac10pistol", "glockpistol", "fnxpistol", "magnumpistol", "crossbow", "improvisedbow", "axered", "fireaxe", "baseballbat", "crowbar", "pickaxe", "shovel", "sledgehammer", "pitchfork", "pipewrench", "knifeany", "sword"};
-	static ref array<string> ZED = {"zednormalskin1", "zednormalskin2", "zednormalskin3", "zedarmyskin1", "zedfastskin1"};
+	static const string SKIN = "aika,bandit,biker,boxer,def1,def2,def3,doc,ganzo,jasmine,kate,maniac,redneck,survivalist,veteran";
+	static const string BODY = "downjacket,gorkajacket,hunterjacket,oreljacket,paramedicjacket,raiderjacket,sportjacket,shirtgray,shirtgreen,tshirt,hoodiegray,hoodiered,raincoatblue,sweater,cloakbrown,dress";
+	static const string LEGS = "gorkapants,hunterpants,orelpants,paramedicpants,sportpants,workpants,jeans";
+	static const string HEAD = "gorkahelmet,helmetarmy,helmethard,helmetmoto,helmetmotored,helmetnvg,cowboyhat,policehat,warmhat,baseballcap,ushanka,beretred,bandana,balaklava,headlamp";
+	static const string MASK = "gasmask,weldingmask";
+	static const string BACK = "hunterbackpack,improvisedbackpack,mountainbackpack,schoolbackpack,taloonbackpack,improvisedbag";
+	static const string VEST = "vest,vestpress,razgruz,razgruzbig";
+	static const string WEAPON = "ak74rifle,akmrifle,aks74urifle,augrifle,m4rifle,fncalrifle,l85rifle,rpkrifle,grozarifle,svdrifle,sv98rifle,vssrifle,sksrifle,mosinnagant,sawedmosin,repeaterrifle,sporterrifle,bm16shotgun,r670shotgun,saigashotgun,sawedizh,mp5smg,bizonsmg,mac10pistol,glockpistol,fnxpistol,magnumpistol,crossbow,improvisedbow,axered,fireaxe,baseballbat,crowbar,pickaxe,shovel,sledgehammer,pitchfork,pipewrench,knifeany,sword";
+	static const string ZED = "zednormalskin1,zednormalskin2,zednormalskin3,zedarmyskin1,zedfastskin1";
+
+	// the names of one category (SKIN, BODY...) as an array
+	static array<string> List(string csv)
+	{
+		array<string> a = new array<string>;
+		csv.Split(",", a);
+		return a;
+	}
 }

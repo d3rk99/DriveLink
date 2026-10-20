@@ -11,6 +11,7 @@ class DL_Const
 	static const int RPC_REDIRECT = 4810001;   // server -> client: go to this server
 	static const int RPC_COUNTDOWN = 4810002;  // server -> client: leaving in N s (0 = cancelled)
 	static const int RPC_KICK = 4810003;       // server -> client: show this message (caption, text) and leave the server
+	static const int RPC_FILM = 4810005;       // server -> client: the road film of his trip (DL_Film as JSON)
 	static const int RPC_CREW_WAIT = 4810004;  // server -> client: crew waiting room (phase, here, expected, text, start engine)
 	static const int WAIT_SHOW = 1;            // black screen + "n/m connected"
 	static const int WAIT_DONE = 2;            // lift the black screen (and the driver starts the engine)
@@ -51,6 +52,7 @@ class DL_TravelRules
 	float starveDeathPct = 20;
 	float spareNeededKm;      // refuse mode: car trips longer than this need a spare wheel or a TireRepairKit (0 = off)
 	float flatPct = 3;        // weakened mode (step 4): flat tyre chance per 10 km
+	string biome;             // this server's look in the road film: forest|field|desert|snow, "" = from the map
 }
 
 // Where you come out when you arrive from another server.
@@ -204,6 +206,7 @@ class DL_PlayerData
 	// died there (the target then gives him a fresh character: the road kept his gear)
 	string journey;
 	bool diedOnRoad;
+	ref DL_Film film;         // the road film of the trip (DL_FilmData.c), played on the arrival screen
 }
 
 // A car (M2). Parts (wheels, doors, battery, plugs, radiator...) are attachments and the trunk is cargo, so they are

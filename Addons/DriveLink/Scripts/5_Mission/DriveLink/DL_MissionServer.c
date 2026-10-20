@@ -29,6 +29,7 @@ class DL_CrewTrip
 	int total;                                 // players in the car, driver included
 	ref DL_TravelPrice price;                  // what the trip costs each of them (null = free)
 	ref DL_Journey journey;                    // weakened mode: the road, played once for all of them
+	ref DL_Film film;                          // the road film (any trip with a distance)
 	ref array<string> refused = new array<string>;
 }
 
@@ -56,6 +57,7 @@ class DL_Room
 	int since;                                      // g_Game.GetTime() when the first member came
 	bool going;                                     // car being built / crew being seated
 	string story;                                   // what happened on the road (weakened mode), shown on the black screen
+	float filmSeconds;                              // the longest road film a member is watching
 }
 
 modded class MissionServer
@@ -803,8 +805,9 @@ modded class MissionServer
 		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + ap.name + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString() + carText);
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
 		string sid = identity.GetPlainId();
-		if (d.journey != "" && !car && d.carGroup == "")
-			DL_StoryScreen(sid, d.journey);
+		float filmSec = DL_SendFilmLater(sid, d);
+		if (!car && d.carGroup == "")
+			DL_StoryScreen(sid, d.journey, filmSec);
 		if (car)
 		{
 			// seated once his client is in (same juncture path as the seat spike, DL_PlayerSeat.c)
@@ -859,18 +862,76 @@ modded class MissionServer
 		m_DL_Leaving.Remove(sid);
 		DL_Confirm(sid, r.token);
 		Print(DL_Const.LOG_TAG + sid + " died on the road from " + r.from + ": fresh character at " + pos.ToString() + " (his gear is gone)");
-		DL_StoryScreen(sid, "You died on the road.\n" + d.journey);
+		DL_StoryScreen(sid, "You died on the road.\n" + d.journey, DL_SendFilmLater(sid, d));
 		return player;
 	}
 
-	// the black screen with the road's story for a few seconds (arrivals that don't go through a waiting room)
-	protected void DL_StoryScreen(string sid, string story)
+	// the black screen with the road's story (and film) for a while (arrivals that don't go through a waiting room)
+	protected void DL_StoryScreen(string sid, string story, float filmSeconds)
 	{
-		if (story == "")
+		if (story == "" && filmSeconds <= 0)
 			return;
-		for (int i = 0; i < 9; i++)
+		int secs = Math.Max(9, Math.Ceil(filmSeconds) + 2);
+		for (int i = 0; i < secs; i++)
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 2000 + 1000 * i, false, sid, DL_Const.WAIT_SHOW, "On the road", false, story);
-		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 12000, false, sid, DL_Const.WAIT_DONE, "", false, "");
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 2000 + 1000 * secs, false, sid, DL_Const.WAIT_DONE, "", false, "");
+	}
+
+	// ---------------- road film ----------------
+
+	// this server's look in the film: the Travel setting, else from the map
+	protected string DL_MyBiome()
+	{
+		if (m_DL_Cfg.travel && m_DL_Cfg.travel.biome != "")
+			return m_DL_Cfg.travel.biome;
+		string world;
+		g_Game.GetWorldName(world);
+		return DL_Film.BiomeOfWorld(world);
+	}
+
+	// no road events (refuse mode): the crew simply drives (or walks) the distance
+	protected DL_Film DL_PlainFilm(DL_Zone z, array<PlayerBase> crew, CarScript car)
+	{
+		DL_Film f = new DL_Film();
+		f.km = z.distanceKm;
+		if (car)
+			f.car = DL_FilmCast.CarSprite(car.GetType());
+		foreach (PlayerBase m : crew)
+		{
+			if (m && m.GetIdentity())
+				f.crew.Insert(DL_FilmCast.From(m.GetIdentity().GetName(), m.GetIdentity().GetPlainId(), m_DL_Snap.Capture(m)));
+		}
+		if (car)
+			f.Add("drive", z.distanceKm);
+		else
+			f.Add("walk", z.distanceKm);
+		return f;
+	}
+
+	// the arriving traveller's client gets his film once it has loaded (sent twice, the client plays it once);
+	// returns how long it plays (0 = no film)
+	protected float DL_SendFilmLater(string sid, DL_PlayerData d)
+	{
+		if (!d || !d.film || d.film.events.Count() == 0)
+			return 0;
+		d.film.biomeTo = DL_MyBiome();
+		string json;
+		string err;
+		JsonFileLoader<DL_Film>.MakeData(d.film, json, err, false);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendFilm, 2500, false, sid, json);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendFilm, 4500, false, sid, json);
+		Print(DL_Const.LOG_TAG + sid + "'s road film: " + d.film.events.Count().ToString() + " scenes, " + d.film.biomeFrom + " -> " + d.film.biomeTo + ", " + d.film.Duration().ToString() + " s");
+		return d.film.Duration();
+	}
+
+	protected void DL_SendFilm(string sid, string json)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb || !pb.GetIdentity())
+			return;
+		ScriptRPC rpc = new ScriptRPC();
+		rpc.Write(json);
+		rpc.Send(null, DL_Const.RPC_FILM, true, pb.GetIdentity());
 	}
 
 	// ---------------- M3 waiting room ----------------
@@ -901,6 +962,7 @@ modded class MissionServer
 			room.expected = d.crewCount;
 		if (d.journey != "")
 			room.story = d.journey;
+		room.filmSeconds = Math.Max(room.filmSeconds, DL_SendFilmLater(sid, d));
 		vector fwd = Vector(room.carYaw, 0, 0).AnglesToVector();
 		vector right = Vector(room.carYaw + 90, 0, 0).AnglesToVector();
 		vector pos;
@@ -955,6 +1017,8 @@ modded class MissionServer
 			int goDelay = 2000;
 			if (room.story != "")
 				goDelay = 9000;
+			if (room.filmSeconds > 0)
+				goDelay = Math.Max(goDelay, room.filmSeconds * 1000 + 2500); // the film plays on the black screen first
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomGo, goDelay, false, group);
 		}
 		if (!m_DL_RoomTicking)
@@ -1450,6 +1514,14 @@ modded class MissionServer
 			jtext.Replace("\n", " | ");
 			Print(DL_Const.LOG_TAG + sid + "'s road to " + z.to + ": driven " + Math.Round(journey.drivenKm).ToString() + " km, walked " + Math.Round(journey.walkedKm).ToString() + " km, " + journey.Alive().ToString() + "/" + journey.crew.Count().ToString() + " alive, car lost " + journey.carLost.ToString() + ", " + journey.seconds.ToString() + " s: " + jtext);
 		}
+		// the road film: the journey's scenes, or (refuse mode / no events) the plain drive or walk with the crew
+		DL_Film film;
+		if (journey)
+			film = journey.film;
+		else if (price)
+			film = DL_PlainFilm(z, crew, car);
+		if (film)
+			film.biomeFrom = DL_MyBiome();
 		if (car)
 		{
 			// stop it where it is while the hub answers: engine off, handbrake, no damage (Car.EngineStop/SetHandbrake,
@@ -1463,7 +1535,7 @@ modded class MissionServer
 			int alone = 0;
 			if (car)
 				alone = 1;
-			DL_SendDepart(pb, z, car, "", -1, alone, price, journey);
+			DL_SendDepart(pb, z, car, "", -1, alone, price, journey, film);
 			return;
 		}
 		DL_CrewTrip trip = new DL_CrewTrip();
@@ -1473,6 +1545,7 @@ modded class MissionServer
 		trip.total = crew.Count();
 		trip.price = price;
 		trip.journey = journey;
+		trip.film = film;
 		for (int i = 1; i < crew.Count(); i++)
 		{
 			PlayerBase m = crew[i];
@@ -1481,7 +1554,7 @@ modded class MissionServer
 			m.SetAllowDamage(false);
 			trip.waiting++;
 			m_DL_TripOf.Set(msid, trip);
-			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m), crew.Count(), price, journey);
+			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m), crew.Count(), price, journey, film);
 		}
 		Print(DL_Const.LOG_TAG + sid + " drives " + car.GetType() + " to " + z.to + " with " + trip.waiting.ToString() + " passenger(s): their trips first, his own once all are taken");
 	}
@@ -1490,7 +1563,7 @@ modded class MissionServer
 	// crewCount = players in the car (driver included) for the target's waiting room, 0 = on foot.
 	// price = the trip's cost (null = free): taken off the snapshot that travels, never off the live character/car
 	// journey != null (weakened mode): his snapshot was made and charged by the road already, use it as it is
-	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat, int crewCount, DL_TravelPrice price, DL_Journey journey)
+	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat, int crewCount, DL_TravelPrice price, DL_Journey journey, DL_Film film)
 	{
 		string sid = pb.GetIdentity().GetPlainId();
 		DL_DepartReq q = new DL_DepartReq();
@@ -1514,6 +1587,8 @@ modded class MissionServer
 			if (price)
 				q.travelSeconds = price.seconds;
 		}
+		if (film)
+			q.payload.film = film;
 		string carText = "on foot";
 		if (car && jt)
 		{
@@ -1557,7 +1632,7 @@ modded class MissionServer
 		PlayerBase driver = DL_FindPlayer(trip.driverSid);
 		if (trip.refused.Count() == 0 && driver && trip.car && DL_CarOf(driver) == trip.car)
 		{
-			DL_SendDepart(driver, trip.zone, trip.car, "", -1, trip.total, trip.price, trip.journey);
+			DL_SendDepart(driver, trip.zone, trip.car, "", -1, trip.total, trip.price, trip.journey, trip.film);
 			return;
 		}
 		string why = "a passenger could not travel";

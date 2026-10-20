@@ -28,6 +28,7 @@ class DL_Journey
 	float drivenKm;
 	float walkedKm;
 	int seconds;              // on the road (travel time on), else 0
+	ref DL_Film film = new DL_Film(); // the same road as scenes, for the arrival film
 
 	string Story()
 	{
@@ -111,7 +112,11 @@ class DL_Journey
 		{
 			j.car = carSnap.Capture(liveCar);
 			j.carHolder = j.crew[0].sid;
+			j.film.car = DL_FilmCast.CarSprite(liveCar.GetType());
 		}
+		j.film.km = z.distanceKm;
+		foreach (DL_Traveller ft : j.crew)
+			j.film.crew.Insert(DL_FilmCast.From(ft.name, ft.sid, ft.d));
 		float km = z.distanceKm;
 		float done = 0;
 		bool luckyFuel = false;
@@ -142,17 +147,23 @@ class DL_Journey
 						luckyFuel = true;
 						cp.fuelL = j.FuelHave(liveCar, drvD); // what was left goes first
 						j.story.Insert("Ran out of gas " + Math.Round(at).ToString() + " km in. Luckily, " + j.Who(finder) + " found some fuel.");
+						j.film.Add("fuel", done, finder.name, "found");
 					}
 					else
 					{
 						j.carLost = true;
 						j.story.Insert("Ran out of gas " + Math.Round(at).ToString() + " km in and had to leave the " + DL_Journey.CarName(j.car) + " behind.");
 						driving = false;
+						string seeker = "";
+						if (finder)
+							seeker = finder.name;
+						j.film.Add("fuel", done, seeker, "lost");
 					}
 				}
 				if (driving)
 				{
 					DL_TravelCost.ChargeCar(j.car, liveCar, cp, drvD);
+					j.film.Add("drive", leg);
 					if (weakened && j.FlatTyre(t, f, liveCar, at))
 						driving = false;
 				}
@@ -190,6 +201,7 @@ class DL_Journey
 					{
 						tv.dead = true;
 						j.story.Insert(j.Who(tv) + " died from a bite " + Math.Round(at).ToString() + " km in.");
+						j.film.Add("attack", at, tv.name, "died");
 					}
 					else
 					{
@@ -197,13 +209,17 @@ class DL_Journey
 						if (j.crew.Count() == 1)
 							was = " were"; // "You were", not "You was"
 						j.story.Insert(j.Who(tv) + was + " attacked by infected " + Math.Round(at).ToString() + " km in.");
+						j.film.Add("attack", at, tv.name, "hurt");
 					}
 				}
 			}
 			if (driving)
 				j.drivenKm += leg;
 			else
+			{
 				j.walkedKm += leg;
+				j.film.Add("walk", leg);
+			}
 			done += leg;
 		}
 		// hunger and thirst: what nothing could pay
@@ -226,10 +242,14 @@ class DL_Journey
 			{
 				th.dead = true;
 				j.story.Insert(j.Who(th) + " didn't make it: there wasn't enough food and water.");
+				j.film.Add("died", km, th.name, "hunger");
 			}
 		}
 		if (anyHungry && weakened)
+		{
 			j.story.Insert("Food and water ran low: everyone had to ration.");
+			j.film.Add("ration", km);
+		}
 		if (t.timeEnabled)
 			j.seconds = Math.Round(j.drivenKm / Math.Max(0.5, t.speedCarKmh) * 3600 + j.walkedKm / Math.Max(0.5, t.speedFootKmh) * 3600);
 		if (j.walkedKm > 0 && j.car)
@@ -355,6 +375,7 @@ class DL_Journey
 			spare.cIdx = -1;
 			spare.quickbar = -1;
 			story.Insert("Blew a tyre " + where + ". " + Who(fixer) + " put on the spare.");
+			film.Add("flat", at, fixer.name, "spare");
 			return false;
 		}
 		// 2. a tyre repair kit: patched to damaged health, the kit loses a use (vanilla: quantity 0-100, PluginRepairing)
@@ -374,6 +395,7 @@ class DL_Journey
 					if (fmx > 0)
 						flat.health = fmx * 0.5;
 					story.Insert("Blew a tyre " + where + ". " + Who(fixer) + " patched it with the repair kit.");
+					film.Add("flat", at, fixer.name, "kit");
 					return false;
 				}
 			}
@@ -381,6 +403,7 @@ class DL_Journey
 		// 3. nothing: the car stays here
 		carLost = true;
 		story.Insert("Blew a tyre " + where + " with no spare and no repair kit: left the " + CarName(car) + " behind.");
+		film.Add("flat", at, fixer.name, "none");
 		return true;
 	}
 
@@ -418,6 +441,7 @@ class DL_Journey
 		int alive = Alive();
 		foreach (DL_Traveller t : crew)
 		{
+			t.d.film = film;
 			t.d.journey = text;
 			t.d.diedOnRoad = t.dead;
 			t.d.car = null;

@@ -54,6 +54,8 @@ pub struct TravelRules {
     pub spare_needed_km: f64,
     /// weakened mode (step 4): chance of a flat tyre per 10 km, higher on worn wheels
     pub flat_pct: f64,
+    /// the server's look in the road film: forest | field | desert | snow, "" = from the map
+    pub biome: String,
 }
 
 impl Default for TravelRules {
@@ -76,6 +78,7 @@ impl Default for TravelRules {
             starve_death_pct: 20.0,
             spare_needed_km: 0.0,
             flat_pct: 3.0,
+            biome: String::new(),
         }
     }
 }
@@ -85,6 +88,9 @@ impl TravelRules {
     pub fn clamped(mut self) -> Self {
         if self.mode != "weakened" {
             self.mode = "refuse".into();
+        }
+        if !["forest", "field", "desert", "snow"].contains(&self.biome.as_str()) {
+            self.biome = String::new();
         }
         let pct = |v: f64| if v.is_finite() { v.clamp(0.0, 100.0) } else { 0.0 };
         for v in [&mut self.food_foot_pct, &mut self.water_foot_pct, &mut self.food_car_pct, &mut self.water_car_pct, &mut self.wear_engine_pct, &mut self.wear_wheels_pct,
