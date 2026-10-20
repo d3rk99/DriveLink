@@ -17,7 +17,10 @@ modded class MissionGameplay
 	protected string m_DL_WaitMsg;
 	protected float m_DL_WaitAge;      // seconds since the last update from the server
 	protected bool m_DL_StartEngine;
-	protected ref DL_FilmSpike m_DL_Film = new DL_FilmSpike(); // F9 debug window (road animation engine spike)
+	protected ref DL_FilmPlayer m_DL_Film = new DL_FilmPlayer(); // the road film (RPC_FILM); F9 = demo film
+	protected bool m_DL_F9WasDown;
+	protected TextWidget m_DL_Title;
+	protected bool m_DL_TextLow;        // the black screen's texts moved under the film
 
 	override void OnMissionStart()
 	{
@@ -29,7 +32,7 @@ modded class MissionGameplay
 	{
 		GetDayZGame().Event_OnRPC.Remove(DL_OnRpc);
 		if (m_DL_Film)
-			m_DL_Film.Close();
+			m_DL_Film.Stop();
 		DL_WaitHide();
 		if (m_DL_WaitRoot)
 			m_DL_WaitRoot.Unlink();
@@ -38,6 +41,13 @@ modded class MissionGameplay
 
 	protected void DL_OnRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
 	{
+		if (rpc_type == DL_Const.RPC_FILM)
+		{
+			string fj;
+			if (ctx.Read(fj) && m_DL_Film)
+				m_DL_Film.PlayJson(fj);
+			return;
+		}
 		if (rpc_type == DL_Const.RPC_CREW_WAIT)
 		{
 			int phase;
@@ -86,7 +96,21 @@ modded class MissionGameplay
 	{
 		super.OnUpdate(timeslice);
 		if (m_DL_Film)
+		{
+			// F9: the demo film (every scene), for testing; F9 again or Space stops it
+			bool f9 = KeyState(KeyCode.KC_F9) != 0;
+			if (f9 && !m_DL_F9WasDown)
+			{
+				if (m_DL_Film.IsPlaying())
+					m_DL_Film.Stop();
+				else
+					m_DL_Film.Play(DL_FilmPlayer.Demo());
+			}
+			m_DL_F9WasDown = f9;
 			m_DL_Film.Update(timeslice);
+			if (m_DL_WaitShown)
+				DL_TextLayout(m_DL_Film.IsPlaying());
+		}
 		if (m_DL_WaitWanted)
 		{
 			m_DL_WaitAge += timeslice;
@@ -132,9 +156,9 @@ modded class MissionGameplay
 			int statusH = h * 0.045;
 			int lineH = h * 0.034;
 			int top = h * 0.30;
-			TextWidget title = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, top, w, titleH, flags | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 200, 200, 200), 1, m_DL_WaitRoot));
-			if (title)
-				title.SetText("DriveLink");
+			m_DL_Title = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, top, w, titleH, flags | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 200, 200, 200), 1, m_DL_WaitRoot));
+			if (m_DL_Title)
+				m_DL_Title.SetText("DriveLink");
 			m_DL_WaitText = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, top + titleH * 1.6, w, statusH, flags | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 255, 255, 255), 1, m_DL_WaitRoot));
 			// the road's story (travel step 4): up to 10 lines under the status, wrapped by DL_StoryWrap
 			int storyTop = top + titleH * 1.6 + statusH * 1.8;
@@ -197,10 +221,39 @@ modded class MissionGameplay
 		return res;
 	}
 
+	// with a road film on screen the title, status and story move under it (the film takes the top 2/3)
+	protected void DL_TextLayout(bool low)
+	{
+		if (low == m_DL_TextLow || !m_DL_WaitRoot)
+			return;
+		m_DL_TextLow = low;
+		int w;
+		int h;
+		GetScreenSize(w, h);
+		float titleH = h * 0.035;
+		float statusH = h * 0.045;
+		float lineH = h * 0.034;
+		float top = h * 0.30;
+		if (low)
+			top = h * 0.67;
+		if (m_DL_Title)
+			m_DL_Title.SetPos(0, top);
+		if (m_DL_WaitText)
+			m_DL_WaitText.SetPos(0, top + titleH * 1.1);
+		float storyTop = top + titleH * 1.1 + statusH * 1.3;
+		for (int i = 0; i < m_DL_StoryLines.Count(); i++)
+		{
+			m_DL_StoryLines[i].SetPos(0, storyTop + i * lineH * 1.15);
+			m_DL_StoryLines[i].Show(!low || i < 5); // under the film: room for 5 lines
+		}
+	}
+
 	protected void DL_WaitHide()
 	{
 		if (!m_DL_WaitShown)
 			return;
+		if (m_DL_Film && m_DL_Film.IsPlaying())
+			m_DL_Film.Stop();
 		m_DL_WaitShown = false;
 		if (m_DL_WaitRoot)
 			m_DL_WaitRoot.Show(false);
