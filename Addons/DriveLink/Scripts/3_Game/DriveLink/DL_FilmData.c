@@ -7,7 +7,10 @@ class DL_FilmActor
 {
 	string name;
 	string skin;                                  // DL_FilmCatalog.SKIN
-	ref array<string> layers = new array<string>; // legs, body, vest, back, head, mask, weapon (any may be missing)
+	ref array<string> layers = new array<string>; // legs, body, vest, back, head, mask (any may be missing);
+	                                              // "layer@colour" = the grey copy tinted (DL_FilmCast.COLOURS)
+	string hand;                                  // weapon in the hands (DL_FilmCatalog.WEAPON) or ""
+	string back;                                  // weapon slung on the back or ""
 }
 
 // One thing that happened on the road, in order.
@@ -23,7 +26,8 @@ class DL_FilmEvent
 
 class DL_Film
 {
-	static const float MAX_SECONDS = 40;
+	static const float MAX_SECONDS = 45;
+	static const float END_SECONDS = 4;
 	string car;                                   // "uaz" | "volga" | "" (on foot)
 	float km;
 	string biomeFrom;                             // forest | field | desert | snow
@@ -52,16 +56,18 @@ class DL_Film
 	{
 		if (e.kind == "drive" || e.kind == "walk")
 			return Math.Clamp(e.km * 0.15, 3, 8);
-		if (e.kind == "flat" || e.kind == "fuel")
-			return 7;
+		if (e.kind == "flat")
+			return 10;
+		if (e.kind == "fuel")
+			return 11;
 		if (e.kind == "attack")
-			return 5;
+			return 8;
 		return 3;                                 // ration, died
 	}
 
 	float Duration()
 	{
-		float d = 2;                              // fade in / out
+		float d = 2 + END_SECONDS;                // fade in + the crew walking off at the end
 		foreach (DL_FilmEvent e : events)
 			d += SceneSeconds(e);
 		return Math.Min(d, MAX_SECONDS);

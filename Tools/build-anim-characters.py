@@ -2,10 +2,15 @@
 # MiniDayZ draws a survivor as stacked layers (skin, pants, jacket, vest, backpack, head, weapon), every layer with the
 # same animations. Their frames sit at slightly different places per sheet (data.js has the table), so each layer is
 # re-packed here into ONE uniform sheet the mod can address with the same math for every layer:
-#   128 x 256 (people/gear/weapons) or 128 x 512 (infected), 32 x 32 cells, 4 frames per row:
-#     row 0 idle_down  1 idle_up  2 idle_right  3 idle_left  4 run_down  5 run_up  6 run_right  7 run_left
-#     infected also: 8 attack_down  9 attack_up  10 attack_right  11 attack_left
-#   (1-frame animations are repeated across the row; 30x30 frames are centred in the 32x32 cell)
+#   people/gear/weapons 128 x 1024, infected 128 x 512; 32 x 32 cells, 4 frames per row, directions down/up/right/left:
+#     rows 0-3 idle  4-7 run  8-11 aim (firearm, MiniDayZ "pistol_")  12-15 swing (melee or a punch, "axe_")
+#     16 using an item (crouched, working)
+#     weapons only, the weapon SLUNG ON THE BACK (MiniDayZ "h_*"): 17-20 idle  21-24 run  25-28 while the hands fight
+#     (a firearm on the back while swinging = "h_axe_", a melee on the back while aiming = "h_pistol_")
+#     infected: 0-7 as above (walk = run), 8-11 attack
+#   (1-frame animations are repeated across the row; 30x30 frames are centred in the 32x32 cell; a pose a layer
+#   doesn't have falls back to its idle frame of that direction)
+# Clothing also gets a grey "...w" copy the mod tints with the item's colour from its DayZ class name (Hoodie_Blue).
 # Also writes Addons/DriveLink/Scripts/3_Game/DriveLink/DL_FilmCatalog.c (generated: which layers exist).
 # Usage: python Tools/build-anim-characters.py [path to the MiniDayZ .apk]
 import io, json, os, subprocess, sys, zipfile
@@ -17,8 +22,16 @@ OUT = os.path.join(REPO, 'Addons', 'DriveLink', 'gui', 'anim', 'chr')
 CATALOG = os.path.join(REPO, 'Addons', 'DriveLink', 'Scripts', '3_Game', 'DriveLink', 'DL_FilmCatalog.c')
 IMAGE_TO_PAA = r'E:\Steam\steamapps\common\DayZ Tools\Bin\ImageToPAA\ImageToPAA.exe'
 
-ROWS = ['idle_down', 'idle_up', 'idle_right', 'idle_left', 'run_down', 'run_up', 'run_right', 'run_left']
-ZED_ROWS = ROWS + ['attack_down', 'attack_up', 'attack_right', 'attack_left']
+DIRS = ['down', 'up', 'right', 'left']
+ROWS = ['idle_' + d for d in DIRS] + ['run_' + d for d in DIRS]
+ZED_ROWS = ROWS + ['attack_' + d for d in DIRS]
+# one entry per row: candidate animation names (the first that exists), lower case
+PEOPLE_ROWS = [[a] for a in ROWS] + [['pistol_' + d] for d in DIRS] + [['axe_' + d] for d in DIRS] + [['using_item']]
+WEAPON_ROWS = PEOPLE_ROWS + [['h_twohand_' + d] for d in DIRS] + [['h_run_' + d] for d in DIRS] + \
+    [['h_axe_' + d, 'h_pistol_' + d] for d in DIRS]
+MELEE = {'axe_red', 'fireaxe', 'baseball_bat', 'crowbar', 'pickaxe', 'shovel', 'sledgehammer', 'pitchfork',
+         'pipe_wrench', 'knife_any', 'sword'}
+TINTED = {'body', 'legs', 'head', 'back', 'vest'}   # categories that get a grey copy for colour tinting
 
 CATEGORIES = {  # category -> MiniDayZ type names (first image of the type, without -sheet0.png)
     'skin': ['player_skin_aika', 'player_skin_bandit', 'player_skin_biker', 'player_skin_boxer', 'player_skin_def_1',
@@ -49,6 +62,30 @@ def short(name):
     return name.replace('player_skin_', '').replace('_', '')
 
 
+def grey(img):
+    """the layer in grey, brightened so its light parts are near white: the mod's SetColor multiplies it"""
+    px = img.load()
+    lum = []
+    for y in range(img.height):
+        for x in range(img.width):
+            r, g, b, a = px[x, y]
+            if a > 0:
+                lum.append(0.3 * r + 0.59 * g + 0.11 * b)
+    if not lum:
+        return img.copy()
+    lum.sort()
+    k = 225.0 / max(lum[int(len(lum) * 0.75)], 1)
+    out = img.copy()
+    op = out.load()
+    for y in range(img.height):
+        for x in range(img.width):
+            r, g, b, a = px[x, y]
+            if a > 0:
+                v = min(255, int((0.3 * r + 0.59 * g + 0.11 * b) * k))
+                op[x, y] = (v, v, v, a)
+    return out
+
+
 def main():
     z = zipfile.ZipFile(APK)
     data = json.loads(z.read('assets/www/data.js').decode('utf-8-sig'))
@@ -66,23 +103,45 @@ def main():
             sheets[path] = Image.open(io.BytesIO(z.read('assets/www/' + path))).convert('RGBA')
         return sheets[path]
 
+    def to_paa(img, base):
+        png = os.path.join(OUT, 'chr_%s_ca.png' % base)
+        img.save(png)
+        paa = png[:-4] + '.paa'
+        res = subprocess.run([IMAGE_TO_PAA, png, paa], capture_output=True, text=True)
+        os.remove(png)
+        if res.returncode != 0 or not os.path.exists(paa):
+            print('FAILED', base, (res.stdout + res.stderr)[-200:])
+            sys.exit(1)
+
     os.makedirs(OUT, exist_ok=True)
     made = {c: [] for c in CATEGORIES}
+    made['melee'] = []
+    made['tint'] = []
     for cat, names in CATEGORIES.items():
-        rows = ZED_ROWS if cat == 'zed' else ROWS
+        if cat == 'zed':
+            rows, height = [[a] for a in ZED_ROWS], 512
+        elif cat == 'weapon':
+            rows, height = WEAPON_ROWS, 1024
+        else:
+            rows, height = PEOPLE_ROWS, 1024
         for name in names:
             t = by_first.get(name)
             if not t:
                 print('not in data.js:', name)
                 continue
-            anims = {a[0]: a for a in t[7]}
-            out = Image.new('RGBA', (128, 512 if cat == 'zed' else 256), (0, 0, 0, 0))
+            anims = {a[0].lower(): a for a in t[7]}
+            out = Image.new('RGBA', (128, height), (0, 0, 0, 0))
             missing = []
-            for r, an in enumerate(rows):
-                a = anims.get(an)
+            for r, cands in enumerate(rows):
+                a = next((anims[c] for c in cands if c in anims), None)
                 if not a:
-                    missing.append(an)
-                    continue
+                    missing.append(cands[0])
+                    if cands[0].startswith('h_'):
+                        continue                     # no back pose: nothing drawn
+                    d = cands[0].rsplit('_', 1)[-1]
+                    a = anims.get('idle_' + d) or anims.get('idle_down')
+                    if not a:
+                        continue
                 frames = a[7]
                 for c in range(4):
                     f = frames[c % len(frames)]
@@ -91,19 +150,17 @@ def main():
                     out.paste(cell, (c * 32 + (32 - w) // 2, r * 32 + (32 - h) // 2), cell)
             if missing:
                 print(name, 'missing', missing)
-            png = os.path.join(OUT, 'chr_%s_ca.png' % short(name))
-            out.save(png)
-            paa = png[:-4] + '.paa'
-            res = subprocess.run([IMAGE_TO_PAA, png, paa], capture_output=True, text=True)
-            os.remove(png)
-            if res.returncode != 0 or not os.path.exists(paa):
-                print('FAILED', name, (res.stdout + res.stderr)[-200:])
-                sys.exit(1)
+            to_paa(out, short(name))
             made[cat].append(short(name))
+            if cat == 'weapon' and name in MELEE:
+                made['melee'].append(short(name))
+            if cat in TINTED:
+                to_paa(grey(out), short(name) + 'w')
+                made['tint'].append(short(name))
     # the catalog the mod reads (generated)
     lines = ['// GENERATED by Tools/build-anim-characters.py - do not edit. Which road-film character layers exist',
-             '// (gui/anim/chr/chr_<name>_ca.paa, 32x32 cells, rows: idle down/up/right/left, run down/up/right/left;',
-             '// infected also attack down/up/right/left).',
+             '// (gui/anim/chr/chr_<name>_ca.paa, 32x32 cells; rows in Tools/build-anim-characters.py). MELEE: weapons',
+             '// that swing (the rest aim and shoot); TINT: layers with a grey copy chr_<name>w_ca.paa for colouring.',
              'class DL_FilmCatalog', '{']
     for cat, names in made.items():
         lines.append('\tstatic const string %s = "%s";' % (cat.upper(), ','.join(names)))

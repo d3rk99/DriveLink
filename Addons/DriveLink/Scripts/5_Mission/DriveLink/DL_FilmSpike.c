@@ -73,6 +73,12 @@ class DL_Sprite
 		m_Clip.Show(on);
 	}
 
+	// multiplies the sheet's colours (tinted clothing)
+	void SetColor(int argb)
+	{
+		m_Sheet.SetColor(argb);
+	}
+
 	// degrees (lying people in the film)
 	void Turn(float deg)
 	{

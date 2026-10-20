@@ -1,6 +1,8 @@
 // DriveLink road film - dresses a traveller's film survivor from his real DayZ gear (his snapshot): the item in each
 // clothing slot is matched by class-name keywords to the closest MiniDayZ layer (DL_FilmCatalog). Female characters
-// (SurvivorF_*) get a female base skin; the skin is fixed per player (picked from the steam id).
+// (SurvivorF_*) get a female base skin; the skin is fixed per player (picked from the steam id). Clothing in a plain
+// colour (Hoodie_Blue, MotoHelmet_Red...) is drawn as the layer's grey copy tinted that colour. The weapon in the hands
+// is drawn in the hands, a rifle on the shoulder or a melee weapon in the melee slot is slung on the back.
 
 class DL_FilmCast
 {
@@ -33,6 +35,35 @@ class DL_FilmCast
 	static const string BACK = "mountain=mountainbackpack;taloon=taloonbackpack;hunt=hunterbackpack;child=schoolbackpack;school=schoolbackpack;improvised=improvisedbackpack;courier=improvisedbag;burlap=improvisedbag;leather=improvisedbackpack;=hunterbackpack";
 	static const string VEST = "press=vestpress;chestholster=razgruz;chestrig=razgruz;smersh=razgruzbig;plate=razgruzbig;ukass=razgruzbig;assault=razgruzbig;=vest";
 	static const string WEAPON = "aks74u=aks74urifle;akm=akmrifle;ak74=ak74rifle;ak101=ak74rifle;aug=augrifle;m4a1=m4rifle;m16=m4rifle;fal=fncalrifle;svd=svdrifle;vss=vssrifle;asval=vssrifle;sks=sksrifle;sawedoff_mosin=sawedmosin;mosin=mosinnagant;winchester=repeaterrifle;repeater=repeaterrifle;cz527=sporterrifle;cr527=sporterrifle;ruger=sporterrifle;izh18=sporterrifle;b95=sporterrifle;scout=sv98rifle;m70=sv98rifle;saiga=saigashotgun;mp133=r670shotgun;remington=r670shotgun;sawedoff_izh=sawedizh;izh43=bm16shotgun;bk43=bm16shotgun;mp5=mp5smg;ump=mp5smg;bizon=bizonsmg;pp19=bizonsmg;mac=mac10pistol;cz61=mac10pistol;glock=glockpistol;fnx=fnxpistol;cz75=fnxpistol;magnum=magnumpistol;deagle=magnumpistol;crossbow=crossbow;bow=improvisedbow;fireaxe=fireaxe;hatchet=axered;woodaxe=fireaxe;axe=axered;bat=baseballbat;crowbar=crowbar;pickaxe=pickaxe;shovel=shovel;sledge=sledgehammer;pitchfork=pitchfork;wrench=pipewrench;machete=knifeany;knife=knifeany;sword=sword";
+
+	// colour words in DayZ class names (a whole "_" part of the name, lower case) -> DL_FilmPlayer.Tint names
+	static const string COLOURS = ",black,white,gray,grey,red,blue,green,yellow,orange,pink,brown,beige,olive,lime,purple,violet,khaki,tan,navy,lightblue,darkblue,bluedark,darkgreen,greendark,maroon,wine,";
+
+	static string ColourOf(string type)
+	{
+		string t = type;
+		t.ToLower();
+		array<string> parts = new array<string>;
+		t.Split("_", parts);
+		for (int i = parts.Count() - 1; i > 0; i--)
+		{
+			if (COLOURS.Contains("," + parts[i] + ","))
+				return parts[i];
+		}
+		return "";
+	}
+
+	// the layer for a clothing item: "layer" or "layer@colour" when it has a plain colour and a grey copy
+	static string Dress(string type, string table)
+	{
+		string l = Match(type, table);
+		if (l == "")
+			return "";
+		string c = ColourOf(type);
+		if (c != "" && ("," + DL_FilmCatalog.TINT + ",").Contains("," + l + ","))
+			return l + "@" + c;
+		return l;
+	}
 
 	static DL_FilmActor From(string name, string steamId, DL_PlayerData d)
 	{
@@ -67,15 +98,15 @@ class DL_FilmCast
 			if (!it || it.parent != 0)
 				continue;
 			if (it.slot == "Legs")
-				legs = Match(it.type, LEGS);
+				legs = Dress(it.type, LEGS);
 			else if (it.slot == "Body")
-				body = Match(it.type, BODY);
+				body = Dress(it.type, BODY);
 			else if (it.slot == "Vest")
-				vest = Match(it.type, VEST);
+				vest = Dress(it.type, VEST);
 			else if (it.slot == "Back")
-				back = Match(it.type, BACK);
+				back = Dress(it.type, BACK);
 			else if (it.slot == "Headgear")
-				head = Match(it.type, HEAD);
+				head = Dress(it.type, HEAD);
 			else if (it.slot == "Mask")
 				mask = Match(it.type, MASK);
 			else if (it.slot == DL_Const.SLOT_HANDS)
@@ -85,11 +116,12 @@ class DL_FilmCast
 			else if (it.slot == "Melee")
 				melee = Match(it.type, WEAPON);
 		}
-		if (weapon == "")
-			weapon = shoulder;
-		if (weapon == "")
-			weapon = melee;
-		// draw order: legs, body, vest, back, head, mask, weapon
+		// one in the hands, one on the back (the shoulder rifle first, else the melee weapon)
+		a.hand = weapon;
+		a.back = shoulder;
+		if (a.back == "")
+			a.back = melee;
+		// draw order: legs, body, vest, back, head, mask (the weapons are drawn by the player, on top)
 		array<string> order = new array<string>;
 		order.Insert(legs);
 		order.Insert(body);
@@ -97,7 +129,6 @@ class DL_FilmCast
 		order.Insert(back);
 		order.Insert(head);
 		order.Insert(mask);
-		order.Insert(weapon);
 		foreach (string l : order)
 		{
 			if (l != "")
