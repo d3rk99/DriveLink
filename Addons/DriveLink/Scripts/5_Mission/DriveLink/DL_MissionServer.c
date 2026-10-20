@@ -771,6 +771,9 @@ modded class MissionServer
 			return DL_BuildIntoRoom(identity, r, ap, oldChar, roomGroup);
 		vector pos = ap.pos;
 		float yaw = ap.yaw;
+		// on foot at an arrival point out on the water (a boat party that swam the rest): he comes ashore
+		if (!(d.car && d.car.type != "") && d.carGroup == "")
+			pos = DL_LandNear(pos, identity.GetPlainId());
 		// M2: his car first, at carPos or else at the arrival point (he then stands 3 m to its left = driver side)
 		Transport car;
 		string carText = "";

@@ -51,6 +51,13 @@ class DL_Journey
 	ref array<string> story = new array<string>;
 	float drivenKm;
 	float walkedKm;
+	float swumKm;             // a boat party with no boat (seat) left swims; the walk legs of the water
+	bool water;               // a party of boats (parties are by kind: boats only travel with boats)
+	// swimming: the chance to drown on a 10 km leg grows with every 10 km already swum (6 %, 12 %, 18 %, ...);
+	// beside a boat of the party (holding on) half that, hurt (health under 50) half as much again
+	static const float DROWN_PCT = 6;
+	static const float SWIM_FOOD_X = 1.5;     // swimming eats and drinks 1.5x the foot rates
+	static const float SWIM_SPEED_X = 0.5;    // at half the walking speed
 	int seconds;              // on the road (travel time on), else 0
 	ref DL_Film film = new DL_Film(); // the same road as scenes, for the arrival film
 
@@ -85,6 +92,17 @@ class DL_Journey
 				return t;
 		}
 		return null;
+	}
+
+	// the chance (percent) that swimmer tv drowns on this leg (f = its share of 10 km)
+	protected float DrownPct(DL_Traveller tv, float f)
+	{
+		float pct = DROWN_PCT * f * (1 + swumKm / 10.0);
+		if (!carLost)
+			pct *= 0.5;                       // a boat of the party is there to hold on to
+		if (tv.d && tv.d.health < 50)
+			pct *= 1.5;
+		return Math.Min(pct, 90);
 	}
 
 	static bool Roll(float pct)
@@ -210,6 +228,11 @@ class DL_Journey
 		}
 		if (j.vehicles.Count() == 1)
 			j.film.car = j.film.cars[0];
+		foreach (DL_JVehicle bv : j.vehicles)
+		{
+			if (DL_Veh.IsBoat(bv.live))
+				j.water = true;
+		}
 		j.film.km = z.distanceKm;
 		foreach (DL_Traveller ft : j.crew)
 		{
@@ -247,6 +270,11 @@ class DL_Journey
 					foodPct = t.foodCarPct;
 					waterPct = t.waterCarPct;
 				}
+				if (!seated && j.water)
+				{
+					foodPct = foodPct * SWIM_FOOD_X;
+					waterPct = waterPct * SWIM_FOOD_X;
+				}
 				float nf = foodPct * f / 100.0 * PlayerConstants.SL_ENERGY_MAX;
 				float nw = waterPct * f / 100.0 * PlayerConstants.SL_WATER_MAX;
 				tv.needFood += nf;
@@ -256,6 +284,17 @@ class DL_Journey
 				DL_TravelCost.EatShared(tv.d, j.Trunks(tv.veh), nf, nw, uf, uw);
 				tv.unpaidFood += uf;
 				tv.unpaidWater += uw;
+				// in the water: drowning (the longer the swim, the likelier), no infected out here
+				if (!seated && j.water)
+				{
+					if (weakened && Roll(j.DrownPct(tv, f)))
+					{
+						tv.dead = true;
+						j.story.Insert(j.Who(tv) + " drowned " + Math.Round(at).ToString() + " km in.");
+						j.film.Add("died", at, tv.name, "drowned");
+					}
+					continue;
+				}
 				// on foot: the infected
 				if (!seated && weakened && Roll(t.bitePct * f))
 				{
@@ -278,7 +317,12 @@ class DL_Journey
 				}
 			}
 			// the party keeps together: one walking means all go at walking pace
-			if (walking)
+			if (walking && j.water)
+			{
+				j.swumKm += leg;
+				j.film.Add("swim", leg);
+			}
+			else if (walking)
 			{
 				j.walkedKm += leg;
 				j.film.Add("walk", leg);
@@ -319,7 +363,14 @@ class DL_Journey
 			j.film.Add("ration", km);
 		}
 		if (t.timeEnabled)
-			j.seconds = Math.Round(j.drivenKm / Math.Max(0.5, t.speedCarKmh) * 3600 + j.walkedKm / Math.Max(0.5, t.speedFootKmh) * 3600);
+			j.seconds = Math.Round(j.drivenKm / Math.Max(0.5, t.speedCarKmh) * 3600 + j.walkedKm / Math.Max(0.5, t.speedFootKmh) * 3600 + j.swumKm / Math.Max(0.25, t.speedFootKmh * SWIM_SPEED_X) * 3600);
+		if (j.swumKm > 0)
+		{
+			if (j.Convoy() && !j.carLost)
+				j.story.Insert("The boats kept to swimming pace for the last " + Math.Round(j.swumKm).ToString() + " km.");
+			else if (j.Alive() > 0)
+				j.story.Insert("Swam the last " + Math.Round(j.swumKm).ToString() + " km to the shore.");
+		}
 		if (j.walkedKm > 0 && j.vehicles.Count() > 0)
 		{
 			if (j.Convoy() && !j.carLost)
@@ -600,10 +651,15 @@ class DL_Journey
 				if (walkers != "")
 					walkers += " and ";
 				walkers += t.name;
-				film.Add("move", at, t.name, "walk", -1);
+				if (water)
+					film.Add("move", at, t.name, "swim", -1);
+				else
+					film.Add("move", at, t.name, "walk", -1);
 			}
 		}
-		if (walkers != "")
+		if (walkers != "" && water)
+			story.Insert(walkers + " swam on beside the boats, holding on: no seat left.");
+		else if (walkers != "")
 			story.Insert(walkers + " walked on beside the convoy: no seat left.");
 		carLost = true;
 		foreach (DL_JVehicle c : vehicles)

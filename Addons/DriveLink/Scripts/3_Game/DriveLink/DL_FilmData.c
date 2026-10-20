@@ -52,7 +52,7 @@ class DL_Film
 		e.car = car;
 		e.donor = donor;
 		// consecutive drive (or walk) legs become one stretch
-		if ((kind == "drive" || kind == "walk") && events.Count() > 0 && events[events.Count() - 1].kind == kind)
+		if ((kind == "drive" || kind == "walk" || kind == "swim") && events.Count() > 0 && events[events.Count() - 1].kind == kind)
 		{
 			events[events.Count() - 1].km = events[events.Count() - 1].km + km;
 			return;
@@ -63,7 +63,7 @@ class DL_Film
 	// how long each part plays, seconds - the server and the client use the same numbers
 	static float SceneSeconds(DL_FilmEvent e)
 	{
-		if (e.kind == "drive" || e.kind == "walk")
+		if (e.kind == "drive" || e.kind == "walk" || e.kind == "swim")
 			return Math.Clamp(e.km * 0.15, 3, 8);
 		if (e.kind == "flat")
 			return 10;

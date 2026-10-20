@@ -37,6 +37,10 @@ class DL_FilmPerson
 	float homeY;
 	float animT;
 	bool rideShown;                // drawn in a seat of an open vehicle (bike, boat) while "in" it
+	bool swimming;                 // in the water (a boat left behind): head and shoulders over a ripple
+	protected bool m_SwimCut;
+	protected ImageWidget m_Ripple;
+	protected float m_RipPx;
 	ref array<vector> path = new array<vector>;
 
 	void DL_FilmPerson(Widget parent, int sort, float px, DL_FilmActor a, string zedSkin)
@@ -50,6 +54,10 @@ class DL_FilmPerson
 			return;
 		}
 		name = a.name;
+		m_RipPx = px;
+		m_Ripple = DL_FilmSpike.Image(parent, DL_FilmSpike.PLAIN, ARGB(150, 225, 238, 246), sort, 0, 0, 16 * px, 2 * px);
+		if (m_Ripple)
+			m_Ripple.Show(false);
 		layers.Insert(new DL_Sprite(parent, CHR + a.skin + "_ca.paa", sort, size, size, 128, 1024));
 		foreach (string l : a.layers)
 		{
@@ -108,6 +116,8 @@ class DL_FilmPerson
 	void Show(bool on)
 	{
 		shown = on;
+		if (m_Ripple && !on)
+			m_Ripple.Show(false);
 		foreach (DL_Sprite s : layers)
 			s.Show(on);
 		if (hand)
@@ -229,6 +239,56 @@ class DL_FilmPerson
 			layers[i].SetSort(first + i);
 		if (hand)
 			hand.SetSort(first + n + 1);
+		if (m_Ripple)
+			m_Ripple.SetSort(first + n + 2);
+	}
+
+	// swimming: only the top of him shows, a ripple where he meets the water; the hand weapon is away
+	protected void SwimLook(float sx, float sy, float alpha)
+	{
+		m_SwimCut = true;
+		float bob = Math.Sin(animT * 5) * 0.6 * m_RipPx;
+		foreach (DL_Sprite s : layers)
+		{
+			s.Cut(0.5);
+			s.MoveTo(sx, sy + bob);
+			s.SetAlpha(alpha);
+		}
+		if (back)
+		{
+			back.Cut(0.5);
+			back.MoveTo(sx, sy + bob);
+			back.SetAlpha(alpha);
+		}
+		if (hand)
+			hand.Show(false);
+		if (m_Ripple)
+		{
+			float rw = 15 + Math.Sin(animT * 3) * 2;
+			m_Ripple.Show(alpha > 0.05);
+			m_Ripple.SetSize(rw * m_RipPx, 2 * m_RipPx);
+			m_Ripple.SetPos(sx + (16 - rw / 2) * m_RipPx, sy + 15 * m_RipPx + bob);
+			m_Ripple.SetAlpha(0.6 * alpha);
+		}
+	}
+
+	protected void DrySelf()
+	{
+		m_SwimCut = false;
+		foreach (DL_Sprite s : layers)
+		{
+			s.Cut(1);
+			s.SetAlpha(1);
+		}
+		if (back)
+		{
+			back.Cut(1);
+			back.SetAlpha(1);
+		}
+		if (hand && shown)
+			hand.Show(true);
+		if (m_Ripple)
+			m_Ripple.Show(false);
 	}
 
 	void HideRide()
@@ -313,6 +373,19 @@ class DL_FilmPerson
 		}
 		float sx = ox + (x - 16) * px;
 		float sy = oy + (y - 16) * px;
+		if (down && swimming)
+		{
+			// drowned: he goes under (no dying frames in the water)
+			downT += dt;
+			Place(layers[0], 0, row, sx, sy);
+			SwimLook(sx, sy + downT * 3 * px, Math.Max(0, 1 - downT / 1.6));
+			for (int dk = 1; dk < layers.Count(); dk++)
+				layers[dk].Show(downT < 1.6);
+			layers[0].Show(downT < 1.6);
+			if (back)
+				back.Show(downT < 1.6);
+			return;
+		}
 		if (down)
 		{
 			// the dying frames (skin rows 17-18, infected 12-13), then the last one; MiniDayZ has them for the bare
@@ -333,12 +406,21 @@ class DL_FilmPerson
 				back.Show(false);
 			return;
 		}
+		if (swimming && run)
+		{
+			frame = Math.Floor(animT * 5);         // slow strokes
+			frame = frame % 4;
+		}
 		foreach (DL_Sprite s : layers)
 			Place(s, frame, row, sx, sy);
 		if (back)
 			Place(back, frame, backRow, sx, sy);
 		if (hand)
 			Place(hand, frame, row, sx, sy);
+		if (swimming)
+			SwimLook(sx, sy, 1);
+		else if (m_SwimCut)
+			DrySelf();
 	}
 
 	protected void Place(DL_Sprite s, int frame, int row, float sx, float sy)
@@ -437,6 +519,7 @@ class DL_FilmPlayer
 	static const int P_CRATE = 15;
 	static const float DRIVE = 150;   // ground speeds, film px/s
 	static const float WALK = 28;
+	static const float SWIM = 15;
 	static const float CAR_GAP = 12;  // between cars in a convoy, film px
 	static const float SIDE_LANE = 84; // where people walk beside a convoy
 	// draw order: the ground (1-2), roadside props (3), wrecks (4), a boat's wake (5) stay behind; everything else in
@@ -1291,6 +1374,18 @@ class DL_FilmPlayer
 			m_Target = DRIVE;
 			HideCrew();
 		}
+		else if (e.kind == "swim")
+		{
+			// the boat (or a seat in one) is gone: they swim. Just out of their boat (m_Leaving) they first swim
+			// clear of it; beside a convoy of boats they keep to its side lane
+			if (!m_Leaving)
+			{
+				LeaveEmptyCars();
+				Swimmers();
+				m_Target = SWIM;
+				Formation(false);
+			}
+		}
 		else if (e.kind == "walk" && m_Water)
 		{
 			ToLand();
@@ -1338,16 +1433,93 @@ class DL_FilmPlayer
 		}
 		else if (m_Step == 1 && m_StepT > 1.6)
 		{
+			if (e.kind == "fuel" && e.detail == "lost")
+			{
+				DL_FilmCar lost = FilmCar(e.car);
+				if (!lost)
+					lost = m_V;
+				if (lost)
+				{
+					OverBoard(lost);
+					if (FirstOther(lost))
+					{
+						lost.inWorld = true;          // the others go on; it drifts behind
+						Relayout(false);
+						m_Target = DRIVE;
+					}
+					else
+						m_Leaving = true;             // nobody goes on by boat: they swim clear, then on
+				}
+				NextStep();
+				return;
+			}
 			if (e.kind == "move" && m_Actor)
 			{
-				if (e.detail == "walk")
+				if (e.detail == "walk" || e.detail == "swim")
+				{
 					m_Actor.car = -1;
+					m_Actor.swimming = true;
+					m_Actor.Show(true);
+					Formation(false);
+				}
 				else
+				{
 					m_Actor.car = e.car;
-				m_Actor.Show(false);
+					m_Actor.swimming = false;
+					m_Actor.Show(false);
+				}
 			}
 			m_Target = DRIVE;
 			NextStep();
+		}
+	}
+
+	// everyone of boat c goes over the side into the water and swims a little way ahead of it
+	protected void OverBoard(DL_FilmCar c)
+	{
+		m_WalkY = c.y + c.HalfH() + 18;
+		array<DL_FilmPerson> rl = Riders(c);
+		int i = 0;
+		foreach (DL_FilmPerson p : rl)
+		{
+			int side = -1;
+			if (i % 2 == 1)
+				side = 1;
+			p.car = -1;
+			p.swimming = true;
+			p.pose = DL_FilmPerson.NORMAL;
+			p.marching = false;
+			p.path.Clear();
+			p.x = c.x + side * (c.HalfW() + 6);
+			p.y = c.y - c.HalfH() / 2 + 14 * (i / 2);
+			p.speed = 26;
+			p.Show(true);
+			int col = i % 2;
+			int rowN = i / 2;
+			p.Go(p.x, m_WalkY - 6);
+			p.Go(114 + col * 28, m_WalkY + rowN * 22);
+			i++;
+		}
+	}
+
+	// another boat (car) of the party that still goes on, other than c
+	protected DL_FilmCar FirstOther(DL_FilmCar c)
+	{
+		foreach (DL_FilmCar o : m_Cars)
+		{
+			if (o != c && !o.inWorld && Riders(o).Count() > 0)
+				return o;
+		}
+		return null;
+	}
+
+	// everyone on foot in the water swims
+	protected void Swimmers()
+	{
+		foreach (DL_FilmPerson p : m_Crew)
+		{
+			if (!p.down && p.car < 0)
+				p.swimming = true;
 		}
 	}
 
@@ -1402,6 +1574,12 @@ class DL_FilmPlayer
 				return "The convoy rolls on: " + km;
 			return "On the road: " + km;
 		}
+		if (e.kind == "swim")
+		{
+			if (m_Convoy && FirstCar())
+				return "The boats keep to swimming pace: " + km;
+			return "Swimming: " + km;
+		}
 		if (e.kind == "walk")
 		{
 			if (m_Convoy && FirstCar())
@@ -1420,12 +1598,22 @@ class DL_FilmPlayer
 			return "Out of gas. " + who + " found some fuel!";
 		if (e.kind == "fuel" && e.detail == "shared")
 			return "Running dry. " + who + " brings a jerry can.";
+		if (e.kind == "fuel" && m_V && m_V.kind == "boat")
+		{
+			if (m_Convoy)
+				return "Out of gas. Nothing found: the boat is left to drift.";
+			return "Out of gas. Nothing found: over the side, swimming from here.";
+		}
 		if (e.kind == "fuel")
 		{
 			if (m_Convoy)
 				return "Out of gas. Nothing found: the car stays here.";
 			return "Out of gas. Nothing found: on foot from here.";
 		}
+		if (e.kind == "move" && e.detail == "swim")
+			return who + " swims on beside the boats: no seat left.";
+		if (e.kind == "died" && e.detail == "drowned")
+			return who + " drowned.";
 		if (e.kind == "move" && e.detail == "walk")
 			return who + " walks on: no seat left.";
 		if (e.kind == "move")
@@ -1461,7 +1649,7 @@ class DL_FilmPlayer
 		if (!e)
 			return;
 		float len = DL_Film.SceneSeconds(e);
-		if (e.kind == "walk" && m_Leaving)
+		if ((e.kind == "walk" || e.kind == "swim") && m_Leaving)
 		{
 			bool ready = true;
 			foreach (DL_FilmPerson lp : m_Crew)
@@ -1481,11 +1669,13 @@ class DL_FilmPlayer
 					}
 				}
 				if (m_V)
-					m_V.inWorld = true;           // left behind: it scrolls away
+					m_V.inWorld = true;           // left behind: it scrolls away (a boat drifts off)
 				m_Target = WALK;
+				if (e.kind == "swim")
+					m_Target = SWIM;
 			}
 		}
-		else if (e.kind == "drive" || e.kind == "walk")
+		else if (e.kind == "drive" || e.kind == "walk" || e.kind == "swim")
 			m_Km += e.km / len * dt;
 		else if (m_V && m_V.kind == "boat" && (e.kind == "flat" || e.kind == "fuel" || e.kind == "move"))
 			SceneBoat(e);
@@ -2448,7 +2638,7 @@ class DL_FilmPlayer
 		DL_Film f = new DL_Film();
 		f.car = "4x4@green";
 		f.biomeFrom = "forest";
-		int pick = s_DemoN % 7;
+		int pick = s_DemoN % 8;
 		if (pick == 5)
 		{
 			f.car = "";
@@ -2467,6 +2657,22 @@ class DL_FilmPlayer
 			f.Add("drive", 20);
 			f.Add("flat", 40, "OrionKaelin", "kit", 1);
 			f.Add("drive", 20);
+			return f;
+		}
+		if (pick == 7)
+		{
+			// one boat, out of gas at sea: over the side, they swim; one doesn't make it
+			f.car = "boat@camo";
+			f.km = 40;
+			f.biomeTo = "forest";
+			f.crew.Insert(DemoActor("Derk", "veteran", "orelpants,oreljacket,razgruz,helmetarmy", "akmrifle", "", 0));
+			f.crew.Insert(DemoActor("Britney", "kate", "sportpants@black,raincoatblue,warmhat@lightblue", "", "", 0));
+			f.crew.Insert(DemoActor("Jonas", "redneck", "jeans@blue,hoodiegray@green,cowboyhat", "", "mosinnagant", 0));
+			f.Add("drive", 20);
+			f.Add("fuel", 20, "Derk", "lost", 0);
+			f.Add("swim", 10);
+			f.Add("died", 30, "Jonas", "drowned");
+			f.Add("swim", 10);
 			return f;
 		}
 		if (pick == 6)
