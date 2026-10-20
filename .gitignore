@@ -11,3 +11,8 @@ Hub/hub-cert.pem
 Hub/hub-key.pem
 Hub/maps/
 dist/
+
+# MiniDayZ-derived textures: prototype only, built locally by Tools/build-anim-assets.py
+Addons/DriveLink/gui/anim/uaz_ca.paa
+Addons/DriveLink/gui/anim/volga_ca.paa
+Addons/DriveLink/gui/anim/skin_*_ca.paa
