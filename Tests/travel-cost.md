@@ -19,3 +19,12 @@
 | Early login refused, on the SOURCE too | PASS 14:47 (Livonia, 294 s left) and 14:50 (2 min left): back to the menu with the time left, placeholder character removed |
 | After the time | PASS 14:53: Livonia -> redirect -> Chernarus built 30/30 items, car 29/29, fuel 0 (engine doesn't start: correct, empty tank) |
 Not tested yet: the spare-wheel rule, a crew on the road together, the Players page "Arrive now" in game.
+
+## Two-player crew test 2026-10-19/20 (Derk + OrionKaelin), build 6e97efb
+| Check | Result |
+|---|---|
+| Crew of 2, weakened road, car lost (23:58) | PASS: 2 flats fixed with spares by different crew members, 3rd = car left; both walked 60 km, arrived on foot rationed (health 67 / 73) |
+| Crew of 2 + travel time (00:05) | PASS: both "on the road 6 min"; passenger's early login refused (5 min left) |
+| Crew waiting room 2/2 after the time (00:07) | PASS: Offroad_02 built 28/28, driver seat 0 + passenger seat 1, engine running |
+| Travel time on foot (10 km at 5 km/h = 2 h) | PASS: refusals with time left; Players page Arrive now |
+| Story grammar | FIX: solo "You was attacked" -> "You were" (next build) |

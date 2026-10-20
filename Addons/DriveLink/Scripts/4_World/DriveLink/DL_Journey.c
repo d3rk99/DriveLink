@@ -192,7 +192,12 @@ class DL_Journey
 						j.story.Insert(j.Who(tv) + " died from a bite " + Math.Round(at).ToString() + " km in.");
 					}
 					else
-						j.story.Insert(j.Who(tv) + " was attacked by infected " + Math.Round(at).ToString() + " km in.");
+					{
+						string was = " was";
+						if (j.crew.Count() == 1)
+							was = " were"; // "You were", not "You was"
+						j.story.Insert(j.Who(tv) + was + " attacked by infected " + Math.Round(at).ToString() + " km in.");
+					}
 				}
 			}
 			if (driving)
