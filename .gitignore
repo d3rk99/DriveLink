@@ -16,3 +16,8 @@ dist/
 Addons/DriveLink/gui/anim/uaz_ca.paa
 Addons/DriveLink/gui/anim/volga_ca.paa
 Addons/DriveLink/gui/anim/skin_*_ca.paa
+Addons/DriveLink/gui/anim/chr/
+Addons/DriveLink/gui/anim/wreck_*_ca.paa
+Addons/DriveLink/gui/anim/fueltank_ca.paa
+Addons/DriveLink/gui/anim/smoke_ca.paa
+Addons/DriveLink/gui/anim/zed_ca.paa
