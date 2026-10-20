@@ -31,6 +31,8 @@ pub struct Hub {
     pub pending: Mutex<HashMap<String, Pending>>, // claim -> a DayZ server asking to join
     pub seen: Mutex<HashMap<String, String>>,     // server id -> the address its last request came from
     pub db: Mutex<Connection>,
+    /// server id -> its last arrival spot check (POST /api/spots): which convoy places a car / truck fits on
+    pub spots: Mutex<HashMap<String, Value>>,
 }
 
 /// A DayZ server with the right key that the hub doesn't know yet; it shows up in /admin to be approved.
@@ -87,6 +89,7 @@ pub fn routes(h: Shared) -> Router {
         .route("/api/payload", post(payload))
         .route("/api/fail", post(fail))
         .route("/api/layout", post(layout))
+        .route("/api/spots", post(spots))
         .route("/health", get(health))
         .merge(crate::admin::routes(h.clone()))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY + 1))
@@ -290,6 +293,21 @@ async fn hello(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body:
     reply(StatusCode::OK, json!({"ok": true, "serverId": sid, "servers": servers, "layout": layout, "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)}))
 }
 
+// POST /api/spots  {serverId,key,spots:[{arrival, places:[{car, truck}]}]} - the server checked where cars can stand
+// at its arrival points (DL_CheckCarSpots); the Map page shows it
+async fn spots(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body: Bytes) -> Response {
+    let sid = match check(&h, "/api/spots", &a, &q, &body) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let sent: Value = serde_json::from_slice(&crate::numfix::plain_numbers(&String::from_utf8_lossy(&body)).into_bytes()).unwrap_or(Value::Null);
+    let list = sent.get("spots").cloned().unwrap_or(Value::Array(vec![]));
+    let blocked = list.as_array().map(|a| a.iter().flat_map(|s| s["places"].as_array().cloned().unwrap_or_default()).filter(|p| !p["car"].as_str().unwrap_or("").starts_with("free")).count()).unwrap_or(0);
+    crate::logf!("arrival spot check from {sid}: {} points, {blocked} car places blocked", list.as_array().map(|a| a.len()).unwrap_or(0));
+    h.spots.lock().unwrap().insert(sid, json!({"at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true), "spots": list}));
+    reply(StatusCode::OK, json!({"ok": true}))
+}
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct RevReq {
@@ -371,13 +389,14 @@ async fn depart(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
     }
     let token = crate::config::random_key();
     let travel = r.travel_seconds.clamp(0, 7 * 24 * 3600); // a week at most
+    let (party, role) = party_of(&payload);
     let res = tx
         .execute("UPDATE transfers SET state='superseded' WHERE steam_id=?1 AND state='pending'", params![r.steam_id])
         .and_then(|_| {
             tx.execute(
-                "INSERT INTO transfers(token,steam_id,from_server,to_server,arrival,payload_text,state,ready_at)
-                 VALUES(?1,?2,?3,?4,?5,?6,'pending', CASE WHEN ?7 > 0 THEN datetime('now', '+' || ?7 || ' seconds') END)",
-                params![token, r.steam_id, from, r.to, r.arrival, payload, travel],
+                "INSERT INTO transfers(token,steam_id,from_server,to_server,arrival,payload_text,state,ready_at,party,party_role)
+                 VALUES(?1,?2,?3,?4,?5,?6,'pending', CASE WHEN ?7 > 0 THEN datetime('now', '+' || ?7 || ' seconds') END, ?8, ?9)",
+                params![token, r.steam_id, from, r.to, r.arrival, payload, travel, party, role],
             )
         })
         .and_then(|_| set_owner(&tx, &r.steam_id, None));
@@ -389,6 +408,31 @@ async fn depart(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
     }
     crate::logf!("depart {}: {from} -> {} ({}), {} bytes, token {}..{}", r.steam_id, r.to, r.arrival, payload.len(), &token[..8], if travel > 0 { format!(", on the road {travel} s") } else { String::new() });
     reply(StatusCode::OK, json!({"ok": true, "token": token, "target": server_out(&h, &r.to), "readyIn": travel}))
+}
+
+/// a trip's party (group on foot, convoy, crew) and the traveller's place in it, from his snapshot (DL_PlayerData)
+fn party_of(payload: &str) -> (Option<String>, Option<String>) {
+    let v: Value = match serde_json::from_str(&crate::numfix::plain_numbers(payload)) {
+        Ok(v) => v,
+        Err(_) => return (None, None),
+    };
+    let party = v["partyId"].as_str().filter(|p| !p.is_empty()).map(str::to_string);
+    if party.is_none() {
+        return (None, None);
+    }
+    let car = v["car"]["type"].as_str().unwrap_or("");
+    let in_convoy = v["convoyId"].as_str().map(|c| !c.is_empty()).unwrap_or(false);
+    let place = if in_convoy { format!("car {} of the convoy, ", v["convoyIdx"].as_i64().unwrap_or(0) + 1) } else { String::new() };
+    let role = if v["diedOnRoad"].as_bool().unwrap_or(false) {
+        "died on the road".to_string()
+    } else if !car.is_empty() {
+        format!("{place}drives the {car}")
+    } else if v["carGroup"].as_str().map(|g| !g.is_empty()).unwrap_or(false) {
+        format!("{place}passenger, seat {}", v["carSeat"].as_i64().unwrap_or(0))
+    } else {
+        "on foot".to_string()
+    };
+    (party, Some(role))
 }
 
 #[derive(Deserialize, Default)]

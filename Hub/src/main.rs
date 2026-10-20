@@ -70,6 +70,7 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
         pending: Default::default(),
         seen: Default::default(),
         db: Mutex::new(conn),
+        spots: Default::default(),
     });
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;

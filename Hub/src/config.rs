@@ -56,6 +56,16 @@ pub struct TravelRules {
     pub flat_pct: f64,
     /// the server's look in the road film: forest | field | desert | snow, "" = from the map
     pub biome: String,
+    // group travel (Research/group-travel.md), for parties leaving here
+    pub no_groups: bool,          // walkers who enter a zone together do NOT travel as a group
+    pub no_convoys: bool,         // cars that enter a zone together do NOT travel as a convoy
+    pub group_max: u32,           // players in a group on foot
+    pub convoy_max: u32,          // cars in a convoy
+    /// arriving HERE: how long a convoy's cars wait for one that is late before the others go (s)
+    pub convoy_wait_seconds: u32,
+    // the road film, for trips that END here
+    pub film_off: bool,           // no film: the story only
+    pub vote_skip_off: bool,      // the film can't be skipped (else: everyone watching presses Space)
 }
 
 impl Default for TravelRules {
@@ -79,6 +89,13 @@ impl Default for TravelRules {
             spare_needed_km: 0.0,
             flat_pct: 3.0,
             biome: String::new(),
+            no_groups: false,
+            no_convoys: false,
+            group_max: 8,
+            convoy_max: 4,
+            convoy_wait_seconds: 120,
+            film_off: false,
+            vote_skip_off: false,
         }
     }
 }
@@ -101,6 +118,9 @@ impl TravelRules {
         self.fuel_liters = if self.fuel_liters.is_finite() { self.fuel_liters.clamp(0.0, 1000.0) } else { 0.0 };
         self.speed_foot_kmh = if self.speed_foot_kmh.is_finite() { self.speed_foot_kmh.clamp(0.5, 1000.0) } else { 5.0 };
         self.speed_car_kmh = if self.speed_car_kmh.is_finite() { self.speed_car_kmh.clamp(0.5, 1000.0) } else { 40.0 };
+        self.group_max = self.group_max.clamp(2, 16);
+        self.convoy_max = self.convoy_max.clamp(2, 8);
+        self.convoy_wait_seconds = self.convoy_wait_seconds.clamp(10, 900);
         self
     }
 }

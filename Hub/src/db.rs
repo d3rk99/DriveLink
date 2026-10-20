@@ -10,6 +10,7 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
     (3, "003_layouts.sql", include_str!("../migrations/003_layouts.sql")),
     (4, "004_players.sql", include_str!("../migrations/004_players.sql")),
     (5, "005_travel_time.sql", include_str!("../migrations/005_travel_time.sql")),
+    (6, "006_parties.sql", include_str!("../migrations/006_parties.sql")),
 ];
 
 pub fn open(path: &Path) -> Result<Connection, String> {

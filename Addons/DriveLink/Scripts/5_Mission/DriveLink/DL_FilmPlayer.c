@@ -362,6 +362,10 @@ class DL_FilmPlayer
 	protected Widget m_Root;
 	protected ref DL_Strip m_GroundA;
 	protected ref DL_Strip m_GroundB;
+	protected ref DL_Strip m_GroundV;      // the look on the way (zone viaBiome), between from and to
+	protected TextWidget m_SkipText;       // "Space: vote to skip" / how many voted
+	protected bool m_Voted;
+	protected bool m_VoteOut;              // a vote for the HUD to send (DL_ClientHud, RPC_FILM_VOTE)
 	protected ref array<ref DL_FilmCar> m_Cars = new array<ref DL_FilmCar>;
 	protected DL_FilmCar m_V;          // the car the scene is about (null = on foot)
 	protected DL_FilmCar m_Donor;      // convoy: the car a spare wheel or a jerry can comes from
@@ -441,6 +445,8 @@ class DL_FilmPlayer
 		if (!f || f.events.Count() == 0)
 			return;
 		m_Film = f;
+		m_Voted = false;
+		m_VoteOut = false;
 		if (!Build())
 			return;
 		m_Playing = true;
@@ -521,6 +527,12 @@ class DL_FilmPlayer
 		m_Km = 0;
 		m_GroundA = new DL_Strip(m_Root, Ground(m_Film.biomeFrom), 1, m_Ox, m_Oy, gw, gh, 256, 256, true);
 		m_GroundB = null;
+		m_GroundV = null;
+		if (m_Film.biomeVia != "" && m_Film.biomeVia != m_Film.biomeFrom && m_Film.biomeVia != m_Film.biomeTo)
+		{
+			m_GroundV = new DL_Strip(m_Root, Ground(m_Film.biomeVia), 2, m_Ox, m_Oy, gw, gh, 256, 256, true);
+			m_GroundV.SetAlpha(0);
+		}
 		if (m_Film.biomeTo != m_Film.biomeFrom && m_Film.biomeTo != "")
 		{
 			m_GroundB = new DL_Strip(m_Root, Ground(m_Film.biomeTo), 2, m_Ox, m_Oy, gw, gh, 256, 256, true);
@@ -580,6 +592,18 @@ class DL_FilmPlayer
 			band = winH * 0.058;
 		DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(150, 0, 0, 0), 10, 0, winH - band, winW, band);
 		m_Caption = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, winH - band * 0.93, winW, band * 0.87, flags, ARGB(255, 240, 225, 190), 11, m_Root));
+		// how to skip, top of the window: everyone must vote on a trip, Space alone for the F9 demo
+		m_SkipText = null;
+		if (m_Film.skip != "none")
+		{
+			float sh2 = winH * 0.045;
+			DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(120, 0, 0, 0), 10, 0, 0, winW, sh2 * 1.2);
+			m_SkipText = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, sh2 * 0.1, winW, sh2, flags, ARGB(255, 200, 200, 200), 11, m_Root));
+			if (m_Film.skip == "vote")
+				m_SkipText.SetText("Space: vote to skip (everyone has to)");
+			else
+				m_SkipText.SetText("Space: skip");
+		}
 		// a few props from the start, so the road isn't empty
 		m_NextProp = 0;
 		m_NextWreck = 1.5;
@@ -1768,6 +1792,11 @@ class DL_FilmPlayer
 			if (gone || m_StepT > DL_Film.END_SECONDS + 2)
 			{
 				Print(DL_Const.LOG_TAG + "road film ended");
+				if (m_Film.skip == "vote" && !m_Voted)
+				{
+					m_Voted = true;
+					m_VoteOut = true;                 // done watching: he doesn't hold the others' skip up
+				}
 				Stop();
 			}
 		}
@@ -1780,8 +1809,22 @@ class DL_FilmPlayer
 		bool skip = KeyState(KeyCode.KC_SPACE) != 0;
 		if (m_Playing && skip && !m_KeyWasDown)
 		{
-			Print(DL_Const.LOG_TAG + "road film skipped");
-			Stop();
+			if (m_Film.skip == "vote")
+			{
+				if (!m_Voted)
+				{
+					m_Voted = true;
+					m_VoteOut = true;
+					if (m_SkipText)
+						m_SkipText.SetText("You voted to skip - waiting for the others");
+					Print(DL_Const.LOG_TAG + "road film: voted to skip");
+				}
+			}
+			else if (m_Film.skip != "none")
+			{
+				Print(DL_Const.LOG_TAG + "road film skipped");
+				Stop();
+			}
 		}
 		m_KeyWasDown = skip;
 		if (!m_Playing || !m_Root)
@@ -1801,14 +1844,15 @@ class DL_FilmPlayer
 		float dy = m_Speed * dt;
 		m_Scroll += dy;
 		m_GroundA.Scroll(m_Scroll * m_Px);
+		if (m_GroundV)
+		{
+			m_GroundV.Scroll(m_Scroll * m_Px);
+			m_GroundV.SetAlpha(ViaAlpha());
+		}
 		if (m_GroundB)
 		{
 			m_GroundB.Scroll(m_Scroll * m_Px);
-			// the biome blend: from 30 % to 70 % of the way
-			float prog = 0;
-			if (m_Film.km > 0)
-				prog = m_Km / m_Film.km;
-			m_GroundB.SetAlpha(Math.Clamp((prog - 0.3) / 0.4, 0, 1));
+			m_GroundB.SetAlpha(ToAlpha());
 		}
 		// props and wrecks come up from the bottom
 		if (m_Speed > 1)
@@ -1888,16 +1932,59 @@ class DL_FilmPlayer
 
 	// ---------------- what grows by the road ----------------
 
-	protected string BiomeHere()
+	protected float Progress()
+	{
+		if (m_Film.km > 0)
+			return m_Km / m_Film.km;
+		return 0;
+	}
+
+	// the biome blend: straight from -> to between 30 % and 70 % of the way; with a look on the way, from -> via
+	// between 15 % and 35 %, via -> to between 65 % and 85 %
+	protected float ViaAlpha()
+	{
+		if (!m_GroundV)
+			return 0;
+		return Math.Clamp((Progress() - 0.15) / 0.2, 0, 1);
+	}
+
+	protected float ToAlpha()
 	{
 		if (!m_GroundB)
-			return m_Film.biomeFrom;
-		float prog = 0;
-		if (m_Film.km > 0)
-			prog = m_Km / m_Film.km;
-		if (Math.RandomFloat01() < Math.Clamp((prog - 0.3) / 0.4, 0, 1))
+			return 0;
+		if (m_GroundV)
+			return Math.Clamp((Progress() - 0.65) / 0.2, 0, 1);
+		return Math.Clamp((Progress() - 0.3) / 0.4, 0, 1);
+	}
+
+	protected string BiomeHere()
+	{
+		float r = Math.RandomFloat01();
+		if (m_GroundB && r < ToAlpha())
 			return m_Film.biomeTo;
+		if (m_GroundV && r < ViaAlpha())
+			return m_Film.biomeVia;
 		return m_Film.biomeFrom;
+	}
+
+	// ---------------- the skip vote (DL_ClientHud sends it, the server counts) ----------------
+
+	// a vote to send now (once)
+	bool TakeVote()
+	{
+		bool v = m_VoteOut;
+		m_VoteOut = false;
+		return v;
+	}
+
+	void VoteStatus(int votes, int total)
+	{
+		if (!m_SkipText)
+			return;
+		string mine = "";
+		if (m_Voted)
+			mine = "You voted. ";
+		m_SkipText.SetText(mine + "Skip: " + votes.ToString() + " of " + total.ToString() + " - everyone has to press Space");
 	}
 
 	protected int PickProp(string biome)

@@ -79,6 +79,8 @@ pub fn clean_zones(v: &Value) -> Value {
                     "arrival": z.get("arrival").and_then(Value::as_str).unwrap_or(""),
                     // travel cost/time scale with this (0 = free, instant)
                     "distanceKm": z.get("distanceKm").and_then(Value::as_f64).filter(|d| d.is_finite()).unwrap_or(0.0).clamp(0.0, 100000.0),
+                    // the road film's middle stretch (forest | field | desert | snow), "" = none
+                    "viaBiome": z.get("viaBiome").and_then(Value::as_str).filter(|b| ["forest", "field", "desert", "snow"].contains(b)).unwrap_or(""),
                 })
             })
             .collect(),

@@ -118,6 +118,7 @@ async fn state(State(h): State<Shared>) -> Response {
             "id": s.id, "name": s.name, "lanHost": s.lan_host, "publicHost": s.public_host, "port": s.port,
             "queryPort": s.query_port, "password": s.password, "world": s.world, "map": map, "layout": layout,
             "seenSecondsAgo": ago, "local": h.is_local_server(&s.id), "travel": s.travel,
+            "spots": h.spots.lock().unwrap().get(&s.id).cloned(),
         }));
     }
     drop(db);

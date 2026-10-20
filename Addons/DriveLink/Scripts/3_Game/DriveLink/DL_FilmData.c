@@ -37,6 +37,8 @@ class DL_Film
 	float km;
 	string biomeFrom;                             // forest | field | desert | snow
 	string biomeTo;
+	string biomeVia;                              // the look on the way (the zone's), "" = straight from -> to
+	string skip;                                  // "vote" = everyone watching presses Space, "none", "" = Space skips (F9)
 	ref array<ref DL_FilmActor> crew = new array<ref DL_FilmActor>;
 	ref array<ref DL_FilmEvent> events = new array<ref DL_FilmEvent>;
 

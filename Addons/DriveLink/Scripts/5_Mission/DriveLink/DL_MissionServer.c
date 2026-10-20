@@ -75,6 +75,8 @@ class DL_Room
 	string convoyId;                                // a convoy car: its convoy (rooms of a convoy are revealed together)
 	int convoyCars;
 	bool convoyReady;                               // built and seated, waiting for the rest of the convoy
+	int seatedAt;                                   // g_Game.GetTime() when everyone is seated (0 = not yet going)
+	CarScript builtCar;
 }
 
 // target side: the cars of one convoy, each in its own waiting room; the black screen lifts for all at once
@@ -83,8 +85,7 @@ class DL_ConvoyArrival
 	string id;
 	int expected;                                   // cars that arrive (the ones left on the road don't)
 	ref map<string, CarScript> ready = new map<string, CarScript>; // room group -> its car, built and seated
-	int revealAt;
-	bool timing;                                    // the give-up timer runs
+	int firstReady;                                 // g_Game.GetTime() the first car was ready (give-up timer)
 }
 
 modded class MissionServer
@@ -100,6 +101,10 @@ modded class MissionServer
 	protected int m_DL_PartyN;
 	protected ref map<string, int> m_DL_SlotOf = new map<string, int>;                          // refuse mode: convoy place / group place of a leaving player
 	protected ref map<string, ref DL_ConvoyArrival> m_DL_Convoys = new map<string, ref DL_ConvoyArrival>;
+	protected ref map<string, string> m_DL_PartyIdOf = new map<string, string>;   // leaving sid -> his party's id
+	protected ref map<string, string> m_DL_FilmKey = new map<string, string>;     // arrived sid -> the film he watches (party id or his own sid)
+	protected ref map<string, ref array<string>> m_DL_FilmVoted = new map<string, ref array<string>>; // film key -> who voted to skip
+	protected ref map<string, bool> m_DL_StoryCut = new map<string, bool>;        // a skipped black screen: no more WAIT_SHOW
 	protected ref map<string, string> m_DL_ConvoyOf = new map<string, string>;  // leaving sid -> his convoy's id
 	protected ref map<string, int> m_DL_ConvoyCarsOf = new map<string, int>;
 	static const int DL_CONVOY_MAX = 4;
@@ -442,6 +447,8 @@ modded class MissionServer
 			if (a)
 				Print(DL_Const.LOG_TAG + "  arrival '" + a.name + "' " + a.pos.ToString() + " yaw " + a.yaw.ToString());
 		}
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_CheckCarSpots);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_CheckCarSpots, 5000, false);
 		DL_TravelRules t = m_DL_Cfg.travel;
 		if (t)
 			Print(DL_Const.LOG_TAG + "  travel rules: " + t.mode + ", per 10 km foot " + t.foodFootPct.ToString() + "/" + t.waterFootPct.ToString() + "% food/water, car " + t.foodCarPct.ToString() + "/" + t.waterCarPct.ToString() + "% + " + t.fuelLiters.ToString() + " L, wear " + t.wearEnginePct.ToString() + "/" + t.wearWheelsPct.ToString() + "%, time " + t.timeEnabled.ToString() + " (" + t.speedFootKmh.ToString() + "/" + t.speedCarKmh.ToString() + " km/h)");
@@ -923,9 +930,122 @@ modded class MissionServer
 			pb.DL_SetHidden(true);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(pb.DL_SetHidden, 2000 + 1000 * secs, false, false);
 		}
+		m_DL_StoryCut.Remove(sid);
 		for (int i = 0; i < secs; i++)
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 2000 + 1000 * i, false, sid, DL_Const.WAIT_SHOW, "On the road", false, story);
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_StoryShow, 2000 + 1000 * i, false, sid, story);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 2000 + 1000 * secs, false, sid, DL_Const.WAIT_DONE, "", false, "");
+	}
+
+	protected void DL_StoryShow(string sid, string story)
+	{
+		if (!m_DL_StoryCut.Contains(sid))
+			DL_SendWait(sid, DL_Const.WAIT_SHOW, "On the road", false, story);
+	}
+
+	// ---------------- skipping the film: everyone watching it votes ----------------
+
+	protected void DL_ForgetFilm(string sid, string key)
+	{
+		if (m_DL_FilmKey.Get(sid) == key)
+			m_DL_FilmKey.Remove(sid);
+		bool any = false;
+		foreach (string s2, string k2 : m_DL_FilmKey)
+		{
+			if (k2 == key)
+				any = true;
+		}
+		if (!any)
+			m_DL_FilmVoted.Remove(key);
+	}
+
+	// the votes the clients sent (DL_FilmVotes, queued by PlayerBase.OnRPC)
+	protected void DL_TakeFilmVotes()
+	{
+		array<string> q = DL_FilmVotes.Queue();
+		if (q.Count() == 0)
+			return;
+		array<string> votes = new array<string>;
+		votes.Copy(q);
+		q.Clear();
+		foreach (string v : votes)
+			DL_FilmVote(v);
+	}
+
+	// one more vote: all of them in = everyone's film stops and their black screens lift (as soon as they are seated)
+	protected void DL_FilmVote(string sid)
+	{
+		string key;
+		if (!m_DL_FilmKey.Find(sid, key))
+			return;
+		array<string> voted = m_DL_FilmVoted.Get(key);
+		if (!voted)
+		{
+			voted = new array<string>;
+			m_DL_FilmVoted.Set(key, voted);
+		}
+		if (voted.Find(sid) < 0)
+			voted.Insert(sid);
+		array<string> watching = new array<string>;
+		foreach (string w, string wk : m_DL_FilmKey)
+		{
+			if (wk == key && DL_FindPlayer(w))
+				watching.Insert(w);
+		}
+		int yes = 0;
+		foreach (string ws : watching)
+		{
+			if (voted.Find(ws) >= 0)
+				yes++;
+		}
+		bool skip = yes >= watching.Count();
+		foreach (string to : watching)
+			DL_SendSkip(to, yes, watching.Count(), skip);
+		if (!skip)
+			return;
+		Print(DL_Const.LOG_TAG + "road film " + key + " skipped: all " + watching.Count().ToString() + " voted");
+		int now = g_Game.GetTime();
+		foreach (string ss : watching)
+		{
+			m_DL_FilmKey.Remove(ss);
+			// a waiting room: it lifts as soon as everyone is seated (DL_RoomTick)
+			foreach (string g, DL_Room room : m_DL_Rooms)
+			{
+				if (room.here.Find(ss) >= 0)
+					room.revealAt = Math.Min(room.revealAt, now);
+			}
+			// on foot: the black screen goes now
+			if (!DL_InRoom(ss))
+			{
+				m_DL_StoryCut.Set(ss, true);
+				DL_SendWait(ss, DL_Const.WAIT_DONE, "", false, "");
+				PlayerBase pb = DL_FindPlayer(ss);
+				if (pb)
+					pb.DL_SetHidden(false);
+			}
+		}
+		m_DL_FilmVoted.Remove(key);
+	}
+
+	protected bool DL_InRoom(string sid)
+	{
+		foreach (string g, DL_Room room : m_DL_Rooms)
+		{
+			if (room.here.Find(sid) >= 0)
+				return true;
+		}
+		return false;
+	}
+
+	protected void DL_SendSkip(string sid, int votes, int total, bool skip)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb || !pb.GetIdentity())
+			return;
+		ScriptRPC rpc = new ScriptRPC();
+		rpc.Write(votes);
+		rpc.Write(total);
+		rpc.Write(skip);
+		rpc.Send(null, DL_Const.RPC_FILM_SKIP, true, pb.GetIdentity());
 	}
 
 	// ---------------- road film ----------------
@@ -965,7 +1085,18 @@ modded class MissionServer
 	{
 		if (!d || !d.film || d.film.events.Count() == 0)
 			return 0;
+		if (m_DL_Cfg.travel && m_DL_Cfg.travel.filmOff)
+			return 0;                                   // Travel settings: no film here, the story only
 		d.film.biomeTo = DL_MyBiome();
+		d.film.skip = "vote";
+		if (m_DL_Cfg.travel && m_DL_Cfg.travel.voteSkipOff)
+			d.film.skip = "none";
+		// who watches this film together: his party, else him alone (a skip needs every one of them)
+		string key = d.partyId;
+		if (key == "")
+			key = sid;
+		m_DL_FilmKey.Set(sid, key);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ForgetFilm, 300000, false, sid, key);
 		string json;
 		string err;
 		JsonFileLoader<DL_Film>.MakeData(d.film, json, err, false);
@@ -1118,6 +1249,27 @@ modded class MissionServer
 			foreach (string m : room.here)
 				DL_SendWait(m, DL_Const.WAIT_SHOW, text, false, room.story);
 		}
+		// seated rooms: alone -> lift when the film is over; a convoy car -> ready, the convoy lifts all together
+		array<string> reveal = new array<string>;
+		foreach (string sg, DL_Room sroom : m_DL_Rooms)
+		{
+			if (!sroom.going || sroom.seatedAt == 0 || now < sroom.seatedAt)
+				continue;
+			if (sroom.convoyId != "" && sroom.convoyCars > 1)
+			{
+				if (!sroom.convoyReady)
+					DL_ConvoyRoomReady(sg, sroom.builtCar);
+			}
+			else if (now >= sroom.revealAt)
+				reveal.Insert(sg);
+		}
+		DL_ConvoyTick(now, reveal);
+		foreach (string rg : reveal)
+		{
+			DL_Room rr = m_DL_Rooms.Get(rg);
+			if (rr)
+				DL_RoomReveal(rg, rr.builtCar);
+		}
 		foreach (string gs : startNow)
 		{
 			DL_Room rs = m_DL_Rooms.Get(gs);
@@ -1198,15 +1350,14 @@ modded class MissionServer
 				i++;
 			}
 		}
-		int revealIn = Math.Max(1500 + 800 * i + 2500, room.revealAt - g_Game.GetTime());
-		if (room.convoyId != "" && room.convoyCars > 1)
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ConvoyRoomReady, 1500 + 800 * i + 2500, false, group, car);
-		else
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomReveal, revealIn, false, group, car);
+		// seated by then; the black screen lifts when DL_RoomTick sees that time and the film's end (room.revealAt, a
+		// unanimous skip brings it forward) - for a convoy when all its cars are seated
+		room.seatedAt = g_Game.GetTime() + 1500 + 800 * i + 2500;
+		room.builtCar = car;
 	}
 
-	// a convoy car is built and seated: when all of the convoy's cars are (or after crewWaitSeconds), all rooms lift
-	// their black screen together
+	// a convoy car is built and seated: when all of the convoy's cars are (or after the convoy wait), all its rooms
+	// lift their black screen together (DL_ConvoyTick)
 	protected void DL_ConvoyRoomReady(string group, CarScript car)
 	{
 		DL_Room room = m_DL_Rooms.Get(group);
@@ -1219,34 +1370,39 @@ modded class MissionServer
 			ca = new DL_ConvoyArrival();
 			ca.id = room.convoyId;
 			ca.expected = room.convoyCars;
+			ca.firstReady = g_Game.GetTime();
 			m_DL_Convoys.Set(ca.id, ca);
 		}
 		ca.ready.Set(group, car);
-		ca.revealAt = Math.Max(ca.revealAt, room.revealAt);
 		Print(DL_Const.LOG_TAG + "convoy " + ca.id + ": " + group + "'s car is ready, " + ca.ready.Count().ToString() + "/" + ca.expected.ToString());
-		if (ca.ready.Count() >= ca.expected)
-		{
-			DL_ConvoyReveal(ca.id);
-			return;
-		}
-		if (!ca.timing)
-		{
-			ca.timing = true;
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ConvoyReveal, m_DL_Cfg.crewWaitSeconds * 1000, false, ca.id);
-		}
 	}
 
-	protected void DL_ConvoyReveal(string id)
+	// convoys whose cars are all seated (or waited long enough) and whose films are over (or skipped): their rooms
+	// go into reveal, all at once
+	protected void DL_ConvoyTick(int now, array<string> reveal)
 	{
-		DL_ConvoyArrival ca = m_DL_Convoys.Get(id);
-		if (!ca)
-			return;
-		m_DL_Convoys.Remove(id);
-		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_ConvoyReveal);
-		int wait = Math.Max(0, ca.revealAt - g_Game.GetTime());
-		Print(DL_Const.LOG_TAG + "convoy " + id + ": " + ca.ready.Count().ToString() + "/" + ca.expected.ToString() + " cars ready, black screens lift in " + (wait / 1000).ToString() + " s");
-		foreach (string g, CarScript c : ca.ready)
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomReveal, wait + 100, false, g, c);
+		array<string> done = new array<string>;
+		foreach (string id, DL_ConvoyArrival ca : m_DL_Convoys)
+		{
+			bool all = ca.ready.Count() >= ca.expected;
+			if (!all && now - ca.firstReady < DL_ConvoyWaitMs())
+				continue;
+			int at = 0;
+			foreach (string g, CarScript c : ca.ready)
+			{
+				DL_Room r = m_DL_Rooms.Get(g);
+				if (r)
+					at = Math.Max(at, r.revealAt);
+			}
+			if (now < at)
+				continue;
+			Print(DL_Const.LOG_TAG + "convoy " + id + ": " + ca.ready.Count().ToString() + "/" + ca.expected.ToString() + " cars ready, lifting all black screens");
+			foreach (string rg, CarScript rc : ca.ready)
+				reveal.Insert(rg);
+			done.Insert(id);
+		}
+		foreach (string d : done)
+			m_DL_Convoys.Remove(d);
 	}
 
 	// ---------------- where a car can stand ----------------
@@ -1254,8 +1410,11 @@ modded class MissionServer
 	// log, per arrival point, which of the 4 convoy places behind its car spot a car fits on (admin info)
 	protected void DL_CheckCarSpots()
 	{
+		DL_SpotsReq report = new DL_SpotsReq();
 		foreach (DL_ArrivalPoint ap : m_DL_Cfg.arrivals)
 		{
+			DL_SpotReport rep = new DL_SpotReport();
+			rep.arrival = ap.name;
 			vector base = ap.carPos;
 			float yaw = ap.carYaw;
 			if (base[0] == 0 && base[2] == 0)
@@ -1273,12 +1432,25 @@ modded class MissionServer
 				if (!DL_SpotFreeWhy(p, yaw, 2.2, 4.8, why))
 					car = "blocked by " + why;
 				string truck = "free";
-				if (!DL_SpotFree(p, yaw, 2.7, 7.8))
-					truck = "blocked";
+				string twhy;
+				if (!DL_SpotFreeWhy(p, yaw, 2.7, 7.8, twhy))
+					truck = "blocked by " + twhy;
+				DL_SpotPlace place = new DL_SpotPlace();
+				place.car = car;
+				place.truck = truck;
+				rep.places.Insert(place);
 				line += " | car " + (k + 1).ToString() + ": " + car + " (truck " + truck + ")";
 			}
 			Print(DL_Const.LOG_TAG + "arrival '" + ap.name + "' car spots" + line);
+			report.spots.Insert(rep);
 		}
+		// to the hub: its Map page shows the places in green / red
+		report.serverId = m_DL_Cfg.serverId;
+		report.key = m_DL_Cfg.hubKey;
+		string json;
+		string err;
+		JsonFileLoader<DL_SpotsReq>.MakeData(report, json, err, false);
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/spots?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, json, new DL_SpotsWaiter(), "OnAnswer", "spot check");
 	}
 
 	// the car's box (width, length, metres) by its class
@@ -1564,6 +1736,7 @@ modded class MissionServer
 		m_DL_Tick = 0;
 		DL_CheckZones();
 		DL_DebugTick();
+		DL_TakeFilmVotes();
 	}
 
 	protected void DL_CheckZones()
@@ -1620,6 +1793,37 @@ modded class MissionServer
 		DL_TendParties(now);
 	}
 
+	protected int DL_GroupMax()
+	{
+		if (m_DL_Cfg.travel && m_DL_Cfg.travel.groupMax >= 2)
+			return m_DL_Cfg.travel.groupMax;
+		return DL_GROUP_MAX;
+	}
+
+	protected int DL_ConvoyMax()
+	{
+		if (m_DL_Cfg.travel && m_DL_Cfg.travel.convoyMax >= 2)
+			return m_DL_Cfg.travel.convoyMax;
+		return DL_CONVOY_MAX;
+	}
+
+	// may this kind travel together (Travel settings: groups on foot / convoys on)?
+	protected bool DL_Together(bool convoy)
+	{
+		if (!m_DL_Cfg.travel)
+			return true;
+		if (convoy)
+			return !m_DL_Cfg.travel.noConvoys;
+		return !m_DL_Cfg.travel.noGroups;
+	}
+
+	protected int DL_ConvoyWaitMs()
+	{
+		if (m_DL_Cfg.travel && m_DL_Cfg.travel.convoyWaitSeconds >= 10)
+			return m_DL_Cfg.travel.convoyWaitSeconds * 1000;
+		return m_DL_Cfg.crewWaitSeconds * 1000;
+	}
+
 	// his party forming in a zone, or null
 	protected DL_Party DL_PartyOf(string sid)
 	{
@@ -1638,15 +1842,18 @@ modded class MissionServer
 		string sid = pb.GetIdentity().GetPlainId();
 		bool convoy = DL_CarOf(pb) != null;
 		DL_Party party;
-		foreach (DL_Party p : m_DL_Parties)
+		if (DL_Together(convoy))
 		{
-			int room = DL_GROUP_MAX;
-			if (p.convoy)
-				room = DL_CONVOY_MAX;
-			if (p.zone == z && p.convoy == convoy && p.leaders.Count() < room)
+			foreach (DL_Party p : m_DL_Parties)
 			{
-				party = p;
-				break;
+				int room = DL_GroupMax();
+				if (p.convoy)
+					room = DL_ConvoyMax();
+				if (p.zone == z && p.convoy == convoy && p.leaders.Count() < room)
+				{
+					party = p;
+					break;
+				}
 			}
 		}
 		if (!party)
@@ -1805,9 +2012,20 @@ modded class MissionServer
 			film = DL_PartyFilm(z, going);
 		if (film)
 			film.biomeFrom = DL_MyBiome();
+		string pid = m_DL_Cfg.serverId + "-" + party.id.ToString() + "-" + g_Game.GetTime().ToString();
+		foreach (DL_PartyUnit pu : going)
+		{
+			foreach (PlayerBase pm : pu.crew)
+			{
+				if (pm && pm.GetIdentity())
+					m_DL_PartyIdOf.Set(pm.GetIdentity().GetPlainId(), pid);
+			}
+		}
+		if (film)
+			film.biomeVia = z.viaBiome;
 		if (party.convoy)
 		{
-			string cid = m_DL_Cfg.serverId + "-" + party.id.ToString() + "-" + g_Game.GetTime().ToString();
+			string cid = pid;
 			int cars = 0;
 			if (journey)
 			{
@@ -2038,8 +2256,21 @@ modded class MissionServer
 		else if (price)
 			film = DL_PlainFilm(z, crew, car);
 		if (film)
+		{
 			film.biomeFrom = DL_MyBiome();
+			film.biomeVia = z.viaBiome;
+		}
 		m_DL_SlotOf.Remove(sid);
+		// a crew in one car is a party too (the hub's Players page keeps them together)
+		if (crew.Count() > 1)
+		{
+			string cpid = m_DL_Cfg.serverId + "-" + sid + "-" + g_Game.GetTime().ToString();
+			foreach (PlayerBase cm : crew)
+			{
+				if (cm && cm.GetIdentity())
+					m_DL_PartyIdOf.Set(cm.GetIdentity().GetPlainId(), cpid);
+			}
+		}
 		DL_DepartUnit(pb, z, car, crew, price, journey, film);
 	}
 
@@ -2126,6 +2357,12 @@ modded class MissionServer
 		}
 		if (film)
 			q.payload.film = film;
+		string ppid;
+		if (m_DL_PartyIdOf.Find(sid, ppid))
+		{
+			q.payload.partyId = ppid;
+			m_DL_PartyIdOf.Remove(sid);
+		}
 		string cid;
 		if (m_DL_ConvoyOf.Find(sid, cid))
 		{
@@ -2435,4 +2672,29 @@ class DL_LayoutWaiter : Managed
 	protected MissionServer m_M;
 	void DL_LayoutWaiter(MissionServer m) { m_M = m; }
 	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_OnLayout(ok, body); }
+}
+
+// the arrival spot check for the hub (POST /api/spots)
+class DL_SpotPlace
+{
+	string car;
+	string truck;
+}
+
+class DL_SpotReport
+{
+	string arrival;
+	ref array<ref DL_SpotPlace> places = new array<ref DL_SpotPlace>;
+}
+
+class DL_SpotsReq
+{
+	string serverId;
+	string key;
+	ref array<ref DL_SpotReport> spots = new array<ref DL_SpotReport>;
+}
+
+class DL_SpotsWaiter : Managed
+{
+	void OnAnswer(bool ok, string body) {}
 }

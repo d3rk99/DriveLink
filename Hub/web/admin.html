@@ -233,6 +233,7 @@ function drawLayout() {
       rad.on("dragend", e => { z.radius = Math.max(1, Math.round(dist(c.getLatLng(), e.target.getLatLng()))); save(); renderEdit(); drawLayout(); });
     }
   });
+  L1.arrivals.forEach((a, i) => drawCarSpots(a));
   L1.arrivals.forEach((a, i) => {
     const on = sel && sel.kind === "arr" && sel.i === i;
     const ll = [a.pos[2], a.pos[0]];
@@ -252,10 +253,38 @@ function drawLayout() {
   });
 }
 
+// where the cars of a trip arriving here stand: the car spot and the 3 convoy places behind it (10 m apart), green /
+// red from the server's own check (POST /api/spots, after its start and after every layout change), grey = no
+// check yet. A blocked place is not a failure: that car looks for the nearest free spot.
+function spotCheck(a) {
+  const sp = srv().spots;
+  if (!sp || !sp.spots) return null;
+  return sp.spots.find(x => x.arrival === a.name) || null;
+}
+function carBase(a) {
+  const onPoint = !a.carPos || (a.carPos[0] === 0 && a.carPos[2] === 0);
+  return onPoint ? { x: a.pos[0], z: a.pos[2], yaw: a.yaw } : { x: a.carPos[0], z: a.carPos[2], yaw: a.carYaw };
+}
+function drawCarSpots(a) {
+  const b = carBase(a), chk = spotCheck(a);
+  const r = b.yaw * Math.PI / 180, fx = Math.sin(r), fz = Math.cos(r), rx = Math.cos(r), rz = -Math.sin(r);
+  for (let k = 0; k < 4; k++) {
+    const cx = b.x - fx * 10 * k, cz = b.z - fz * 10 * k, hw = 1.1, hl = 2.4;
+    const pts = [[hl, hw], [hl, -hw], [-hl, -hw], [-hl, hw]].map(([l, w]) => [cz + fz * l + rz * w, cx + fx * l + rx * w]);
+    const place = chk && chk.places ? chk.places[k] : null;
+    const free = place ? String(place.car || "").startsWith("free") : null;
+    const color = free === null ? "#8a939c" : free ? "#45d483" : "#ff5d5d";
+    const poly = L.polygon(pts, { color, weight: 1, fillOpacity: k === 0 ? .45 : .25, dashArray: free === null ? "3 3" : null, interactive: true }).addTo(layer);
+    const what = k === 0 ? "car spot" : `convoy car ${k + 1}`;
+    poly.bindTooltip(`${esc(a.name)}: ${what}<br>${place ? `car: ${esc(place.car)}<br>truck: ${esc(place.truck)}` : "not checked by the server yet"}`, { direction: "top", className: "lbl" });
+  }
+}
+
 function renderLists() {
   const L1 = L_of(srv());
   $("zlist").innerHTML = L1.zones.map((z, i) => `<div class="item ${sel && sel.kind === "zone" && sel.i === i ? "sel" : ""}" data-k="zone" data-i="${i}"><span><span class="dot" style="background:var(--zone)"></span>${esc(z.name)}</span><span class="hint">r ${Math.round(z.radius)} m → ${esc(z.to)}${z.distanceKm ? `, ${Math.round(z.distanceKm)} km` : ""}</span></div>`).join("") || `<div class="hint">none yet</div>`;
-  $("alist").innerHTML = L1.arrivals.map((a, i) => `<div class="item ${sel && sel.kind === "arr" && sel.i === i ? "sel" : ""}" data-k="arr" data-i="${i}"><span><span class="dot" style="background:var(--arr)"></span>${esc(a.name)}</span><span class="hint">${Math.round(a.yaw)}°</span></div>`).join("") || `<div class="hint">none yet</div>`;
+  $("alist").innerHTML = L1.arrivals.map((a, i) => { const c = spotCheck(a); const bad = c && c.places ? c.places.filter(p => !String(p.car || "").startsWith("free")).length : 0;
+    return `<div class="item ${sel && sel.kind === "arr" && sel.i === i ? "sel" : ""}" data-k="arr" data-i="${i}"><span><span class="dot" style="background:var(--arr)"></span>${esc(a.name)}</span><span class="hint">${bad ? `<span class="badtxt">${bad}/4 car places blocked</span> ` : ""}${Math.round(a.yaw)}°</span></div>`; }).join("") || `<div class="hint">none yet</div>`;
   document.querySelectorAll(".item").forEach(el => el.onclick = () => {
     sel = { kind: el.dataset.k, i: +el.dataset.i };
     const L2 = L_of(srv()), o = sel.kind === "zone" ? L2.zones[sel.i] : L2.arrivals[sel.i];
@@ -283,6 +312,7 @@ function renderEdit() {
       <div class="hint" id="fCost">${tripCost(z)}</div>
       <label>Sends players to</label><select id="fTo">${otherServers().map(s => `<option value="${esc(s.id)}" ${s.id === z.to ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>
       <label>Arrival point there</label><select id="fArr">${arrs.map(a => `<option ${a.name === z.arrival ? "selected" : ""}>${esc(a.name)}</option>`).join("")}${arrs.length ? "" : `<option value="">(that server has no arrival points yet)</option>`}</select>
+      <label>Road film: the look on the way <span class="hint">(between this server's look and the target's)</span></label><select id="fVia">${["", "forest", "field", "desert", "snow"].map(b => `<option value="${b}" ${(z.viaBiome || "") === b ? "selected" : ""}>${b ? b[0].toUpperCase() + b.slice(1) : "Nothing in between"}</option>`).join("")}</select>
       <div style="margin-top:10px"><button class="danger" id="fDel">Delete zone</button></div>`;
     $("fName").oninput = e => { z.name = e.target.value; changed(); };
     $("fX").onchange = e => { z.center[0] = +e.target.value; changed(true); };
@@ -291,6 +321,7 @@ function renderEdit() {
     $("fKm").onchange = e => { z.distanceKm = Math.max(0, +e.target.value || 0); $("fCost").innerHTML = tripCost(z); changed(); };
     $("fTo").onchange = e => { z.to = e.target.value; const t = S.servers.find(s => s.id === z.to); z.arrival = t && t.layout.arrivals[0] ? t.layout.arrivals[0].name : ""; changed(true); renderEdit(); };
     $("fArr").onchange = e => { z.arrival = e.target.value; changed(); };
+    $("fVia").onchange = e => { z.viaBiome = e.target.value; changed(); };
     $("fDel").onclick = () => { L1.zones.splice(sel.i, 1); sel = null; changed(true); };
   } else {
     const a = L1.arrivals[sel.i];
@@ -299,7 +330,9 @@ function renderEdit() {
       <label>Name (zones on other servers point here)</label><input id="fName" value="${esc(a.name)}">
       <div class="row"><div><label>x</label><input id="fX" type="number" step="0.1" value="${a.pos[0].toFixed(1)}"></div><div><label>z</label><input id="fZ" type="number" step="0.1" value="${a.pos[2].toFixed(1)}"></div></div>
       <label>Facing (degrees, 0 = north, 90 = east)</label><input id="fYaw" type="number" min="0" max="359" value="${Math.round(a.yaw)}">
-      <div class="hint" style="margin-top:6px">A car that comes along is built here facing the same way; the driver stands 3 m to its left.</div>
+      <div class="hint" style="margin-top:6px">A car that comes along is built here facing the same way; the driver stands 3 m to its left. A convoy's cars line up behind it, 10 m apart (the boxes on the map). A car whose place is taken stands at the nearest free spot.</div>
+      ${(() => { const c = spotCheck(a); if (!c || !c.places) return `<div class="hint">The server hasn't checked these places yet (it does after it starts and after every change here, within ~1 min).</div>`;
+        return `<table style="margin-top:6px"><tr><th>Place</th><th>Car</th><th>Truck</th></tr>${c.places.map((p, k) => `<tr><td>${k === 0 ? "car spot" : "convoy car " + (k + 1)}</td><td class="${String(p.car).startsWith("free") ? "ok" : "badtxt"}">${esc(p.car)}</td><td class="${String(p.truck).startsWith("free") ? "ok" : "badtxt"}">${esc(p.truck)}</td></tr>`).join("")}</table>`; })()}
       <div style="margin-top:10px"><button class="danger" id="fDel">Delete point</button></div>`;
     $("fName").oninput = e => { renameArrival(a, e.target.value); changed(); };
     $("fX").onchange = e => { a.pos[0] = +e.target.value; changed(true); };
@@ -502,13 +535,32 @@ function travelBox(f) {
       <div><label>Travel time</label><select id="tTime"><option value="0" ${!t.timeEnabled ? "selected" : ""}>Off: arrive at once</option><option value="1" ${t.timeEnabled ? "selected" : ""}>On: on the road for distance / speed, no login anywhere meanwhile</option></select></div>
     </div>
     <div class="grid3">${TRAVEL_FIELDS.map(([k, label, unit]) => `<div><label>${label} <span class="hint">(${unit})</span></label><input id="t_${k}" type="number" step="0.5" min="0" value="${t[k] ?? 0}"></div>`).join("")}</div>
+    <h2 style="margin-top:14px">Travelling together</h2>
+    <div class="hint">Players who come into the same zone while its countdown runs leave together - every newcomer starts the countdown again. One road for all of them, they arrive together. A convoy shares jerry cans, spare wheels that fit, repair kits and the food in its trunks.</div>
+    <div class="grid3" style="margin-top:6px">
+      <div><label>Groups on foot</label><select id="tGroups"><option value="1" ${!t.noGroups ? "selected" : ""}>On</option><option value="0" ${t.noGroups ? "selected" : ""}>Off: everyone walks alone</option></select></div>
+      <div><label>Players in a group <span class="hint">(2-16)</span></label><input id="tGroupMax" type="number" min="2" max="16" value="${t.groupMax ?? 8}"></div>
+      <div></div>
+      <div><label>Convoys</label><select id="tConvoys"><option value="1" ${!t.noConvoys ? "selected" : ""}>On</option><option value="0" ${t.noConvoys ? "selected" : ""}>Off: every car travels alone</option></select></div>
+      <div><label>Cars in a convoy <span class="hint">(2-8)</span></label><input id="tConvoyMax" type="number" min="2" max="8" value="${t.convoyMax ?? 4}"></div>
+      <div><label>Arriving here: wait for a late convoy car <span class="hint">(s, 10-900)</span></label><input id="tConvoyWait" type="number" min="10" max="900" value="${t.convoyWaitSeconds ?? 120}"></div>
+    </div>
+    <h2 style="margin-top:14px">Road film</h2>
+    <div class="hint">Played on the arrival black screen of trips that END here, while the crew is built and seated.</div>
+    <div class="grid3" style="margin-top:6px">
+      <div><label>Film</label><select id="tFilm"><option value="1" ${!t.filmOff ? "selected" : ""}>On</option><option value="0" ${t.filmOff ? "selected" : ""}>Off: the story text only</option></select></div>
+      <div><label>Skip</label><select id="tSkip"><option value="1" ${!t.voteSkipOff ? "selected" : ""}>Vote: everyone watching presses Space</option><option value="0" ${t.voteSkipOff ? "selected" : ""}>No skipping</option></select></div>
+    </div>
     <div class="btns"><button class="primary" id="tSave">Save travel rules</button></div><div class="status" id="tMsg"></div></div>`;
 }
 function wireTravel(f) {
   const b = $("tSave");
   if (!b) return;
   b.onclick = async () => {
-    const t = { mode: $("tMode").value, timeEnabled: $("tTime").value === "1", biome: $("tBiome").value };
+    const t = { mode: $("tMode").value, timeEnabled: $("tTime").value === "1", biome: $("tBiome").value,
+      noGroups: $("tGroups").value === "0", noConvoys: $("tConvoys").value === "0", groupMax: Math.round(+$("tGroupMax").value || 8),
+      convoyMax: Math.round(+$("tConvoyMax").value || 4), convoyWaitSeconds: Math.round(+$("tConvoyWait").value || 120),
+      filmOff: $("tFilm").value === "0", voteSkipOff: $("tSkip").value === "0" };
     TRAVEL_FIELDS.forEach(([k]) => t[k] = +$("t_" + k).value);
     try {
       const out = await post(`/admin/api/servers/${encodeURIComponent(f.id)}/travel`, t);
@@ -600,7 +652,7 @@ let players = [], playerSel = null, playerQ = "";
 const srvName = id => { const s = S.servers.find(x => x.id === id); return s ? s.name : id; };
 const since = t => { if (!t) return ""; const d = (Date.now() - Date.parse(t.replace(" ", "T") + "Z")) / 1000; return d < 90 ? "just now" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : `${Math.round(d / 86400)} d ago`; };
 function whereText(p) {
-  if (p.pending) return `<span class="warn">${p.pending.readyIn > 0 ? "on the road" : "travelling"} ${esc(srvName(p.pending.from))} → ${esc(srvName(p.pending.to))}</span>${p.pending.readyIn > 0 ? ` <span class="hint">${leftText(p.pending.readyIn)} left</span>` : ""}${p.pending.failCount ? ` <span class="badtxt">(failed ${p.pending.failCount}x)</span>` : ""}`;
+  if (p.pending) return `<span class="warn">${p.pending.readyIn > 0 ? "on the road" : "travelling"} ${esc(srvName(p.pending.from))} → ${esc(srvName(p.pending.to))}</span>${p.pending.readyIn > 0 ? ` <span class="hint">${leftText(p.pending.readyIn)} left</span>` : ""}${p.pending.failCount ? ` <span class="badtxt">(failed ${p.pending.failCount}x)</span>` : ""}${p.pending.party && p.pending.partySize > 1 ? `<div class="hint">with ${p.pending.partySize - 1} other${p.pending.partySize > 2 ? "s" : ""} - ${esc(p.pending.role || "")}</div>` : ""}`;
   if (p.owner) return `<span class="ok">${esc(srvName(p.owner))}</span>`;
   return `<span class="hint">not assigned (next login anywhere)</span>`;
 }
@@ -651,6 +703,13 @@ async function showPlayer(sid) {
     </div>`;
   if (pend && pend.failCount) h += `<div class="badtxt" style="margin-top:8px">The target failed to build him ${pend.failCount}x: ${esc(pend.lastError || "")}</div>`;
   h += `<h2 style="margin-top:14px">Fix</h2>`;
+  const party = p.party && p.party.members && p.party.members.length > 1 ? p.party : null;
+  if (party) {
+    h += `<div class="box" style="margin-top:8px;background:var(--bg)"><b>Travels with ${party.members.length - 1} other${party.members.length > 2 ? "s" : ""}</b> <span class="hint">(${party.members.some(m => /convoy/.test(m.role || "")) ? "convoy" : party.members.some(m => /drives|passenger/.test(m.role || "")) ? "car crew" : "group on foot"})</span>
+      <table style="margin-top:6px"><tr><th>Player</th><th>In the party</th></tr>${party.members.map(m => `<tr class="click" data-mem="${esc(m.steamId)}"><td>${m.steamId === p.steamId ? "<b>" : ""}${esc(m.name || m.steamId)}${m.steamId === p.steamId ? "</b>" : ""}</td><td class="hint">${esc(m.role || "")}</td></tr>`).join("")}</table>
+      <div class="hint" style="margin-top:6px">The buttons below act on the <b>whole party</b> (so they stay together: one car can't be seated without its crew). Untick to act on ${esc(p.name || "him")} alone.</div>
+      <label style="margin-top:4px"><input type="checkbox" id="plParty" checked style="width:auto"> whole party</label></div>`;
+  }
   if (pend) {
     h += `<div class="hint">A trip is waiting: his gear is in it. Send it to another server (he arrives there at its first arrival point next time he joins), or throw it away.${pend.readyIn > 0 ? ` <b>On the road: ${leftText(pend.readyIn)} left</b> - no server lets him in before that.` : ""}</div>
       <div class="btns"><select id="plSrv" style="width:auto">${opts}</select><button class="primary" id="plSend">Send the trip there</button>${pend.readyIn > 0 ? `<button id="plNow">Arrive now</button>` : ""}<button class="danger" id="plDrop">Drop the trip</button></div>`;
@@ -670,11 +729,14 @@ async function showPlayer(sid) {
   h += `</div>`;
   box.innerHTML = h;
   wireCopy(box);
+  box.querySelectorAll("[data-mem]").forEach(x => x.onclick = () => { playerSel = x.dataset.mem; drawPlayerList(); showPlayer(playerSel); });
   const act = async (action, sure) => {
     const server = $("plSrv") ? $("plSrv").value : "";
-    if (!confirm(sure.replace("{srv}", srvName(server)))) return;
+    const whole = !!($("plParty") && $("plParty").checked);
+    const q = whole ? sure.replace(/\bhis\b/g, "the party's").replace(/\bHe\b/g, "They").replace(/\bhe\b/g, "they") : sure;
+    if (!confirm(q.replace("{srv}", srvName(server)))) return;
     try {
-      const out = await post(`/admin/api/players/${encodeURIComponent(sid)}/action`, { action, server });
+      const out = await post(`/admin/api/players/${encodeURIComponent(sid)}/action`, { action, server, party: whole });
       await loadPlayers(); drawPlayerList(); await showPlayer(sid);
       const m = $("plMsg"); if (m) { m.textContent = "Done: " + out.detail; m.className = "status ok"; }
     } catch (e) { const m = $("plMsg"); if (m) { m.textContent = e.message; m.className = "status badtxt"; } }

@@ -48,6 +48,23 @@ modded class MissionGameplay
 				m_DL_Film.PlayJson(fj);
 			return;
 		}
+		if (rpc_type == DL_Const.RPC_FILM_SKIP)
+		{
+			// the skip vote: everyone watching voted (skip) or how many have
+			int votes;
+			int total;
+			bool skip;
+			if (!ctx.Read(votes) || !ctx.Read(total) || !ctx.Read(skip) || !m_DL_Film)
+				return;
+			if (skip)
+			{
+				Print(DL_Const.LOG_TAG + "road film skipped: everyone voted");
+				m_DL_Film.Stop();
+			}
+			else
+				m_DL_Film.VoteStatus(votes, total);
+			return;
+		}
 		if (rpc_type == DL_Const.RPC_CREW_WAIT)
 		{
 			int phase;
@@ -108,6 +125,8 @@ modded class MissionGameplay
 			}
 			m_DL_F9WasDown = f9;
 			m_DL_Film.Update(timeslice);
+			if (m_DL_Film.TakeVote())
+				DL_SendFilmVote();
 			if (m_DL_WaitShown)
 				DL_TextLayout(m_DL_Film.IsPlaying());
 		}
@@ -225,6 +244,16 @@ modded class MissionGameplay
 	}
 
 	// with a road film on screen the title, status and story move under it (the film takes the top 2/3)
+	// to the server through his own player (PlayerBase.OnRPC there, DL_FilmVotes)
+	protected void DL_SendFilmVote()
+	{
+		PlayerBase me = PlayerBase.Cast(g_Game.GetPlayer());
+		if (!me)
+			return;
+		ScriptRPC rpc = new ScriptRPC();
+		rpc.Send(me, DL_Const.RPC_FILM_VOTE, true, null);
+	}
+
 	protected void DL_TextLayout(bool low)
 	{
 		if ((low == m_DL_TextLow && !low) || !m_DL_WaitRoot)

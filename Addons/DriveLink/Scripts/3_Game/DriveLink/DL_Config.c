@@ -12,6 +12,8 @@ class DL_Const
 	static const int RPC_COUNTDOWN = 4810002;  // server -> client: leaving in N s (0 = cancelled)
 	static const int RPC_KICK = 4810003;       // server -> client: show this message (caption, text) and leave the server
 	static const int RPC_FILM = 4810005;       // server -> client: the road film of his trip (DL_Film as JSON)
+	static const int RPC_FILM_VOTE = 4810006;  // client -> server: he pressed Space to skip the film (or it ended)
+	static const int RPC_FILM_SKIP = 4810007;  // server -> clients watching one film: votes, total, skip now
 	static const int RPC_CREW_WAIT = 4810004;  // server -> client: crew waiting room (phase, here, expected, text, start engine)
 	static const int WAIT_SHOW = 1;            // black screen + "n/m connected"
 	static const int WAIT_DONE = 2;            // lift the black screen (and the driver starts the engine)
@@ -29,6 +31,7 @@ class DL_Zone
 	string to;                // target server id (from the hub)
 	string arrival;           // arrival point name on the target
 	float distanceKm;         // trip length: travel cost/time scale with it (0 = free, instant)
+	string viaBiome;          // the road film's look on the way (between this server's and the target's), "" = none
 }
 
 // Travel cost + time for trips that START on this server (hub web app, Servers page, Travel). Costs are per 10 km of
@@ -53,6 +56,15 @@ class DL_TravelRules
 	float spareNeededKm;      // refuse mode: car trips longer than this need a spare wheel or a TireRepairKit (0 = off)
 	float flatPct = 3;        // weakened mode (step 4): flat tyre chance per 10 km
 	string biome;             // this server's look in the road film: forest|field|desert|snow, "" = from the map
+	// group travel (Research/group-travel.md), parties leaving here; 0 = the default
+	bool noGroups;            // walkers who enter a zone together do NOT travel as a group
+	bool noConvoys;           // cars that enter a zone together do NOT travel as a convoy
+	int groupMax = 8;
+	int convoyMax = 4;
+	int convoyWaitSeconds = 120; // arriving here: a convoy waits this long for a late car
+	// the road film of trips that END here
+	bool filmOff;             // story text only
+	bool voteSkipOff;         // no skipping (else everyone watching presses Space)
 }
 
 // Where you come out when you arrive from another server.
@@ -206,6 +218,7 @@ class DL_PlayerData
 	// a group on foot: his place beside the others at the arrival point
 	int convoyIdx;
 	int partySlot;
+	string partyId;           // everyone who travels together (group, convoy, crew) has the same one; "" = alone
 	// a convoy: its id and how many of its cars arrive (the target lifts the black screen for all of them at once)
 	string convoyId;
 	int convoyCars;

@@ -135,9 +135,27 @@ expect "time: depart with 600 s" "$(post /api/depart "$(req chernarus ",\"steamI
 has "time: depart says readyIn" '"readyIn":600'
 post /api/arrive "$(req livonia ",\"steamId\":\"$P3\"")" >/dev/null; has "time: target says wait" '"action":"wait"'
 post /api/arrive "$(req chernarus ",\"steamId\":\"$P3\"")" >/dev/null; has "time: source says wait too" '"action":"wait"'
+sleep 1   # a whole second must pass for "time left" to drop below 600
 curl -s -m 5 "$U/admin/api/players/$P3" > "$T/body"; has "time: players page time left" '"readyIn":59'
 expect "time: arrive now" "$(apost /admin/api/players/$P3/action '{"action":"arrive_now"}')" 200
 post /api/arrive "$(req livonia ",\"steamId\":\"$P3\"")" >/dev/null; has "time: after arrive now = transfer" '"action":"transfer"'
+
+# group travel: a party's trips are kept together (party id from the snapshot), whole-party actions, spot report
+P4=76561198000000101
+P5=76561198000000102
+PP='{"version":2,"charType":"SurvivorM_Boris","partyId":"chernarus-7-1","convoyId":"chernarus-7-1","convoyIdx":1,"car":{"type":"Truck_01_Covered","items":[]},"items":[]}'
+PQ='{"version":2,"charType":"SurvivorF_Eva","partyId":"chernarus-7-1","convoyId":"chernarus-7-1","convoyIdx":1,"carGroup":"76561198000000101","carSeat":1,"items":[]}'
+expect "party: driver departs" "$(post /api/depart "$(req chernarus ",\"steamId\":\"$P4\",\"to\":\"livonia\",\"arrival\":\"x\",\"travelSeconds\":900,\"payload\":$PP")")" 200
+expect "party: passenger departs" "$(post /api/depart "$(req chernarus ",\"steamId\":\"$P5\",\"to\":\"livonia\",\"arrival\":\"x\",\"travelSeconds\":900,\"payload\":$PQ")")" 200
+curl -s -m 5 "$U/admin/api/players?q=7656119800000010" > "$T/body"; has "party: list shows the party size" '"partySize":2'
+has "party: list shows the role" 'car 2 of the convoy, drives the Truck_01_Covered'
+curl -s -m 5 "$U/admin/api/players/$P5" > "$T/body"; has "party: detail lists both members" '"steamId":"76561198000000101"'
+expect "party: arrive now for the whole party" "$(apost /admin/api/players/$P5/action '{"action":"arrive_now","party":true}')" 200
+has "party: action says whole party" 'whole party: 2 players'
+post /api/arrive "$(req livonia ",\"steamId\":\"$P4\"")" >/dev/null; has "party: the driver arrives now too" '"action":"transfer"'
+expect "spots: report" "$(post /api/spots "$(req chernarus ",\"spots\":[{\"arrival\":\"x\",\"places\":[{\"car\":\"free\",\"truck\":\"blocked by a wall\"}]}]")")" 200
+curl -s -m 5 "$U/admin/api/state" > "$T/body"; has "spots: shown in state" 'blocked by a wall'
+has "travel: group settings in state" '"convoyMax":4'
 
 # HTTPS (self-signed, so -k)
 code=$(curl -s -k -m 5 -o "$T/body" -w "%{http_code}" --data-binary "$(req chernarus "")" https://127.0.0.1:17291/api/hello)

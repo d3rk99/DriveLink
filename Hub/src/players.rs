@@ -39,7 +39,9 @@ pub async fn list(State(h): State<Shared>, Query(q): Query<ListQ>) -> Response {
     let sql = "SELECT c.steam_id, c.name, c.owner_server, c.last_server, c.last_login, c.updated_at,
                       t.from_server, t.to_server, t.arrival, t.created_at, t.fail_count, t.last_error,
                       (SELECT COUNT(*) FROM transfers x WHERE x.steam_id = c.steam_id AND x.state = 'claimed'),
-                      MAX(0, COALESCE(CAST(strftime('%s', t.ready_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER), 0))
+                      MAX(0, COALESCE(CAST(strftime('%s', t.ready_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER), 0)),
+                      t.party, t.party_role,
+                      (SELECT COUNT(*) FROM transfers y WHERE y.party = t.party AND y.state = 'pending')
                FROM characters c
                LEFT JOIN transfers t ON t.steam_id = c.steam_id AND t.state = 'pending'
                WHERE c.steam_id LIKE ?1 OR IFNULL(c.name, '') LIKE ?1
@@ -60,7 +62,8 @@ pub async fn list(State(h): State<Shared>, Query(q): Query<ListQ>) -> Response {
             "pending": match pending_to {
                 Some(to) => json!({"from": r.get::<_, String>(6)?, "to": to, "arrival": r.get::<_, String>(8)?,
                                    "since": r.get::<_, String>(9)?, "failCount": r.get::<_, i64>(10)?, "lastError": r.get::<_, Option<String>>(11)?,
-                                   "readyIn": r.get::<_, i64>(13)?}),
+                                   "readyIn": r.get::<_, i64>(13)?, "party": r.get::<_, Option<String>>(14)?,
+                                   "role": r.get::<_, Option<String>>(15)?, "partySize": r.get::<_, i64>(16)?}),
                 None => Value::Null,
             },
             "trips": r.get::<_, i64>(12)?,
@@ -139,6 +142,28 @@ pub async fn detail(State(h): State<Shared>, Path(sid): Path<String>) -> Respons
         .optional()
         .ok()
         .flatten();
+    // the party of his waiting trip: everyone travelling with him, and where each is in it
+    let party: Option<String> = db
+        .query_row("SELECT party FROM transfers WHERE steam_id=?1 AND state='pending'", params![sid], |r| r.get(0))
+        .optional()
+        .ok()
+        .flatten()
+        .flatten();
+    let mut members = Vec::new();
+    if let Some(pid) = &party {
+        if let Ok(mut st) = db.prepare(
+            "SELECT t.steam_id, c.name, t.party_role FROM transfers t LEFT JOIN characters c ON c.steam_id = t.steam_id
+             WHERE t.party=?1 AND t.state='pending' ORDER BY t.party_role, c.name",
+        ) {
+            if let Ok(it) = st.query_map(params![pid], |r| Ok(json!({"steamId": r.get::<_, String>(0)?, "name": r.get::<_, Option<String>>(1)?, "role": r.get::<_, Option<String>>(2)?}))) {
+                members = it.filter_map(Result::ok).collect();
+            }
+        }
+    }
+    p["party"] = match &party {
+        Some(pid) => json!({"id": pid, "members": members}),
+        None => Value::Null,
+    };
     let mut log = Vec::new();
     if let Ok(mut st) = db.prepare("SELECT at, action, detail FROM admin_log WHERE steam_id=?1 ORDER BY id DESC LIMIT 20") {
         if let Ok(it) = st.query_map(params![sid], |r| Ok(json!({"at": r.get::<_, String>(0)?, "action": r.get::<_, String>(1)?, "detail": r.get::<_, String>(2)?}))) {
@@ -161,6 +186,9 @@ pub struct ActionForm {
     action: String,
     #[serde(default)]
     server: String,
+    /// send / arrive_now / drop: for everyone in his party (group, convoy, crew), so they stay together
+    #[serde(default)]
+    party: bool,
 }
 
 // POST /admin/api/players/{steamId}/action  {action, server}
@@ -189,6 +217,22 @@ pub async fn action(State(h): State<Shared>, Path(sid): Path<String>, body: Byte
         Ok(p) => p,
         Err(e) => return db_err(e),
     };
+    // the whole party: every member's waiting trip (the tokens), else just his
+    let mut tokens: Vec<(String, String)> = Vec::new(); // (token, steam id)
+    if let Some((tk, _, _)) = &pending {
+        tokens.push((tk.clone(), sid.clone()));
+        if f.party && ["send", "arrive_now", "drop"].contains(&f.action.as_str()) {
+            let pid: Option<String> = tx.query_row("SELECT party FROM transfers WHERE token=?1", params![tk], |r| r.get(0)).optional().ok().flatten().flatten();
+            if let Some(pid) = pid {
+                if let Ok(mut st) = tx.prepare("SELECT token, steam_id FROM transfers WHERE party=?1 AND state='pending' AND token<>?2") {
+                    if let Ok(it) = st.query_map(params![pid, tk], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                        tokens.extend(it.filter_map(Result::ok));
+                    }
+                }
+            }
+        }
+    }
+    let who = if tokens.len() > 1 { format!(" (whole party: {} players)", tokens.len()) } else { String::new() };
     let need_server = || -> Result<String, Response> {
         match cfg.server(&f.server) {
             Some(s) => Ok(s.id.clone()),
@@ -202,10 +246,13 @@ pub async fn action(State(h): State<Shared>, Path(sid): Path<String>, body: Byte
                 Ok(t) => t,
                 Err(r) => return r,
             };
-            if let Err(e) = tx.execute("UPDATE transfers SET to_server=?1, arrival='', fail_count=0, last_error=NULL WHERE token=?2", params![target, token]) {
-                return db_err(e);
+            let _ = token;
+            for (tk, _) in &tokens {
+                if let Err(e) = tx.execute("UPDATE transfers SET to_server=?1, arrival='', fail_count=0, last_error=NULL WHERE token=?2", params![target, tk]) {
+                    return db_err(e);
+                }
             }
-            format!("waiting trip {from} -> {to} now goes to {target} (first arrival point)")
+            format!("waiting trip {from} -> {to} now goes to {target} (first arrival point){who}")
         }
         "assign" => {
             if pending.is_some() {
@@ -232,22 +279,38 @@ pub async fn action(State(h): State<Shared>, Path(sid): Path<String>, body: Byte
         }
         "arrive_now" => {
             let Some((token, from, to)) = &pending else { return bad(StatusCode::CONFLICT, "no trip is waiting") };
-            if let Err(e) = tx.execute("UPDATE transfers SET ready_at=NULL WHERE token=?1", params![token]) {
-                return db_err(e);
+            let _ = token;
+            for (tk, _) in &tokens {
+                if let Err(e) = tx.execute("UPDATE transfers SET ready_at=NULL WHERE token=?1", params![tk]) {
+                    return db_err(e);
+                }
             }
-            format!("trip {from} -> {to}: arrives now (travel time skipped)")
+            format!("trip {from} -> {to}: arrives now (travel time skipped){who}")
         }
         "drop" => {
             let Some((token, from, to)) = &pending else { return bad(StatusCode::CONFLICT, "no trip is waiting") };
-            if let Err(e) = tx.execute("UPDATE transfers SET state='expired' WHERE token=?1", params![token]) {
-                return db_err(e);
+            let _ = token;
+            for (tk, _) in &tokens {
+                if let Err(e) = tx.execute("UPDATE transfers SET state='expired' WHERE token=?1", params![tk]) {
+                    return db_err(e);
+                }
             }
-            format!("waiting trip {from} -> {to} dropped (its snapshot is gone)")
+            format!("waiting trip {from} -> {to} dropped (its snapshot is gone){who}")
         }
         other => return bad(StatusCode::BAD_REQUEST, format!("unknown action {other:?}")),
     };
-    if let Err(e) = tx.execute("INSERT INTO admin_log(steam_id, action, detail) VALUES (?1, ?2, ?3)", params![sid, f.action, detail]) {
-        return db_err(e);
+    // logged for him and for each other member it touched
+    let mut logged = vec![sid.clone()];
+    for (_, msid) in &tokens {
+        if !logged.contains(msid) {
+            logged.push(msid.clone());
+        }
+    }
+    for lsid in &logged {
+        let d = if *lsid == sid { detail.clone() } else { format!("{detail} - done from {sid}'s page") };
+        if let Err(e) = tx.execute("INSERT INTO admin_log(steam_id, action, detail) VALUES (?1, ?2, ?3)", params![lsid, f.action, d]) {
+            return db_err(e);
+        }
     }
     if let Err(e) = tx.commit() {
         return db_err(e);
