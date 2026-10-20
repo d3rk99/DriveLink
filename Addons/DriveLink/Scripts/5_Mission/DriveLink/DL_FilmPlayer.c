@@ -552,7 +552,7 @@ class DL_FilmPlayer
 		else if (look == "humvee")        // M1025: wide and long
 			SetCar(CarTex("4x4", colour, "olive"), 64, 128, 47, 76, 1.3, 1.06);
 		else if (look == "truck")         // M3S
-			SetCar(CarTex("truck", colour, "green"), 128, 256, 74, 140, 1, 1);
+			SetCar(CarTex("truck", colour, "green"), 64, 128, 58, 111, 1, 1);
 		else                              // Ada 4x4 (Niva) and anything else
 			SetCar(CarTex("4x4", colour, "green"), 64, 128, 47, 76, 1, 0.95);
 	}

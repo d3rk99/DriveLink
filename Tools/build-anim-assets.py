@@ -230,55 +230,93 @@ def clean_paint(im, box):
     return im
 
 
-def top_truck(uaz):
-    """MiniDayZ's truck is side-on only: a top-down M3S is put together here - the UAZ's bonnet and windscreen as the
-    cab, and a drawn canvas-covered bed (ribs, seams, a little dirt) behind it. 72 x 136, front at the bottom."""
-    W, H = 72, 136
+def shade(rgb, f, add=0):
+    return tuple(max(0, min(255, int(c * f + add))) for c in rgb)
+
+
+def top_truck(rgb):
+    """DriveLink's own top-down M3S (MiniDayZ has its truck side-on only), after the in-game truck seen from above:
+    an off-white canvas bed (the same on every truck) over the rear twin axle, the painted cab with its round roof
+    hatch, a two-pane windscreen and mirrors, a tapering bonnet with vents between wide front wings, headlights and
+    a bumper. Tyres are drawn first, so they show only where they stick out from under the body. 52 x 108, front down."""
+    W, H = 52, 108
     im = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    rnd = random.Random(7)
-    # the bed: canvas over hoops
-    bx0, by0, bx1, by1 = 2, 0, W - 8, 92
-    d.rectangle((bx0, by0, bx1, by1), fill=(30, 32, 26, 255))
-    d.rectangle((bx0 + 1, by0 + 1, bx1 - 1, by1 - 1), fill=(150, 158, 120, 255))
-    for y in range(by0 + 8, by1 - 2, 14):                       # hoops under the canvas
-        d.line((bx0 + 1, y, bx1 - 1, y), fill=(118, 124, 94, 255))
-        d.line((bx0 + 1, y + 1, bx1 - 1, y + 1), fill=(170, 178, 138, 255))
-    d.line(((bx0 + bx1) // 2, by0 + 1, (bx0 + bx1) // 2, by1 - 1), fill=(128, 134, 102, 255))  # ridge
-    for _ in range(90):                                          # dirt and wear
-        x, y = rnd.randint(bx0 + 2, bx1 - 2), rnd.randint(by0 + 2, by1 - 2)
-        d.point((x, y), fill=(105, 110, 84, 255))
-    d.line((bx0 + 1, by1 - 1, bx1 - 1, by1 - 1), fill=(60, 62, 50, 255))
-    # the cab: the UAZ front (bonnet + windscreen), on a dark chassis
-    d.rectangle((bx0 + 2, by1 + 1, bx1 - 2, by1 + 4), fill=(28, 28, 26, 255))
-    cab = uaz.crop((3, 30, 63, 74))                              # windscreen down to the bumper
-    im.paste(cab, (bx0 + (bx1 - bx0 - cab.width) // 2 + 1, by1 + 4), cab)
-    # wheels peeking out at the sides (rear twin axle, front axle)
-    for y in (20, 34, by1 + 18):
-        d.rectangle((0, y, 2, y + 9), fill=(24, 24, 24, 255))
-        d.rectangle((bx1 + 1, y, bx1 + 3, y + 9), fill=(24, 24, 24, 255))
+    rnd = random.Random(11)
+    tyre, tyre_hi = (34, 34, 34, 255), (58, 58, 58, 255)
+    paint, dark, light, line = shade(rgb, 1), shade(rgb, 0.72), shade(rgb, 1.15, 12), shade(rgb, 0.42)
+
+    def wheel(x0, y0, x1, y1):
+        d.rectangle((x0, y0, x1, y1), fill=tyre)
+        for y in range(y0 + 1, y1, 3):
+            d.line((x0, y, x1, y), fill=tyre_hi)               # tread
+
+    # tyres: rear twin axle under the bed, front axle under the wings
+    for y0 in (12, 26):
+        wheel(0, y0, 4, y0 + 10)
+        wheel(W - 5, y0, W - 1, y0 + 10)
+    wheel(0, 86, 4, 97)
+    wheel(W - 5, 86, W - 1, 97)
+    # chassis between bed and cab
+    d.rectangle((7, 54, W - 8, 60), fill=(44, 44, 42, 255))
+
+    # the canvas bed
+    cv, cv_dark, cv_light, cv_line = (212, 204, 182), (178, 170, 148), (230, 224, 206), (96, 90, 76)
+    x0, y0, x1, y1 = 2, 0, W - 3, 55
+    d.rounded_rectangle((x0, y0, x1, y1), radius=3, fill=cv_line + (255,))
+    d.rounded_rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), radius=2, fill=cv + (255,))
+    for hy in range(y0 + 9, y1 - 3, 11):                     # hoops under the canvas, sagging between them
+        d.line((x0 + 2, hy, x1 - 2, hy), fill=cv_light + (255,))
+        d.line((x0 + 2, hy + 1, x1 - 2, hy + 1), fill=cv_dark + (255,))
+        d.line((x0 + 6, hy + 5, x1 - 6, hy + 5), fill=shade(cv, 0.94) + (255,))
+    d.line((x0 + 1, y0 + 1, x0 + 1, y1 - 2), fill=cv_dark + (255,))   # the canvas falls over the sides
+    d.line((x1 - 1, y0 + 1, x1 - 1, y1 - 2), fill=cv_dark + (255,))
+    d.rectangle((x0 + 2, y0 + 1, x1 - 2, y0 + 3), fill=cv_dark + (255,))  # rear flap
+    for _ in range(26):                                       # dirt
+        px_, py_ = rnd.randint(x0 + 3, x1 - 3), rnd.randint(y0 + 4, y1 - 3)
+        d.point((px_, py_), fill=shade(cv, 0.86) + (255,))
+    d.line((x0 + 1, y1 - 1, x1 - 1, y1 - 1), fill=shade(cv, 0.8) + (255,))
+
+    # the cab
+    cx0, cx1 = 5, W - 6
+    d.rectangle((cx0, 59, cx1, 76), fill=line + (255,))
+    d.rectangle((cx0 + 1, 60, cx1 - 1, 75), fill=paint + (255,))
+    d.line((cx0 + 1, 60, cx1 - 1, 60), fill=light + (255,))
+    d.line((cx0 + 1, 75, cx1 - 1, 75), fill=dark + (255,))
+    d.ellipse((11, 62, 21, 72), fill=dark + (255,))           # roof hatch
+    d.ellipse((12, 63, 20, 71), fill=light + (255,))
+    d.ellipse((13, 64, 19, 70), fill=paint + (255,))
+    # windscreen (two panes) and mirrors
+    glass, glass_hi = (46, 50, 58, 255), (84, 92, 104, 255)
+    d.rectangle((cx0, 76, cx1, 82), fill=line + (255,))
+    d.rectangle((cx0 + 2, 77, 24, 81), fill=glass)
+    d.rectangle((27, 77, cx1 - 2, 81), fill=glass)
+    d.line((cx0 + 3, 77, cx0 + 6, 77), fill=glass_hi)
+    d.line((28, 77, 31, 77), fill=glass_hi)
+    for mx in (1, W - 4):
+        d.rectangle((mx, 77, mx + 2, 80), fill=(50, 50, 52, 255))
+    d.line((3, 78, cx0, 78), fill=(70, 70, 72, 255))
+    d.line((cx1, 78, W - 4, 78), fill=(70, 70, 72, 255))
+    # front wings (wide) and the bonnet (tapering) between them
+    d.rectangle((2, 88, W - 3, 103), fill=line + (255,))
+    d.rectangle((3, 89, W - 4, 102), fill=paint + (255,))
+    d.line((3, 89, W - 4, 89), fill=light + (255,))
+    d.polygon([(cx0, 82), (cx1, 82), (W - 12, 101), (11, 101)], fill=line + (255,))
+    d.polygon([(cx0 + 1, 83), (cx1 - 1, 83), (W - 13, 100), (12, 100)], fill=paint + (255,))
+    d.line((W // 2 - 1, 84, W // 2 - 1, 99), fill=dark + (255,))   # bonnet crease
+    d.line((W // 2, 84, W // 2, 99), fill=light + (255,))
+    for vy in range(90, 99, 2):                               # vents on the sides of the bonnet
+        d.line((13, vy, 16, vy), fill=line + (255,))
+        d.line((W - 17, vy, W - 14, vy), fill=line + (255,))
+    d.rectangle((17, 98, W - 18, 101), fill=(40, 40, 40, 255))   # grille
+    for gx in range(18, W - 18, 2):
+        d.point((gx, 99), fill=(90, 90, 90, 255))
+    d.rectangle((5, 97, 8, 100), fill=(236, 226, 168, 255))  # headlights
+    d.rectangle((W - 9, 97, W - 6, 100), fill=(236, 226, 168, 255))
+    # bumper
+    d.rectangle((3, 103, W - 4, 106), fill=(58, 58, 58, 255))
+    d.line((3, 103, W - 4, 103), fill=(92, 92, 92, 255))
     return im
-
-
-def glass(im):
-    """the untinted layer drawn over a tinted car: its dark inner pixels (windows, grille, tyres) in neutral grey-black,
-    so a white or blue car still has dark tinted glass"""
-    px = im.load()
-    w, h = im.size
-    out = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-    op = out.load()
-    for y in range(1, h - 1):
-        for x in range(1, w - 1):
-            r, g, b, a = px[x, y]
-            if a < 230:
-                continue                                   # shadow / outside
-            if any(px[x + dx, y + dy][3] < 230 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
-                continue                                   # the outline stays with the body
-            lum = 0.3 * r + 0.59 * g + 0.11 * b
-            if lum < 80:
-                v = int(34 + lum * 0.45)
-                op[x, y] = (v, v + 2, v + 6, 255)
-    return out
 
 
 # the paints each car comes in (DayZ class-name colours + the default), RGB of the paint's middle tone
@@ -287,7 +325,7 @@ CAR_PAINTS = {
               'grey': (138, 138, 138), 'red': (172, 44, 38), 'blue': (58, 88, 156)},
     '4x4': {'green': (90, 120, 72), 'blue': (60, 90, 152), 'white': (226, 226, 220), 'olive': (102, 110, 70),
             'beige': (188, 168, 124), 'grey': (138, 138, 138)},
-    'truck': {'green': (96, 110, 72), 'blue': (62, 86, 140), 'orange': (206, 110, 42), 'grey': (138, 138, 138)},
+    'truck': {'green': (92, 108, 70), 'blue': (68, 96, 162), 'orange': (206, 110, 42), 'grey': (138, 138, 138)},
 }
 
 
@@ -346,20 +384,23 @@ def car_sprites(tmp):
     """the player's car in the film, painted here in every colour it comes in (CAR_PAINTS):
          car_sedan_<paint>  the drivable Volga (graffiti painted out): Olga 24, Sarka 120, Gunter 2
          car_4x4_<paint>    the UAZ: Ada 4x4, M1025
-         car_truck_<paint>  a top-down truck (UAZ cab + drawn canvas bed, top_truck): M3S
+         car_truck_<paint>  DriveLink's own top-down M3S (top_truck), white canvas on every paint
        each sprite at (0, 0) of its sheet with one even shadow down-right, front at the bottom; sizes in
        DL_FilmPlayer.BuildCar"""
     made = []
     volga = Image.open(os.path.join(PACK, MINIDAYZ['volga_ca'])).convert('RGBA').crop((178, 142, 240, 222))
     volga = clean_paint(volga, (4, 4, 56, 66))
     uaz = Image.open(os.path.join(PACK, MINIDAYZ['uaz_ca'])).convert('RGBA').crop((176, 80, 244, 154))
-    truck = top_truck(uaz)
-    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', truck)):
-        shaped = reshadow(im)
-        print('car', base, shaped.size)
+    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None)):
         for name, rgb in CAR_PAINTS[base].items():
+            if base == 'truck':
+                car = reshadow(top_truck(rgb))
+            else:
+                car = paint(reshadow(im), base, rgb)
+            if name == next(iter(CAR_PAINTS[base])):
+                print('car', base, car.size)
             dst = os.path.join(tmp, 'car_%s_%s_ca.png' % (base, name))
-            pow2(paint(shaped, base, rgb)).save(dst)
+            pow2(car).save(dst)
             made.append(dst)
     return made
 
