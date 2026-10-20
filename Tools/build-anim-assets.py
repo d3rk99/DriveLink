@@ -176,6 +176,133 @@ def pow2(im):
     return out
 
 
+def no_outline(im):
+    """MiniDayZ item icons have a 1-px white outline (looks like a sticker on the road): the white pixels that touch
+    transparency become transparent"""
+    px = im.load()
+    w, h = im.size
+    edge = []
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if a > 0 and min(r, g, b) > 235:
+                near = [(x + dx, y + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+                if any(not (0 <= nx < w and 0 <= ny < h) or px[nx, ny][3] == 0 for nx, ny in near):
+                    edge.append((x, y))
+    for x, y in edge:
+        px[x, y] = (0, 0, 0, 0)
+    return im
+
+
+def grey_copy(im, ref_pct=0.75, white=225):
+    """grey version brightened so the paint is near white: the mod tints it (SetColor) with the car's DayZ colour"""
+    px = im.load()
+    lum = sorted(0.3 * r + 0.59 * g + 0.11 * b for r, g, b, a in im.getdata() if a > 200)
+    k = white / max(lum[int(len(lum) * ref_pct)], 1)
+    out = im.copy()
+    op = out.load()
+    for y in range(im.height):
+        for x in range(im.width):
+            r, g, b, a = px[x, y]
+            if a > 0:
+                v = min(255, int((0.3 * r + 0.59 * g + 0.11 * b) * k))
+                op[x, y] = (v, v, v, a)
+    return out
+
+
+def clean_paint(im, box):
+    """paints over the white graffiti inside box (x0, y0, x1, y1) with the surrounding body colour"""
+    px = im.load()
+    x0, y0, x1, y1 = box
+    for _ in range(3):
+        todo = []
+        for y in range(y0, y1):
+            for x in range(x0, x1):
+                r, g, b, a = px[x, y]
+                if a > 200 and min(r, g, b) > 150 and max(r, g, b) - min(r, g, b) < 60:
+                    near = [px[x + dx, y + dy] for dx in range(-3, 4) for dy in range(-3, 4)
+                            if 0 <= x + dx < im.width and 0 <= y + dy < im.height]
+                    body = [c for c in near if c[3] > 200 and not (min(c[:3]) > 150 and max(c[:3]) - min(c[:3]) < 60)]
+                    if body:
+                        todo.append((x, y, tuple(sorted(c[i] for c in body)[len(body) // 2] for i in range(3))))
+        for x, y, c in todo:
+            px[x, y] = c + (255,)
+    return im
+
+
+def top_truck(uaz):
+    """MiniDayZ's truck is side-on only: a top-down M3S is put together here - the UAZ's bonnet and windscreen as the
+    cab, and a drawn canvas-covered bed (ribs, seams, a little dirt) behind it. 72 x 136, front at the bottom."""
+    W, H = 72, 136
+    im = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    rnd = random.Random(7)
+    # shadow to the right, like the MiniDayZ cars
+    d.rectangle((8, 4, W - 1, H - 2), fill=(0, 0, 0, 70))
+    # the bed: canvas over hoops
+    bx0, by0, bx1, by1 = 2, 0, W - 8, 92
+    d.rectangle((bx0, by0, bx1, by1), fill=(30, 32, 26, 255))
+    d.rectangle((bx0 + 1, by0 + 1, bx1 - 1, by1 - 1), fill=(150, 158, 120, 255))
+    for y in range(by0 + 8, by1 - 2, 14):                       # hoops under the canvas
+        d.line((bx0 + 1, y, bx1 - 1, y), fill=(118, 124, 94, 255))
+        d.line((bx0 + 1, y + 1, bx1 - 1, y + 1), fill=(170, 178, 138, 255))
+    d.line(((bx0 + bx1) // 2, by0 + 1, (bx0 + bx1) // 2, by1 - 1), fill=(128, 134, 102, 255))  # ridge
+    for _ in range(90):                                          # dirt and wear
+        x, y = rnd.randint(bx0 + 2, bx1 - 2), rnd.randint(by0 + 2, by1 - 2)
+        d.point((x, y), fill=(105, 110, 84, 255))
+    d.line((bx0 + 1, by1 - 1, bx1 - 1, by1 - 1), fill=(60, 62, 50, 255))
+    # the cab: the UAZ front (bonnet + windscreen), on a dark chassis
+    d.rectangle((bx0 + 2, by1 + 1, bx1 - 2, by1 + 4), fill=(28, 28, 26, 255))
+    cab = uaz.crop((3, 30, 63, 74))                              # windscreen down to the bumper
+    im.paste(cab, (bx0 + (bx1 - bx0 - cab.width) // 2 + 1, by1 + 4), cab)
+    # wheels peeking out at the sides (rear twin axle, front axle)
+    for y in (20, 34, by1 + 18):
+        d.rectangle((0, y, 2, y + 9), fill=(24, 24, 24, 255))
+        d.rectangle((bx1 + 1, y, bx1 + 3, y + 9), fill=(24, 24, 24, 255))
+    return im
+
+
+def glass(im):
+    """the untinted layer drawn over a tinted car: its dark inner pixels (windows, grille, tyres) in neutral grey-black,
+    so a white or blue car still has dark tinted glass"""
+    px = im.load()
+    w, h = im.size
+    out = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    op = out.load()
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            r, g, b, a = px[x, y]
+            if a < 230:
+                continue                                   # shadow / outside
+            if any(px[x + dx, y + dy][3] < 230 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                continue                                   # the outline stays with the body
+            lum = 0.3 * r + 0.59 * g + 0.11 * b
+            if lum < 80:
+                v = int(34 + lum * 0.45)
+                op[x, y] = (v, v + 2, v + 6, 255)
+    return out
+
+
+def car_sprites(tmp):
+    """the player's car in the film, one grey sheet per body, tinted in the mod per DayZ car + colour, plus an untinted
+       glass sheet (..g) drawn over it:
+         car_sedanw  the drivable Volga (graffiti painted out): Olga 24, Sarka 120, Gunter 2
+         car_4x4w    the UAZ: Ada 4x4, M1025
+         car_truckw  a top-down truck (UAZ cab + drawn canvas bed, top_truck): M3S
+       each sprite at (0, 0) of its sheet, front at the bottom; sizes in DL_FilmPlayer.CarLook"""
+    made = []
+    volga = Image.open(os.path.join(PACK, MINIDAYZ['volga_ca'])).convert('RGBA').crop((178, 142, 240, 222))
+    volga = clean_paint(volga, (4, 4, 56, 66))
+    uaz = Image.open(os.path.join(PACK, MINIDAYZ['uaz_ca'])).convert('RGBA').crop((176, 80, 244, 154))
+    truck = top_truck(uaz)
+    for name, im in (('car_sedan', volga), ('car_4x4', uaz), ('car_truck', truck)):
+        for suffix, layer in (('w', grey_copy(im)), ('g', glass(im))):  # w: tinted body, g: glass on top
+            dst = os.path.join(tmp, name + suffix + '_ca.png')
+            pow2(layer).save(dst)
+            made.append(dst)
+    return made
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(OWN_SRC, exist_ok=True)
@@ -193,8 +320,12 @@ def main():
             print('MISSING (skipped):', src)
             continue
         dst = os.path.join(tmp, name + '.png')
-        pow2(Image.open(src).convert('RGBA')).save(dst)  # palette PNGs make ImageToPAA fail; pad to 2^n
+        im = Image.open(src).convert('RGBA')
+        if name == 'fueltank_ca':
+            im = no_outline(im)
+        pow2(im).save(dst)  # palette PNGs make ImageToPAA fail; pad to 2^n
         pngs.append(dst)
+    pngs += car_sprites(tmp)
     for p in pngs:
         paa = os.path.join(OUT, os.path.basename(p)[:-4] + '.paa')
         r = subprocess.run([IMAGE_TO_PAA, p, paa], capture_output=True, text=True)
@@ -202,7 +333,7 @@ def main():
         print(('ok      ' if ok else 'FAILED  ') + os.path.relpath(paa, REPO), '' if ok else (r.stdout + r.stderr)[-300:])
         if not ok:
             sys.exit(1)
-    shutil.rmtree(tmp)
+    shutil.rmtree(tmp) if not os.environ.get("KEEP") else None
 
 
 if __name__ == '__main__':

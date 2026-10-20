@@ -7,7 +7,8 @@
 #     16 using an item (crouched, working)
 #     weapons only, the weapon SLUNG ON THE BACK (MiniDayZ "h_*"): 17-20 idle  21-24 run  25-28 while the hands fight
 #     (a firearm on the back while swinging = "h_axe_", a melee on the back while aiming = "h_pistol_")
-#     infected: 0-7 as above (walk = run), 8-11 attack
+#     skins only: 17-18 dying (6 frames: 17 = frames 1-4, 18 = 5-6, then the last repeated) from player_skin_dead
+#     infected: 0-7 as above (walk = run), 8-11 attack, 12-13 dying (die1, the same 2-row split)
 #   (1-frame animations are repeated across the row; 30x30 frames are centred in the 32x32 cell; a pose a layer
 #   doesn't have falls back to its idle frame of that direction)
 # Clothing also gets a grey "...w" copy the mod tints with the item's colour from its DayZ class name (Hoodie_Blue).
@@ -25,6 +26,9 @@ IMAGE_TO_PAA = r'E:\Steam\steamapps\common\DayZ Tools\Bin\ImageToPAA\ImageToPAA.
 DIRS = ['down', 'up', 'right', 'left']
 ROWS = ['idle_' + d for d in DIRS] + ['run_' + d for d in DIRS]
 ZED_ROWS = ROWS + ['attack_' + d for d in DIRS]
+ZED_DEAD = {'zed_normal_skin1': 'zed_normal_skin1_dead', 'zed_normal_skin2': 'zed_normal_skin2_dead',
+            'zed_normal_skin3': 'zed_normal_skin3_dead', 'zed_army_skin1': 'zed_army_dead_skin1',
+            'zed_fast_skin1': 'zed_fast_skin1_dead'}   # infected -> its death type (first image name)
 # one entry per row: candidate animation names (the first that exists), lower case
 PEOPLE_ROWS = [[a] for a in ROWS] + [['pistol_' + d] for d in DIRS] + [['axe_' + d] for d in DIRS] + [['using_item']]
 WEAPON_ROWS = PEOPLE_ROWS + [['h_twohand_' + d] for d in DIRS] + [['h_run_' + d] for d in DIRS] + \
@@ -113,6 +117,37 @@ def main():
             print('FAILED', base, (res.stdout + res.stderr)[-200:])
             sys.exit(1)
 
+    def frames_of(t, anim):
+        a = {x[0]: x for x in t[7]}.get(anim)
+        return a[7] if a else []
+
+    def paste_run(out, frames, row):
+        """up to 8 frames over rows row and row + 1 (4 per row); the last frame repeats"""
+        for i in range(8):
+            f = frames[min(i, len(frames) - 1)]
+            img, x, y, w, h = f[0], f[2], f[3], f[4], f[5]
+            cell = sheet(img).crop((x, y, x + w, y + h))
+            r, c = row + i // 4, i % 4
+            out.paste(cell, (c * 32 + (32 - w) // 2, r * 32 + (32 - h) // 2), cell)
+
+    # the player death animations are per base skin (id_1..15, bare skin): match each to our skins by its first frame
+    dead_t = by_first.get('player_skin_dead')
+    dead_ids = {}
+    if dead_t:
+        def first_frame(fr):
+            f = fr[0]
+            return sheet(f[0]).crop((f[2], f[3], f[2] + f[4], f[3] + f[5])).convert('RGB').resize((30, 30))
+        dead = {a[0]: a[7] for a in dead_t[7]}
+        for name in CATEGORIES['skin']:
+            t = by_first.get(name)
+            if not t:
+                continue
+            ref = first_frame(frames_of(t, 'idle_down'))
+            best = min(dead, key=lambda k: sum(abs(p - q) for a, b in zip(first_frame(dead[k]).getdata(), ref.getdata())
+                                               for p, q in zip(a, b)))
+            dead_ids[name] = dead[best]
+        print('dying skins matched:', len(dead_ids))
+
     os.makedirs(OUT, exist_ok=True)
     made = {c: [] for c in CATEGORIES}
     made['melee'] = []
@@ -150,6 +185,13 @@ def main():
                     out.paste(cell, (c * 32 + (32 - w) // 2, r * 32 + (32 - h) // 2), cell)
             if missing:
                 print(name, 'missing', missing)
+            if cat == 'skin' and name in dead_ids:
+                paste_run(out, dead_ids[name], 17)
+            if cat == 'zed' and ZED_DEAD.get(name) in by_first:
+                dt = by_first[ZED_DEAD[name]]
+                fr = frames_of(dt, 'die1') or frames_of(dt, 'die2')
+                if fr:
+                    paste_run(out, fr, 12)
             to_paa(out, short(name))
             made[cat].append(short(name))
             if cat == 'weapon' and name in MELEE:

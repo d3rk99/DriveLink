@@ -58,6 +58,7 @@ class DL_Room
 	bool going;                                     // car being built / crew being seated
 	string story;                                   // what happened on the road (weakened mode), shown on the black screen
 	float filmSeconds;                              // the longest road film a member is watching
+	int revealAt;                                   // g_Game.GetTime(): not before the last member's film / story ends
 }
 
 modded class MissionServer
@@ -871,7 +872,13 @@ modded class MissionServer
 	{
 		if (story == "" && filmSeconds <= 0)
 			return;
-		int secs = Math.Max(9, Math.Ceil(filmSeconds) + 2);
+		int secs = Math.Max(9, Math.Ceil(filmSeconds) + 4);
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (pb)
+		{
+			pb.DL_SetHidden(true);
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(pb.DL_SetHidden, 2000 + 1000 * secs, false, false);
+		}
 		for (int i = 0; i < secs; i++)
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 2000 + 1000 * i, false, sid, DL_Const.WAIT_SHOW, "On the road", false, story);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 2000 + 1000 * secs, false, sid, DL_Const.WAIT_DONE, "", false, "");
@@ -962,7 +969,15 @@ modded class MissionServer
 			room.expected = d.crewCount;
 		if (d.journey != "")
 			room.story = d.journey;
-		room.filmSeconds = Math.Max(room.filmSeconds, DL_SendFilmLater(sid, d));
+		float filmSec = DL_SendFilmLater(sid, d);
+		room.filmSeconds = Math.Max(room.filmSeconds, filmSec);
+		// the film starts once his client is in (sent at 2.5 and 4.5 s); the black screen stays until it ends
+		int until = g_Game.GetTime() + 2000;
+		if (filmSec > 0)
+			until = g_Game.GetTime() + 4500 + filmSec * 1000 + 500;
+		else if (d.journey != "")
+			until = g_Game.GetTime() + 9000;              // time to read the story
+		room.revealAt = Math.Max(room.revealAt, until);
 		vector fwd = Vector(room.carYaw, 0, 0).AnglesToVector();
 		vector right = Vector(room.carYaw + 90, 0, 0).AnglesToVector();
 		vector pos;
@@ -991,6 +1006,7 @@ modded class MissionServer
 		int made = m_DL_Snap.Apply(player, d, dropped);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(m_DL_Snap.FixWeapons, 500, false, player);
 		player.SetAllowDamage(false); // until the black screen lifts (+ arrivalProtectSeconds)
+		player.DL_SetHidden(true);    // nobody nearby sees him appear and get seated; shown again in DL_RoomReveal
 		m_DL_Leaving.Remove(sid);
 		if (room.here.Find(sid) < 0)
 			room.here.Insert(sid);
@@ -1012,14 +1028,10 @@ modded class MissionServer
 		if (!room.going && room.car && room.here.Count() >= room.expected)
 		{
 			room.going = true;
-			// 2 s: his client is still loading; the seat juncture needs the character to exist there. With a story
-			// from the road, 9 s: time to read it on the black screen.
-			int goDelay = 2000;
-			if (room.story != "")
-				goDelay = 9000;
-			if (room.filmSeconds > 0)
-				goDelay = Math.Max(goDelay, room.filmSeconds * 1000 + 2500); // the film plays on the black screen first
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomGo, goDelay, false, group);
+			// 2 s: his client is still loading; the seat juncture needs the character to exist there. The car is built
+			// and everyone seated (invisible) while the story / road film plays: the black screen is the loading screen,
+			// DL_RoomGo lifts it at room.revealAt at the earliest
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomGo, 2000, false, group);
 		}
 		if (!m_DL_RoomTicking)
 		{
@@ -1095,6 +1107,7 @@ modded class MissionServer
 		if (car)
 		{
 			car.SetAllowDamage(false);
+			car.DL_SetHidden(true);
 			m_DL_GroupCar.Set(group, car);
 			// passengers who come after this get seated in it (old path) for a while, then the tag is forgotten
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ForgetGroupCar, m_DL_Cfg.crewWaitSeconds * 2000, false, group, car);
@@ -1125,7 +1138,8 @@ modded class MissionServer
 				i++;
 			}
 		}
-		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomReveal, 1500 + 800 * i + 2500, false, group, car);
+		int revealIn = Math.Max(1500 + 800 * i + 2500, room.revealAt - g_Game.GetTime());
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomReveal, revealIn, false, group, car);
 	}
 
 	// everyone seated: lift the black screen; the driver's client starts the engine (PHYSICS cars are simulated on the
@@ -1137,12 +1151,15 @@ modded class MissionServer
 			return;
 		m_DL_Rooms.Remove(group);
 		bool serverStarts = car != null && car.GetNetworkMoveStrategy() != NetworkMoveStrategy.PHYSICS;
+		if (car)
+			car.DL_SetHidden(false);
 		int seated = 0;
 		foreach (string m : room.here)
 		{
 			PlayerBase pb = DL_FindPlayer(m);
 			if (!pb)
 				continue;
+			pb.DL_SetHidden(false);
 			if (car && car.CrewMemberIndex(pb) >= 0)
 				seated++;
 			bool engine = car != null && m == group && car.CrewDriver() == pb;
@@ -1182,6 +1199,7 @@ modded class MissionServer
 			PlayerBase pb = DL_FindPlayer(m);
 			if (!pb)
 				continue;
+			pb.DL_SetHidden(false);
 			DL_SendWait(m, DL_Const.WAIT_DONE, "", false, "");
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, pb);
 			NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 10, "DriveLink", "No car: " + why + ". You continue on foot.", "");

@@ -27,7 +27,8 @@ class DL_FilmPerson
 	bool marching;                 // walking on the spot while the ground scrolls
 	bool moving;                   // walking its path
 	bool attacking;                // infected only
-	bool down;                     // lying (dead / killed): no animation, turned 90 degrees
+	bool down;                     // dead / killed: plays its dying frames once, then lies there
+	float downT;
 	bool shown;
 	bool zed;
 	float speed = 60;              // film px/s along the path
@@ -235,14 +236,28 @@ class DL_FilmPerson
 			frame = frame % 4;
 			backRow = 21 + dir;
 		}
-		if (down)
-		{
-			row = 0;
-			frame = 0;
-			backRow = 17;
-		}
 		float sx = ox + (x - 16) * px;
 		float sy = oy + (y - 16) * px;
+		if (down)
+		{
+			// the dying frames (skin rows 17-18, infected 12-13), then the last one; MiniDayZ has them for the bare
+			// skin only, so the gear and weapons drop away (as in MiniDayZ)
+			downT += dt;
+			int i = Math.Floor(downT * 9);
+			if (i > 7)
+				i = 7;
+			int first = 17;
+			if (zed)
+				first = 12;
+			Place(layers[0], i % 4, first + i / 4, sx, sy);
+			for (int k = 1; k < layers.Count(); k++)
+				layers[k].Show(false);
+			if (hand)
+				hand.Show(false);
+			if (back)
+				back.Show(false);
+			return;
+		}
 		foreach (DL_Sprite s : layers)
 			Place(s, frame, row, sx, sy);
 		if (back)
@@ -255,10 +270,6 @@ class DL_FilmPerson
 	{
 		s.Cell(frame * 32, row * 32, 32, 32);
 		s.MoveTo(sx, sy);
-		if (down)
-			s.Turn(90);
-		else
-			s.Turn(0);
 	}
 }
 
@@ -317,6 +328,13 @@ class DL_FilmPlayer
 	protected ref DL_Strip m_GroundA;
 	protected ref DL_Strip m_GroundB;
 	protected ref DL_Sprite m_Car;
+	protected ref DL_Sprite m_CarGlass;   // untinted windows over the tinted body
+	protected float m_CarW;       // shown size, film px (with its shadow)
+	protected float m_CarH;
+	protected bool m_DriveOff;    // the end: the car drives out of the bottom
+	protected float m_CarV;
+	protected bool m_Leaving;     // walking round the car they leave behind
+	protected float m_WalkY;      // the walkers' first row
 	protected float m_CarX;
 	protected float m_CarY;       // film pixels (car centre)
 	protected bool m_CarInWorld;  // left behind: it scrolls away with the ground
@@ -405,6 +423,8 @@ class DL_FilmPlayer
 		m_Wrecks.Clear();
 		m_Zed = null;
 		m_Actor = null;
+		m_Car = null;
+		m_CarGlass = null;
 		m_Tool = null;
 		m_Puff = null;
 		m_Fuel = null;
@@ -473,16 +493,12 @@ class DL_FilmPlayer
 		m_CarY = m_ViewH * 0.36;
 		m_CarInWorld = false;
 		m_Car = null;
-		if (m_Film.car == "volga")
-		{
-			m_Car = new DL_Sprite(m_Root, DIR + "volga_ca.paa", 6, 62 * m_Px, 80 * m_Px, 256, 256);
-			m_Car.Cell(178, 142, 62, 80);
-		}
-		else if (m_Film.car != "")
-		{
-			m_Car = new DL_Sprite(m_Root, DIR + "uaz_ca.paa", 6, 68 * m_Px, 74 * m_Px, 256, 256);
-			m_Car.Cell(176, 80, 68, 74);
-		}
+		m_CarGlass = null;
+		m_DriveOff = false;
+		m_Leaving = false;
+		m_CarV = 0;
+		m_WalkY = m_ViewH * 0.40;
+		BuildCar();
 		m_InCar = m_Car != null;
 		// the crew: in the car (hidden) or walking from the start
 		foreach (DL_FilmActor a : m_Film.crew)
@@ -505,20 +521,87 @@ class DL_FilmPlayer
 		return true;
 	}
 
+	// the car the crew drives: DL_FilmCast.CarSprite "look@colour" -> a grey body sheet tinted with the colour and the
+	// glass sheet over it (Tools/build-anim-assets.py car_sprites); "uaz" / "volga" = the old MiniDayZ sprites as they are
+	protected void BuildCar()
+	{
+		string look = m_Film.car;
+		if (look == "")
+			return;
+		string colour = "";
+		int at = look.IndexOf("@");
+		if (at > 0)
+		{
+			colour = look.Substring(at + 1, look.Length() - at - 1);
+			look = look.Substring(0, at);
+		}
+		if (look == "volga")
+		{
+			SetCar(DIR + "volga_ca.paa", "", 256, 256, 178, 142, 62, 80, 1, 1, "");
+			return;
+		}
+		if (look == "uaz")
+		{
+			SetCar(DIR + "uaz_ca.paa", "", 256, 256, 176, 80, 68, 74, 1, 1, "");
+			return;
+		}
+		if (look == "sedan")              // Olga 24 (Volga GAZ-24)
+			SetCar(DIR + "car_sedanw_ca.paa", DIR + "car_sedang_ca.paa", 64, 128, 0, 0, 62, 80, 1, 1, colour);
+		else if (look == "sarka")         // Sarka 120 (Skoda 120): a bit smaller
+			SetCar(DIR + "car_sedanw_ca.paa", DIR + "car_sedang_ca.paa", 64, 128, 0, 0, 62, 80, 0.94, 0.92, colour);
+		else if (look == "gunter")        // Gunter 2 (Golf): a short hatchback
+			SetCar(DIR + "car_sedanw_ca.paa", DIR + "car_sedang_ca.paa", 64, 128, 0, 0, 62, 80, 0.94, 0.82, colour);
+		else if (look == "humvee")        // M1025: wide and long
+			SetCar(DIR + "car_4x4w_ca.paa", DIR + "car_4x4g_ca.paa", 128, 128, 0, 0, 68, 74, 1.22, 1.08, colour);
+		else if (look == "truck")         // M3S
+			SetCar(DIR + "car_truckw_ca.paa", DIR + "car_truckg_ca.paa", 128, 256, 0, 0, 72, 136, 1, 1, colour);
+		else                              // Ada 4x4 (Niva) and anything else
+			SetCar(DIR + "car_4x4w_ca.paa", DIR + "car_4x4g_ca.paa", 128, 128, 0, 0, 68, 74, 0.92, 0.92, colour);
+	}
+
+	protected void SetCar(string tex, string glass, float texW, float texH, float cx, float cy, float cw, float ch, float sx, float sy, string colour)
+	{
+		m_CarW = cw * sx;
+		m_CarH = ch * sy;
+		m_Car = new DL_Sprite(m_Root, tex, 6, m_CarW * m_Px, m_CarH * m_Px, texW, texH);
+		m_Car.Cell(cx, cy, cw, ch);
+		if (colour != "")
+			m_Car.SetColor(CarTint(colour));
+		if (glass != "")
+		{
+			m_CarGlass = new DL_Sprite(m_Root, glass, 6, m_CarW * m_Px, m_CarH * m_Px, texW, texH);
+			m_CarGlass.Cell(cx, cy, cw, ch);
+		}
+	}
+
+	// DayZ car colours (class name suffixes) as paint over the grey body
+	static int CarTint(string c)
+	{
+		if (c == "green") return ARGB(255, 92, 124, 74);
+		if (c == "olive") return ARGB(255, 104, 114, 72);
+		if (c == "blue") return ARGB(255, 62, 92, 156);
+		if (c == "white") return ARGB(255, 236, 236, 230);
+		if (c == "black") return ARGB(255, 58, 58, 64);
+		if (c == "wine") return ARGB(255, 124, 32, 46);
+		if (c == "yellow") return ARGB(255, 226, 186, 52);
+		if (c == "grey" || c == "gray") return ARGB(255, 142, 142, 142);
+		if (c == "red") return ARGB(255, 178, 46, 40);
+		if (c == "orange") return ARGB(255, 212, 112, 42);
+		if (c == "beige") return ARGB(255, 192, 172, 128);
+		return DL_FilmPerson.Tint(c);
+	}
+
 	// ---------------- helpers ----------------
 
+	// half the car body (without its shadow strip on the right)
 	protected float CarHalfW()
 	{
-		if (m_Film.car == "volga")
-			return 27;
-		return 30;
+		return m_CarW / 2 - 3;
 	}
 
 	protected float CarHalfH()
 	{
-		if (m_Film.car == "volga")
-			return 38;
-		return 35;
+		return m_CarH / 2 - 2;
 	}
 
 	protected DL_FilmEvent Ev()
@@ -666,7 +749,7 @@ class DL_FilmPlayer
 			int col = i % 2;
 			int rowN = i / 2;
 			float fx = 114 + col * 28;
-			float fy = m_ViewH * 0.40 + rowN * 22;
+			float fy = m_WalkY + rowN * 22;
 			p.path.Clear();
 			if (jump)
 			{
@@ -747,8 +830,43 @@ class DL_FilmPlayer
 		}
 		else if (e.kind == "walk")
 		{
-			m_Target = WALK;
-			Formation(true);
+			if (m_Car && !m_CarInWorld)
+				LeaveCar();
+			else
+			{
+				m_Target = WALK;
+				Formation(true);
+			}
+		}
+	}
+
+	// the car stays (flat, no fuel): they walk down its side and form up in front of it, then set off on foot
+	protected void LeaveCar()
+	{
+		if (m_InCar)
+			GetOut();
+		m_Target = 0;
+		m_Leaving = true;
+		m_WalkY = m_CarY + CarHalfH() + 16;
+		int i = 0;
+		foreach (DL_FilmPerson p : m_Crew)
+		{
+			if (p.down)
+				continue;
+			p.pose = DL_FilmPerson.NORMAL;
+			p.marching = false;
+			p.path.Clear();
+			int side = -1;
+			if (p.x > m_CarX)
+				side = 1;
+			float sideX = m_CarX + side * (CarHalfW() + 9);
+			if (Math.AbsFloat(p.x - sideX) > 2 && p.y > m_CarY - CarHalfH() - 4 && p.y < m_CarY + CarHalfH() + 4)
+				RouteAround(p, side, p.y);       // somewhere odd next to the car: back to its side first
+			p.Go(sideX, m_WalkY - 4);
+			int col = i % 2;
+			int rowN = i / 2;
+			p.Go(114 + col * 28, m_WalkY + rowN * 22);
+			i++;
 		}
 	}
 
@@ -795,7 +913,30 @@ class DL_FilmPlayer
 		if (!e)
 			return;
 		float len = DL_Film.SceneSeconds(e);
-		if (e.kind == "drive" || e.kind == "walk")
+		if (e.kind == "walk" && m_Leaving)
+		{
+			bool ready = true;
+			foreach (DL_FilmPerson lp : m_Crew)
+			{
+				if (!lp.down && lp.Busy())
+					ready = false;
+			}
+			if (ready)
+			{
+				m_Leaving = false;
+				foreach (DL_FilmPerson mp : m_Crew)
+				{
+					if (!mp.down)
+					{
+						mp.dir = 0;
+						mp.marching = true;
+					}
+				}
+				m_CarInWorld = true;              // left behind: it scrolls away
+				m_Target = WALK;
+			}
+		}
+		else if (e.kind == "drive" || e.kind == "walk")
 			m_Km += e.km / len * dt;
 		else if (e.kind == "flat")
 			SceneFlat(e);
@@ -1134,6 +1275,13 @@ class DL_FilmPlayer
 				p.marching = false;
 			NextStep();
 		}
+		else if (m_Step == 1 && m_InCar && m_Car && !m_CarInWorld)
+		{
+			// still in the car: it drives on, out of the bottom of the window (the road stands still)
+			m_DriveOff = true;
+			m_Step = 3;
+			m_StepT = 0;
+		}
 		else if (m_Step == 1 && Halted())
 		{
 			if (m_InCar)
@@ -1159,6 +1307,14 @@ class DL_FilmPlayer
 			if (gone || m_StepT > DL_Film.END_SECONDS + 1)
 			{
 				Print(DL_Const.LOG_TAG + "road film ended");
+				Stop();
+			}
+		}
+		else if (m_Step == 3)
+		{
+			if (m_CarY - m_CarH / 2 > m_ViewH || m_StepT > DL_Film.END_SECONDS + 1)
+			{
+				Print(DL_Const.LOG_TAG + "road film ended (drove off)");
 				Stop();
 			}
 		}
@@ -1226,17 +1382,19 @@ class DL_FilmPlayer
 		{
 			if (m_CarInWorld)
 				m_CarY -= dy;
-			float bob = 0;
-			if (m_Speed > 20 && !m_CarInWorld)
-				bob = Math.Sin(m_T * 18) * 0.5;
-			float cw = 68;
-			float ch = 74;
-			if (m_Film.car == "volga")
+			if (m_DriveOff)
 			{
-				cw = 62;
-				ch = 80;
+				m_CarV = Math.Min(m_CarV + 110 * dt, 170);
+				m_CarY += m_CarV * dt;
 			}
-			m_Car.MoveTo(m_Ox + (m_CarX - cw / 2 + bob) * m_Px, m_Oy + (m_CarY - ch / 2) * m_Px);
+			float bob = 0;
+			if ((m_Speed > 20 || m_DriveOff) && !m_CarInWorld)
+				bob = Math.Sin(m_T * 18) * 0.5;
+			float carSx = m_Ox + (m_CarX - m_CarW / 2 + bob) * m_Px;
+			float carSy = m_Oy + (m_CarY - m_CarH / 2) * m_Px;
+			m_Car.MoveTo(carSx, carSy);
+			if (m_CarGlass)
+				m_CarGlass.MoveTo(carSx, carSy);
 		}
 		foreach (DL_FilmPerson p : m_Crew)
 		{
@@ -1402,7 +1560,7 @@ class DL_FilmPlayer
 	{
 		s_DemoN++;
 		DL_Film f = new DL_Film();
-		f.car = "uaz";
+		f.car = "4x4@green";
 		f.biomeFrom = "forest";
 		if (s_DemoN % 2 == 1)
 		{
@@ -1430,7 +1588,7 @@ class DL_FilmPlayer
 			f.Add("walk", 15);
 			return f;
 		}
-		f.car = "volga";
+		f.car = "sedan@wine";
 		f.km = 60;
 		f.biomeTo = "snow";
 		f.crew.Insert(DemoActor("Derk", "survivalist", "workpants@brown,tshirt@orange,taloonbackpack@green,baseballcap@red", "glockpistol", "crowbar"));

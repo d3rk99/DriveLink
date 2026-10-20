@@ -137,13 +137,50 @@ class DL_FilmCast
 		return a;
 	}
 
-	// which car sprite: hatchbacks and sedans look like the Volga, everything else like the UAZ
+	// which car the film draws, "look@colour" (DL_FilmPlayer.BuildCar): the vanilla cars by class, their paint from the
+	// class-name colour (OffroadHatchback_Blue) or the car's default paint; modded cars by the nearest kind, in grey
 	static string CarSprite(string carType)
 	{
 		string t = carType;
 		t.ToLower();
-		if (t.Contains("hatchback") || t.Contains("sedan") || t.Contains("civilian") || t.Contains("olga"))
-			return "volga";
-		return "uaz";
+		string look = "4x4";
+		string colour = "grey";
+		if (t.Contains("offroadhatchback"))
+			colour = "green";                  // Ada 4x4
+		else if (t.Contains("civiliansedan"))
+		{
+			look = "sedan";                    // Olga 24
+			colour = "white";
+		}
+		else if (t.Contains("sedan_02"))
+		{
+			look = "sarka";                    // Sarka 120
+			colour = "yellow";
+		}
+		else if (t.Contains("hatchback_02"))
+		{
+			look = "gunter";                   // Gunter 2
+			colour = "red";
+		}
+		else if (t.Contains("truck_01"))
+		{
+			look = "truck";                    // M3S
+			colour = "green";
+		}
+		else if (t.Contains("offroad_02"))
+		{
+			look = "humvee";                   // M1025
+			colour = "olive";
+		}
+		else if (t.Contains("truck"))
+			look = "truck";
+		else if (t.Contains("hatch"))
+			look = "gunter";
+		else if (t.Contains("sedan"))
+			look = "sedan";
+		string c = ColourOf(carType);
+		if (c != "")
+			colour = c;
+		return look + "@" + colour;
 	}
 }
