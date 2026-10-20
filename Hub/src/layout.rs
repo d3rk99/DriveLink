@@ -98,6 +98,9 @@ pub fn clean_arrivals(v: &Value) -> Value {
                     "yaw": a.get("yaw").and_then(Value::as_f64).unwrap_or(0.0).rem_euclid(360.0),
                     "carPos": [num(a, "carPos", 0), 0.0, num(a, "carPos", 2)],
                     "carYaw": a.get("carYaw").and_then(Value::as_f64).unwrap_or(0.0).rem_euclid(360.0),
+                    // a boat that comes along goes on the water here; 0 0 = the nearest free water (the server looks)
+                    "boatPos": [num(a, "boatPos", 0), 0.0, num(a, "boatPos", 2)],
+                    "boatYaw": a.get("boatYaw").and_then(Value::as_f64).unwrap_or(0.0).rem_euclid(360.0),
                 })
             })
             .collect(),

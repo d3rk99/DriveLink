@@ -305,6 +305,7 @@ class DL_FilmCar
 	int idx;
 	ref DL_Sprite sprite;
 	bool truck;               // the M3S: 2 seats (cab doors), 6 wheels
+	string kind = "car";      // "car" | "bike" (2 wheels on the middle line) | "boat" (on the water: nobody gets out)
 	float w;                  // shown size, film px (with its shadow)
 	float h;
 	float x;                  // centre, film px
@@ -375,6 +376,8 @@ class DL_FilmPlayer
 	protected float m_LeadY;           // the lead car's place
 	protected float m_Bottom;          // the window's bottom edge, fraction of the screen height (text goes below)
 	protected bool m_Leaving;          // walking round the car they leave behind
+	protected bool m_Water;            // a boat trip: open water instead of the road (until the boats are left)
+	protected ref DL_Strip m_GroundLand; // a boat trip: the land they walk on when the boats are left
 	protected float m_WalkY;           // the walkers' first row
 	protected ref array<ref DL_FilmPerson> m_Crew = new array<ref DL_FilmPerson>;
 	protected ref DL_FilmPerson m_Zed;
@@ -467,6 +470,7 @@ class DL_FilmPlayer
 		m_Props.Clear();
 		m_Wrecks.Clear();
 		m_Cars.Clear();
+		m_GroundLand = null;
 		m_V = null;
 		m_Donor = null;
 		m_Helper = null;
@@ -525,15 +529,30 @@ class DL_FilmPlayer
 		m_ViewH = gh / m_Px;
 		m_Scroll = 0;
 		m_Km = 0;
-		m_GroundA = new DL_Strip(m_Root, Ground(m_Film.biomeFrom), 1, m_Ox, m_Oy, gw, gh, 256, 256, true);
+		m_Water = false;
+		foreach (string wl : looks)
+		{
+			if (wl.IndexOf("boat") == 0)
+				m_Water = true;
+		}
+		m_GroundLand = null;
+		if (m_Water)
+		{
+			// open water; the biome's land is ready underneath for when the boats are left
+			m_GroundLand = new DL_Strip(m_Root, Ground(m_Film.biomeTo), 1, m_Ox, m_Oy, gw, gh, 256, 256, true);
+			m_GroundLand.SetAlpha(0);
+			m_GroundA = new DL_Strip(m_Root, DIR + "ground_water_ca.paa", 1, m_Ox, m_Oy, gw, gh, 256, 256, true);
+		}
+		else
+			m_GroundA = new DL_Strip(m_Root, Ground(m_Film.biomeFrom), 1, m_Ox, m_Oy, gw, gh, 256, 256, true);
 		m_GroundB = null;
 		m_GroundV = null;
-		if (m_Film.biomeVia != "" && m_Film.biomeVia != m_Film.biomeFrom && m_Film.biomeVia != m_Film.biomeTo)
+		if (!m_Water && m_Film.biomeVia != "" && m_Film.biomeVia != m_Film.biomeFrom && m_Film.biomeVia != m_Film.biomeTo)
 		{
 			m_GroundV = new DL_Strip(m_Root, Ground(m_Film.biomeVia), 2, m_Ox, m_Oy, gw, gh, 256, 256, true);
 			m_GroundV.SetAlpha(0);
 		}
-		if (m_Film.biomeTo != m_Film.biomeFrom && m_Film.biomeTo != "")
+		if (!m_Water && m_Film.biomeTo != m_Film.biomeFrom && m_Film.biomeTo != "")
 		{
 			m_GroundB = new DL_Strip(m_Root, Ground(m_Film.biomeTo), 2, m_Ox, m_Oy, gw, gh, 256, 256, true);
 			m_GroundB.SetAlpha(0);
@@ -608,7 +627,10 @@ class DL_FilmPlayer
 		m_NextProp = 0;
 		m_NextWreck = 1.5;
 		for (int k = 0; k < 8; k++)
-			SpawnProp(Math.RandomFloat(0, m_ViewH));
+		{
+			if (!m_Water)
+				SpawnProp(Math.RandomFloat(0, m_ViewH));
+		}
 		m_Speed = 0;
 		return true;
 	}
@@ -642,6 +664,16 @@ class DL_FilmPlayer
 			SetCar(c, CarTex("sedan", colour, "red"), 64, 128, 50, 78, 0.95, 0.82);
 		else if (look == "humvee")        // M1025: wide and long
 			SetCar(c, CarTex("4x4", colour, "olive"), 64, 128, 47, 76, 1.3, 1.06);
+		else if (look == "bike")          // Motorbike_01 / _02 (placeholder art)
+		{
+			c.kind = "bike";
+			SetCar(c, CarTex("bike", colour, "red"), 32, 64, 26, 50, 1, 1);
+		}
+		else if (look == "boat")          // Boat_01 (placeholder art)
+		{
+			c.kind = "boat";
+			SetCar(c, CarTex("boat", colour, "blue"), 64, 128, 36, 83, 1.1, 1.1);
+		}
 		else if (look == "truck")         // M3S
 		{
 			c.truck = true;
@@ -655,6 +687,8 @@ class DL_FilmPlayer
 	static const string PAINTS_SEDAN = ",white,black,wine,yellow,grey,red,blue,";
 	static const string PAINTS_4X4 = ",green,blue,white,olive,beige,grey,";
 	static const string PAINTS_TRUCK = ",green,blue,orange,grey,";
+	static const string PAINTS_BIKE = ",red,blue,yellow,green,grey,";
+	static const string PAINTS_BOAT = ",blue,black,orange,camo,grey,";
 
 	// the texture of a car body in a paint it comes in (else its default paint)
 	protected static string CarTex(string base, string colour, string fallback)
@@ -667,6 +701,10 @@ class DL_FilmPlayer
 			have = PAINTS_SEDAN;
 		else if (base == "truck")
 			have = PAINTS_TRUCK;
+		else if (base == "bike")
+			have = PAINTS_BIKE;
+		else if (base == "boat")
+			have = PAINTS_BOAT;
 		if (c == "" || !have.Contains("," + c + ","))
 			c = fallback;
 		return DIR + "car_" + base + "_" + c + "_ca.paa";
@@ -1072,6 +1110,12 @@ class DL_FilmPlayer
 			m_Target = DRIVE;
 			HideCrew();
 		}
+		else if (e.kind == "walk" && m_Water)
+		{
+			ToLand();
+			m_Target = WALK;
+			Formation(true);
+		}
 		else if (e.kind == "walk")
 		{
 			if (m_Cars.Count() == 1 && m_V && !m_V.inWorld && Riders(m_V).Count() > 0)
@@ -1083,6 +1127,46 @@ class DL_FilmPlayer
 				m_Target = WALK;
 				Formation(true);
 			}
+		}
+	}
+
+	// a boat trip goes on foot (no boat left that takes them): the water gives way to the land, the boats stay behind
+	protected void ToLand()
+	{
+		m_Water = false;
+		if (m_GroundLand)
+			m_GroundLand.SetAlpha(1);
+		if (m_GroundA)
+			m_GroundA.SetAlpha(0);
+		foreach (DL_FilmCar c : m_Cars)
+			c.inWorld = true;
+		foreach (DL_FilmPerson p : m_Crew)
+		{
+			if (!p.down)
+				p.car = -1;
+		}
+	}
+
+	// a boat's event (fuel, a seat in another boat): the boats stop for a moment, nobody gets out on the water
+	protected void SceneBoat(DL_FilmEvent e)
+	{
+		if (m_Step == 0)
+		{
+			m_Target = 0;
+			NextStep();
+		}
+		else if (m_Step == 1 && m_StepT > 1.6)
+		{
+			if (e.kind == "move" && m_Actor)
+			{
+				if (e.detail == "walk")
+					m_Actor.car = -1;
+				else
+					m_Actor.car = e.car;
+				m_Actor.Show(false);
+			}
+			m_Target = DRIVE;
+			NextStep();
 		}
 	}
 
@@ -1222,6 +1306,8 @@ class DL_FilmPlayer
 		}
 		else if (e.kind == "drive" || e.kind == "walk")
 			m_Km += e.km / len * dt;
+		else if (m_V && m_V.kind == "boat" && (e.kind == "flat" || e.kind == "fuel" || e.kind == "move"))
+			SceneBoat(e);
 		else if (e.kind == "flat")
 			SceneFlat(e);
 		else if (e.kind == "fuel" && e.detail == "shared")
@@ -1262,6 +1348,8 @@ class DL_FilmPlayer
 			int wheels = 4;
 			if (c.truck)
 				wheels = 6;
+			else if (c.kind == "bike")
+				wheels = 2;
 			int wheel = Math.RandomInt(0, wheels);   // even = left, odd = right (screen); wheel / 2 = the axle
 			m_WheelSide = -1;
 			if (wheel % 2 == 1)
@@ -1279,6 +1367,13 @@ class DL_FilmPlayer
 					m_WheelY = c.Top() + TRUCK_REAR_AXLE_2;
 			}
 			m_Puff.x = c.x + m_WheelSide * (hw - 3);
+			if (c.kind == "bike")
+			{
+				m_WheelY = c.y + hh - 8;          // front wheel (the bike drives down)
+				if (axle >= 1)
+					m_WheelY = c.y - hh + 8;      // rear wheel
+				m_Puff.x = c.x;
+			}
 			m_Puff.y = m_WheelY;
 			m_Puff.sprite.Show(true);
 			NextStep();
@@ -1844,6 +1939,8 @@ class DL_FilmPlayer
 		float dy = m_Speed * dt;
 		m_Scroll += dy;
 		m_GroundA.Scroll(m_Scroll * m_Px);
+		if (m_GroundLand)
+			m_GroundLand.Scroll(m_Scroll * m_Px);
 		if (m_GroundV)
 		{
 			m_GroundV.Scroll(m_Scroll * m_Px);
@@ -1855,7 +1952,7 @@ class DL_FilmPlayer
 			m_GroundB.SetAlpha(ToAlpha());
 		}
 		// props and wrecks come up from the bottom
-		if (m_Speed > 1)
+		if (m_Speed > 1 && !m_Water)
 		{
 			m_NextProp -= dy;
 			if (m_NextProp <= 0)
@@ -2096,14 +2193,47 @@ class DL_FilmPlayer
 	// F9 cycles: A = a crew of three through every scene the road has (2 flats, fuel found, fuel lost, walking,
 	// infected fought off, infected kill, rationing, hunger), B = a solo driver whose car is lost to a flat,
 	// C = two in the M3S (cab doors, any of its 6 wheels), D = a convoy of three (a spare from another car, a shared
-	// jerry can, a car left behind: one climbs into a free seat, one walks beside the convoy), E = a group on foot
+	// jerry can, a car left behind: one climbs into a free seat, one walks beside the convoy), E = a group on foot,
+	// F = a car + a motorbike (the bike's spare rides in the car), G = two boats on open water
 	static DL_Film Demo()
 	{
 		s_DemoN++;
 		DL_Film f = new DL_Film();
 		f.car = "4x4@green";
 		f.biomeFrom = "forest";
-		int pick = s_DemoN % 5;
+		int pick = s_DemoN % 7;
+		if (pick == 5)
+		{
+			f.car = "";
+			f.cars.Insert("4x4@green");
+			f.cars.Insert("bike@red");
+			f.km = 60;
+			f.biomeTo = "field";
+			f.crew.Insert(DemoActor("Derk", "def1", "gorkapants,gorkajacket,vest,mountainbackpack", "ak74rifle", "", 0));
+			f.crew.Insert(DemoActor("Britney", "kate", "sportpants@black,hoodiegray@pink,schoolbackpack@yellow", "", "", 0));
+			f.crew.Insert(DemoActor("OrionKaelin", "biker", "jeans@black,downjacket@red,helmetmoto@red", "", "sksrifle", 1));
+			f.Add("drive", 20);
+			f.Add("flat", 20, "OrionKaelin", "spare", 1, 0);  // the bike's spare wheel rides in the Ada
+			f.Add("drive", 20);
+			f.Add("flat", 40, "OrionKaelin", "kit", 1);
+			f.Add("drive", 20);
+			return f;
+		}
+		if (pick == 6)
+		{
+			f.car = "";
+			f.cars.Insert("boat@orange");
+			f.cars.Insert("boat@camo");
+			f.km = 40;
+			f.biomeTo = "forest";
+			f.crew.Insert(DemoActor("Derk", "veteran", "orelpants,oreljacket,razgruz,helmetarmy", "akmrifle", "", 0));
+			f.crew.Insert(DemoActor("Britney", "kate", "sportpants@black,raincoatblue,warmhat@lightblue", "", "", 0));
+			f.crew.Insert(DemoActor("Mika", "def2", "workpants@brown,tshirt@orange,baseballcap@red", "glockpistol", "", 1));
+			f.Add("drive", 15);
+			f.Add("fuel", 15, "Derk", "shared", 1, 0);        // the second boat runs dry: a can from the first
+			f.Add("drive", 25);
+			return f;
+		}
 		if (pick == 4)
 		{
 			f.car = "";

@@ -27,7 +27,7 @@ class DL_Traveller
 class DL_JVehicle
 {
 	int idx;                  // its place in the line at the start (= the film's car index)
-	CarScript live;
+	Transport live;
 	ref DL_CarData car;       // the snapshot the road works on
 	string holder;            // steam id of who drives it (his snapshot carries it to the target)
 	int seats;
@@ -39,7 +39,7 @@ class DL_JVehicle
 class DL_PartyUnit
 {
 	PlayerBase leader;
-	CarScript car;
+	Transport car;
 	ref array<PlayerBase> crew = new array<PlayerBase>;
 }
 
@@ -158,7 +158,7 @@ class DL_Journey
 	// ---------------- the road ----------------
 
 	// one crew: crewPbs[0] = the driver when liveCar != null. weakened = road events on (refuse mode: costs only).
-	static DL_Journey Run(DL_TravelRules t, DL_Zone z, array<PlayerBase> crewPbs, CarScript liveCar, DL_Snapshot snap, DL_CarSnapshot carSnap, bool weakened)
+	static DL_Journey Run(DL_TravelRules t, DL_Zone z, array<PlayerBase> crewPbs, Transport liveCar, DL_Snapshot snap, DL_CarSnapshot carSnap, bool weakened)
 	{
 		array<ref DL_PartyUnit> units = new array<ref DL_PartyUnit>;
 		DL_PartyUnit u = new DL_PartyUnit();
@@ -398,7 +398,7 @@ class DL_Journey
 	{
 		DL_TravelPrice cp = new DL_TravelPrice();
 		cp.byCar = true;
-		cp.fuelL = t.fuelLiters * f;
+		cp.fuelL = t.fuelLiters * f * DL_TravelCost.FuelScale(v.live);
 		cp.engineWearPct = t.wearEnginePct * f;
 		cp.wheelWearPct = t.wearWheelsPct * f;
 		if (v.luckyFuel)
@@ -479,7 +479,7 @@ class DL_Journey
 
 	protected float FuelCap(DL_JVehicle v)
 	{
-		float cap = v.live.GetFluidCapacity(CarFluid.FUEL);
+		float cap = DL_Veh.Capacity(v.live, CarFluid.FUEL);
 		if (cap <= 0 && v.car.fluidCaps.Count() > CarFluid.FUEL)
 			cap = v.car.fluidCaps[CarFluid.FUEL];
 		return cap;
@@ -870,6 +870,7 @@ class DL_Journey
 				continue;
 			}
 			t.d.crewCount = In(mine.idx).Count();
+			t.d.vehKind = DL_Veh.Kind(mine.live);
 			t.d.convoyIdx = lineIdx.Get(mine.idx);
 			if (t.sid == mine.holder)
 			{

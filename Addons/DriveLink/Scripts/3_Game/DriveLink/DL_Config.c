@@ -75,6 +75,8 @@ class DL_ArrivalPoint
 	float yaw;
 	vector carPos;            // where a car that comes along is built; "0 0 0" = at pos (the driver then stands next to it)
 	float carYaw;
+	vector boatPos;           // where a boat that comes along is put on the water; "0 0 0" = the nearest free water
+	float boatYaw;
 }
 
 class DL_Config
@@ -219,6 +221,7 @@ class DL_PlayerData
 	int convoyIdx;
 	int partySlot;
 	string partyId;           // everyone who travels together (group, convoy, crew) has the same one; "" = alone
+	string vehKind;           // what he arrives in: "car" | "bike" | "boat" | "" (on foot) - a boat's crew is built on land
 	// a convoy: its id and how many of its cars arrive (the target lifts the black screen for all of them at once)
 	string convoyId;
 	int convoyCars;

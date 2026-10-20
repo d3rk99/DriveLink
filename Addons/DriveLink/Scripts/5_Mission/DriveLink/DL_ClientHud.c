@@ -307,19 +307,19 @@ modded class MissionGameplay
 		HumanCommandVehicle vc;
 		if (pb)
 			vc = pb.GetCommand_Vehicle();
-		CarScript car;
+		Transport car;
 		if (vc)
-			car = CarScript.Cast(vc.GetTransport());
+			car = DL_Veh.VehicleOf(pb);
 		if (car && car.CrewDriver() == pb)
 		{
 			m_DL_StartEngine = false;
 			m_DL_EngineTries = 0;
-			if (car.EngineIsOn())
+			if (DL_Veh.EngineIsOn(car))
 				return;
 			if (car.GetNetworkMoveStrategy() == NetworkMoveStrategy.PHYSICS)
 			{
-				car.EngineStart();
-				Print(DL_Const.LOG_TAG + "waiting room: engine started on this client, running " + car.EngineIsOn().ToString());
+				DL_Veh.EngineStart(car);
+				Print(DL_Const.LOG_TAG + "waiting room: engine started on this client, running " + DL_Veh.EngineIsOn(car).ToString());
 			}
 			return;
 		}

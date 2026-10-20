@@ -83,3 +83,39 @@ modded class CarScript
 		Delete();
 	}
 }
+
+modded class MotorbikeScript
+{
+	override void AfterStoreLoad()
+	{
+		super.AfterStoreLoad();
+		if (g_Game.IsServer() && DL_CarGuard.HasLeft(this))
+		{
+			Print(DL_Const.LOG_TAG + "car " + GetType() + " " + DL_CarGuard.IdOf(this) + " was driven to another server, removing the stale copy loaded from storage");
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_DeleteSelf, 1000, false); // a proto native (Delete) cannot go into the call queue
+		}
+	}
+
+	void DL_DeleteSelf()
+	{
+		Delete();
+	}
+}
+
+modded class BoatScript
+{
+	override void AfterStoreLoad()
+	{
+		super.AfterStoreLoad();
+		if (g_Game.IsServer() && DL_CarGuard.HasLeft(this))
+		{
+			Print(DL_Const.LOG_TAG + "car " + GetType() + " " + DL_CarGuard.IdOf(this) + " was driven to another server, removing the stale copy loaded from storage");
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_DeleteSelf, 1000, false); // a proto native (Delete) cannot go into the call queue
+		}
+	}
+
+	void DL_DeleteSelf()
+	{
+		Delete();
+	}
+}

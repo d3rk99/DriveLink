@@ -70,6 +70,27 @@ def ground_tile(biome):
     return im.resize((256, 256), Image.NEAREST)
 
 
+def water_tile():
+    """256 x 256, loops top-to-bottom: open water for boat trips (PLACEHOLDER art) - a deep blue with lighter wave
+    streaks and a few glints"""
+    base = (44, 84, 118)
+    im = Image.new('RGBA', (128, 128), base + (255,))
+    d = ImageDraw.Draw(im)
+    rnd = random.Random(42)
+    for _ in range(700):
+        v = rnd.choice([-6, 6])
+        im.putpixel((rnd.randrange(128), rnd.randrange(128)), (base[0] + v, base[1] + v, base[2] + v, 255))
+    for _ in range(46):                                         # wave streaks, wrapped so the tile loops
+        x, y, ln = rnd.randrange(128), rnd.randrange(128), rnd.randint(4, 11)
+        for i in range(ln):
+            im.putpixel(((x + i) % 128, y), (70, 116, 150, 255))
+            if i % 3 == 0:
+                im.putpixel(((x + i) % 128, (y + 1) % 128), (58, 102, 136, 255))
+    for _ in range(14):
+        im.putpixel((rnd.randrange(128), rnd.randrange(128)), (150, 190, 214, 255))
+    return im.resize((256, 256), Image.NEAREST)
+
+
 # ---------------------------------------------------------------- props atlas: 4x4 cells of 64x64 (drawn at 32x32, x2)
 # Order = DL_Film PROP_* in the mod. Keep in sync.
 PROPS = ['pine', 'broadleaf', 'bush', 'rock', 'fence', 'sign', 'pole', 'barrel',
@@ -348,6 +369,49 @@ def top_truck(rgb):
     return im
 
 
+def top_bike(rgb):
+    """PLACEHOLDER top-down motorbike, front at the bottom: rear wheel, seat, tank, handlebar, front wheel. 20 x 46"""
+    W, H = 20, 46
+    im = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    paint, dark, light, line = shade(rgb, 1), shade(rgb, 0.7), shade(rgb, 1.15, 12), shade(rgb, 0.42)
+    tyre = (30, 30, 30, 255)
+    d.rounded_rectangle((7, 0, 12, 12), radius=2, fill=tyre)                # rear wheel
+    d.rounded_rectangle((7, 34, 12, 45), radius=2, fill=tyre)               # front wheel
+    d.rounded_rectangle((5, 9, 14, 19), radius=3, fill=(44, 40, 38, 255))   # seat
+    d.rounded_rectangle((4, 18, 15, 30), radius=4, fill=line + (255,))      # tank
+    d.rounded_rectangle((5, 19, 14, 29), radius=3, fill=paint + (255,))
+    d.line((7, 20, 7, 27), fill=light + (255,))
+    d.line((12, 20, 12, 27), fill=dark + (255,))
+    d.rectangle((0, 30, 19, 31), fill=(70, 70, 74, 255))                    # handlebar
+    d.rectangle((0, 30, 1, 32), fill=(30, 30, 30, 255))
+    d.rectangle((18, 30, 19, 32), fill=(30, 30, 30, 255))
+    d.ellipse((8, 32, 11, 35), fill=(236, 226, 168, 255))                   # headlight
+    d.rectangle((13, 4, 15, 9), fill=(150, 150, 150, 255))                  # exhaust
+    return im
+
+
+def top_boat(rgb):
+    """PLACEHOLDER top-down boat (Boat_01), bow at the bottom: a painted hull, a light floor with 3 benches, the
+    outboard engine sticking out at the stern. 34 x 80"""
+    W, H = 34, 80
+    im = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    paint, dark, light, line = shade(rgb, 1), shade(rgb, 0.7), shade(rgb, 1.15, 12), shade(rgb, 0.42)
+    hull = [(2, 6), (31, 6), (31, 54), (17, 78), (16, 78), (2, 54)]
+    d.polygon(hull, fill=line + (255,))
+    d.polygon([(3, 7), (30, 7), (30, 54), (17, 76), (16, 76), (3, 54)], fill=paint + (255,))
+    d.polygon([(6, 9), (27, 9), (27, 53), (17, 69), (16, 69), (6, 53)], fill=(168, 160, 142, 255))  # floor
+    for y in (16, 32, 46):                                                  # benches
+        d.rectangle((6, y, 27, y + 3), fill=(118, 96, 70, 255))
+        d.line((6, y, 27, y), fill=(146, 122, 92, 255))
+    d.line((3, 7, 3, 54), fill=light + (255,))
+    d.line((30, 7, 30, 54), fill=dark + (255,))
+    d.rounded_rectangle((12, 0, 21, 8), radius=2, fill=(36, 36, 38, 255))   # outboard engine
+    d.rectangle((15, 0, 18, 2), fill=(90, 90, 92, 255))
+    return im
+
+
 # the paints each car comes in (DayZ class-name colours + the default), RGB of the paint's middle tone
 CAR_PAINTS = {
     'sedan': {'white': (226, 224, 214), 'black': (52, 52, 58), 'wine': (118, 30, 44), 'yellow': (222, 180, 48),
@@ -355,6 +419,8 @@ CAR_PAINTS = {
     '4x4': {'green': (90, 120, 72), 'blue': (60, 90, 152), 'white': (226, 226, 220), 'olive': (102, 110, 70),
             'beige': (188, 168, 124), 'grey': (138, 138, 138)},
     'truck': {'green': (92, 108, 70), 'blue': (68, 96, 162), 'orange': (206, 110, 42), 'grey': (138, 138, 138)},
+    'bike': {'red': (176, 44, 40), 'blue': (60, 92, 160), 'yellow': (224, 184, 50), 'green': (84, 128, 70), 'grey': (138, 138, 138)},
+    'boat': {'blue': (52, 86, 150), 'black': (52, 52, 58), 'orange': (210, 112, 40), 'camo': (96, 104, 70), 'grey': (138, 138, 138)},
 }
 
 
@@ -420,10 +486,11 @@ def car_sprites(tmp):
     volga = Image.open(os.path.join(PACK, MINIDAYZ['volga_ca'])).convert('RGBA').crop((178, 142, 240, 222))
     volga = clean_paint(volga, (4, 4, 56, 66))
     uaz = Image.open(os.path.join(PACK, MINIDAYZ['uaz_ca'])).convert('RGBA').crop((176, 80, 244, 154))
-    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None)):
+    drawn = {'truck': top_truck, 'bike': top_bike, 'boat': top_boat}
+    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None), ('bike', None), ('boat', None)):
         for name, rgb in CAR_PAINTS[base].items():
-            if base == 'truck':
-                car = reshadow(top_truck(rgb))
+            if base in drawn:
+                car = reshadow(drawn[base](rgb))
             else:
                 car = paint(reshadow(im), base, rgb)
             if name == next(iter(CAR_PAINTS[base])):
@@ -438,7 +505,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(OWN_SRC, exist_ok=True)
     pngs = []
-    own = [('ground_%s_ca' % b, (lambda b=b: ground_tile(b))) for b in BIOMES] + [('props_ca', props_atlas)]
+    own = [('ground_%s_ca' % b, (lambda b=b: ground_tile(b))) for b in BIOMES] + [('props_ca', props_atlas), ('ground_water_ca', water_tile)]
     for name, fn in own:
         p = os.path.join(OWN_SRC, name + '.png')
         fn().save(p)

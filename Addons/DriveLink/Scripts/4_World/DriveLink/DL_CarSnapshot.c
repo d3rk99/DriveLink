@@ -10,7 +10,7 @@ class DL_CarSnapshot
 	static const int FLUIDS = 8; // CarFluid has 8 values (FUEL, OIL, BRAKE, COOLANT, USER1..USER4)
 	protected ref DL_Snapshot m_Items = new DL_Snapshot();
 
-	DL_CarData Capture(CarScript car)
+	DL_CarData Capture(Transport car)
 	{
 		DL_CarData d = new DL_CarData();
 		d.type = car.GetType();
@@ -19,8 +19,8 @@ class DL_CarSnapshot
 		d.health = car.GetHealth("", "Health");
 		for (int f = 0; f < FLUIDS; f++)
 		{
-			d.fluids.Insert(car.GetFluidFraction(f));
-			d.fluidCaps.Insert(car.GetFluidCapacity(f));
+			d.fluids.Insert(DL_Veh.Fraction(car, f));
+			d.fluidCaps.Insert(DL_Veh.Capacity(car, f));
 		}
 		DamageZoneMap zones = new DamageZoneMap;
 		if (DamageSystem.GetDamageZoneMap(car, zones))
@@ -39,21 +39,24 @@ class DL_CarSnapshot
 
 	// A NEW car of d.type at pos/ori, with every part, the trunk, fluids and damage of the snapshot.
 	// made/dropped as in DL_Snapshot.ApplyTree (dropped = put on the ground next to the car, no room).
-	CarScript Build(DL_CarData d, vector pos, vector ori, out int made, out int dropped)
+	Transport Build(DL_CarData d, vector pos, vector ori, out int made, out int dropped)
 	{
-		CarScript car = CarScript.Cast(g_Game.CreateObjectEx(d.type, pos, ECE_SETUP | ECE_UPDATEPATHGRAPH | ECE_CREATEPHYSICS | ECE_TRACE));
+		int flags = ECE_SETUP | ECE_UPDATEPATHGRAPH | ECE_CREATEPHYSICS | ECE_TRACE;
+		if (DL_Veh.KindOf(d.type) == "boat")
+			flags = ECE_SETUP | ECE_UPDATEPATHGRAPH | ECE_CREATEPHYSICS; // floats where it is put (a trace = the sea floor)
+		Transport car = Transport.Cast(g_Game.CreateObjectEx(d.type, pos, flags));
 		if (!car)
 			return null;
 		car.SetOrientation(ori);
 		made = m_Items.ApplyTree(car, null, d.items, dropped);
 		for (int f = 0; f < FLUIDS && f < d.fluids.Count(); f++)
 		{
-			float cap = car.GetFluidCapacity(f);
+			float cap = DL_Veh.Capacity(car, f);
 			if (cap <= 0 && f < d.fluidCaps.Count())
 				cap = d.fluidCaps[f];
-			car.LeakAll(f);
+			DL_Veh.LeakAll(car, f);
 			if (cap > 0 && d.fluids[f] > 0)
-				car.Fill(f, d.fluids[f] * cap);
+				DL_Veh.Fill(car, f, d.fluids[f] * cap);
 		}
 		// spike 2026-10-18: GetFluidFraction read 0 for every fluid right after this, but in game the car had its
 		// fuel and started: the values show up later. Log them 1 s later.
@@ -69,7 +72,7 @@ class DL_CarSnapshot
 		return car;
 	}
 
-	void LogFluids(CarScript car)
+	void LogFluids(Transport car)
 	{
 		if (car)
 			Print(DL_Const.LOG_TAG + "car fluids of the rebuilt " + car.GetType() + " 1 s later: " + FluidText(FluidsOf(car)));
@@ -85,11 +88,11 @@ class DL_CarSnapshot
 		return s;
 	}
 
-	static array<float> FluidsOf(CarScript car)
+	static array<float> FluidsOf(Transport car)
 	{
 		array<float> fr = new array<float>;
 		for (int f = 0; f < FLUIDS; f++)
-			fr.Insert(car.GetFluidFraction(f));
+			fr.Insert(DL_Veh.Fraction(car, f));
 		return fr;
 	}
 }

@@ -227,7 +227,7 @@ function endDraw(e) {
     L1.zones.push(z); sel = { kind: "zone", i: L1.zones.length - 1 };
   } else {
     const yaw = dist(d.start, e.latlng) > 1 ? yawOf(d.start, e.latlng) : 0;
-    const a = { name: `arrival_${L1.arrivals.length + 1}`, pos: [d.start.lng, 0, d.start.lat], yaw: Math.round(yaw), carPos: [0, 0, 0], carYaw: 0 };
+    const a = { name: `arrival_${L1.arrivals.length + 1}`, pos: [d.start.lng, 0, d.start.lat], yaw: Math.round(yaw), carPos: [0, 0, 0], carYaw: 0, boatPos: [0, 0, 0], boatYaw: 0 };
     L1.arrivals.push(a); sel = { kind: "arr", i: L1.arrivals.length - 1 };
   }
   setTool(null);
@@ -259,7 +259,7 @@ function drawLayout() {
       rad.on("dragend", e => { z.radius = Math.max(1, Math.round(dist(c.getLatLng(), e.target.getLatLng()))); save(); renderEdit(); drawLayout(); });
     }
   });
-  L1.arrivals.forEach((a, i) => drawCarSpots(a));
+  L1.arrivals.forEach((a, i) => { drawCarSpots(a); drawBoatSpot(a); });
   L1.arrivals.forEach((a, i) => {
     const on = sel && sel.kind === "arr" && sel.i === i;
     const ll = [a.pos[2], a.pos[0]];
@@ -304,6 +304,20 @@ function drawCarSpots(a) {
     const what = k === 0 ? "car spot" : `convoy car ${k + 1}`;
     poly.bindTooltip(`${esc(a.name)}: ${what}<br>${place ? `car: ${esc(place.car)}<br>truck: ${esc(place.truck)}` : "not checked by the server yet"}`, { direction: "top", className: "lbl" });
   }
+}
+
+// where a boat arriving here goes on the water: the pinned boat spot, else the nearest free water the server found
+function drawBoatSpot(a) {
+  const pinned = a.boatPos && (a.boatPos[0] !== 0 || a.boatPos[2] !== 0);
+  const chk = spotCheck(a);
+  const at = pinned ? a.boatPos : chk && chk.boatAt && (chk.boatAt[0] || chk.boatAt[2]) ? chk.boatAt : null;
+  if (!at) return;
+  const yaw = pinned ? a.boatYaw : a.yaw, r = yaw * Math.PI / 180, fx = Math.sin(r), fz = Math.cos(r), rx = Math.cos(r), rz = -Math.sin(r);
+  const pts = [[3.3, 0], [1.8, 1.3], [-3.2, 1.2], [-3.2, -1.2], [1.8, -1.3]].map(([l, w]) => [at[2] + fz * l + rz * w, at[0] + fx * l + rx * w]);
+  const ok = !chk || !chk.boat || !/no free water|taken/.test(chk.boat);
+  L.polygon(pts, { color: ok ? "#4fb3ff" : "#ff5d5d", weight: 1, fillOpacity: .45, dashArray: pinned ? null : "3 3" }).addTo(layer)
+    .bindTooltip(`${esc(a.name)}: boat ${pinned ? "spot (pinned)" : "(nearest free water)"}${chk && chk.boat ? "<br>" + esc(chk.boat) : ""}`, { direction: "top", className: "lbl" });
+  L.polyline([[a.pos[2], a.pos[0]], [at[2], at[0]]], { color: "#4fb3ff", weight: 1, dashArray: "2 4", interactive: false }).addTo(layer);
 }
 
 function renderLists() {
@@ -360,6 +374,17 @@ function renderEdit() {
       ${(() => { const c = spotCheck(a); if (!c || !c.places) return `<div class="hint">The server hasn't checked these places yet (it does after it starts and after every change here, within ~1 min).</div>`;
         return `<table style="margin-top:6px"><tr><th>Place</th><th>Car</th><th>Truck</th></tr>${c.places.map((p, k) => `<tr><td>${k === 0 ? "car spot" : "convoy car " + (k + 1)}</td><td class="${String(p.car).startsWith("free") ? "ok" : "badtxt"}">${esc(p.car)}</td><td class="${String(p.truck).startsWith("free") ? "ok" : "badtxt"}">${esc(p.truck)}</td></tr>`).join("")}</table>`; })()}
       <div style="margin-top:10px"><button class="danger" id="fDel">Delete point</button></div>`;
+    const bp = a.boatPos || [0, 0, 0], pinnedBoat = bp[0] !== 0 || bp[2] !== 0, chkB = spotCheck(a);
+    box.insertAdjacentHTML("beforeend", `<h2 style="margin-top:12px">Boat spot</h2>
+      <div class="hint">A boat that comes along goes on the water here; its crew waits on land at the point and is seated into it (nobody goes into the water). Not set = the nearest free water (the server looks, up to 400 m)${chkB && chkB.boat ? ": <b>" + esc(chkB.boat) + "</b>" : ""}.</div>
+      <div class="row"><div><label>x</label><input id="bX" type="number" step="0.1" value="${pinnedBoat ? bp[0].toFixed(1) : ""}" placeholder="auto"></div><div><label>z</label><input id="bZ" type="number" step="0.1" value="${pinnedBoat ? bp[2].toFixed(1) : ""}" placeholder="auto"></div><div><label>facing</label><input id="bYaw" type="number" min="0" max="359" value="${Math.round(a.boatYaw || 0)}"></div></div>
+      <div class="btns"><button id="bPick">Pick on the map</button>${pinnedBoat ? `<button id="bClear">Nearest water (auto)</button>` : ""}</div>`);
+    const setBoat = (x, z) => { a.boatPos = [x, 0, z]; changed(true); renderEdit(); };
+    $("bX").onchange = () => setBoat(+$("bX").value || 0, +$("bZ").value || 0);
+    $("bZ").onchange = () => setBoat(+$("bX").value || 0, +$("bZ").value || 0);
+    $("bYaw").onchange = e => { a.boatYaw = ((+e.target.value % 360) + 360) % 360; changed(true); };
+    $("bPick").onclick = () => { setStatus("Click on the water where the boat should go"); map.once("click", ev => { setBoat(Math.round(ev.latlng.lng * 10) / 10, Math.round(ev.latlng.lat * 10) / 10); setStatus(""); }); };
+    if ($("bClear")) $("bClear").onclick = () => setBoat(0, 0);
     $("fName").oninput = e => { renameArrival(a, e.target.value); changed(); };
     $("fX").onchange = e => { a.pos[0] = +e.target.value; changed(true); };
     $("fZ").onchange = e => { a.pos[2] = +e.target.value; changed(true); };

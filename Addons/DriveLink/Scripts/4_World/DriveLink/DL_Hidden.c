@@ -114,3 +114,93 @@ modded class CarScript
 		DL_Hide.Apply(this, true);
 	}
 }
+
+modded class MotorbikeScript
+{
+	protected bool m_DL_Hidden;
+	protected bool m_DL_HiddenShown;
+
+	void MotorbikeScript()
+	{
+		RegisterNetSyncVariableBool("m_DL_Hidden");
+	}
+
+	// server
+	void DL_SetHidden(bool on)
+	{
+		m_DL_Hidden = on;
+		SetSynchDirty();
+		if (on)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SetHidden, DL_Hide.SAFETY_MS, false, false);
+		else
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
+	}
+
+	override void OnVariablesSynchronized()
+	{
+		super.OnVariablesSynchronized();
+		if (g_Game.IsDedicatedServer() || m_DL_Hidden == m_DL_HiddenShown)
+			return;
+		m_DL_HiddenShown = m_DL_Hidden;
+		DL_Hide.Apply(this, m_DL_Hidden);
+		if (m_DL_Hidden)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_HideTick, 1000, true);
+		else
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_HideTick);
+	}
+
+	protected void DL_HideTick()
+	{
+		if (!m_DL_Hidden)
+		{
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_HideTick);
+			return;
+		}
+		DL_Hide.Apply(this, true);
+	}
+}
+
+modded class BoatScript
+{
+	protected bool m_DL_Hidden;
+	protected bool m_DL_HiddenShown;
+
+	void BoatScript()
+	{
+		RegisterNetSyncVariableBool("m_DL_Hidden");
+	}
+
+	// server
+	void DL_SetHidden(bool on)
+	{
+		m_DL_Hidden = on;
+		SetSynchDirty();
+		if (on)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SetHidden, DL_Hide.SAFETY_MS, false, false);
+		else
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
+	}
+
+	override void OnVariablesSynchronized()
+	{
+		super.OnVariablesSynchronized();
+		if (g_Game.IsDedicatedServer() || m_DL_Hidden == m_DL_HiddenShown)
+			return;
+		m_DL_HiddenShown = m_DL_Hidden;
+		DL_Hide.Apply(this, m_DL_Hidden);
+		if (m_DL_Hidden)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_HideTick, 1000, true);
+		else
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_HideTick);
+	}
+
+	protected void DL_HideTick()
+	{
+		if (!m_DL_Hidden)
+		{
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_HideTick);
+			return;
+		}
+		DL_Hide.Apply(this, true);
+	}
+}

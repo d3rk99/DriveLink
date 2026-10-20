@@ -23,7 +23,7 @@ class DL_Pending
 class DL_CrewTrip
 {
 	string driverSid;
-	CarScript car;
+	Transport car;
 	ref DL_Zone zone;
 	int waiting;                               // passenger answers still to come
 	int total;                                 // players in the car, driver included
@@ -40,7 +40,8 @@ class DL_Party
 {
 	int id;
 	ref DL_Zone zone;
-	bool convoy;                                    // cars (each with its crew) / on foot
+	bool convoy;                                    // vehicles (each with its crew) / on foot
+	string kind;                                    // "foot" | "land" (cars, trucks, motorbikes) | "water" (boats): only one kind travels together
 	ref array<string> leaders = new array<string>;  // drivers (convoy) or walkers, in the order they came
 	ref map<string, string> prices = new map<string, string>; // leader -> his trip's price text
 	int since;                                      // g_Game.GetTime() the countdown (re)started
@@ -75,8 +76,11 @@ class DL_Room
 	string convoyId;                                // a convoy car: its convoy (rooms of a convoy are revealed together)
 	int convoyCars;
 	bool convoyReady;                               // built and seated, waiting for the rest of the convoy
+	bool boat;                                      // a boat: the crew waits on land, the boat goes on the water
+	vector landPos;                                 // a boat's crew: where they wait (the arrival point)
+	float landYaw;
 	int seatedAt;                                   // g_Game.GetTime() when everyone is seated (0 = not yet going)
-	CarScript builtCar;
+	Transport builtCar;
 }
 
 // target side: the cars of one convoy, each in its own waiting room; the black screen lifts for all at once
@@ -84,7 +88,7 @@ class DL_ConvoyArrival
 {
 	string id;
 	int expected;                                   // cars that arrive (the ones left on the road don't)
-	ref map<string, CarScript> ready = new map<string, CarScript>; // room group -> its car, built and seated
+	ref map<string, Transport> ready = new map<string, Transport>; // room group -> its car, built and seated
 	int firstReady;                                 // g_Game.GetTime() the first car was ready (give-up timer)
 }
 
@@ -93,7 +97,7 @@ modded class MissionServer
 	protected ref map<string, ref DL_Room> m_DL_Rooms = new map<string, ref DL_Room>;
 	protected bool m_DL_RoomTicking;
 	protected ref map<string, ref DL_CrewTrip> m_DL_TripOf = new map<string, ref DL_CrewTrip>; // passenger sid -> his car trip
-	protected ref map<string, CarScript> m_DL_GroupCar = new map<string, CarScript>;         // driver sid -> the car he brought here
+	protected ref map<string, Transport> m_DL_GroupCar = new map<string, Transport>;         // driver sid -> the car he brought here
 	protected ref map<string, ref DL_SeatWait> m_DL_SeatWait = new map<string, ref DL_SeatWait>; // passenger sid -> waiting for that car
 	protected ref DL_Config m_DL_Cfg;
 	protected ref map<string, ref DL_Pending> m_DL_Pending = new map<string, ref DL_Pending>;    // steamId -> hub answer
@@ -117,9 +121,9 @@ modded class MissionServer
 	protected string m_DL_BuildError;      // why the last DL_BuildArrival returned null
 	protected ref DL_Debug m_DL_Debug;     // debug.json, null when the file is not there
 	protected ref DL_CarSnapshot m_DL_CarSnap = new DL_CarSnapshot();
-	protected ref map<CarScript, int> m_DL_CarInZoneSince = new map<CarScript, int>;
-	protected ref map<CarScript, bool> m_DL_CarDone = new map<CarScript, bool>; // rebuilt cars: not again until they leave the circle
-	protected ref map<string, CarScript> m_DL_TravelCar = new map<string, CarScript>; // steamId -> the car he is taking along, until the hub answers
+	protected ref map<Transport, int> m_DL_CarInZoneSince = new map<Transport, int>;
+	protected ref map<Transport, bool> m_DL_CarDone = new map<Transport, bool>; // rebuilt cars: not again until they leave the circle
+	protected ref map<string, Transport> m_DL_TravelCar = new map<string, Transport>; // steamId -> the car he is taking along, until the hub answers
 
 	override void OnMissionStart()
 	{
@@ -197,11 +201,11 @@ modded class MissionServer
 		float r = m_DL_Debug.carRebuildZone.radius;
 		c0[1] = g_Game.SurfaceY(c0[0], c0[2]);
 		g_Game.GetObjectsAtPosition(c0, r + 5, objs, cargos);
-		map<CarScript, bool> seen = new map<CarScript, bool>;
+		map<Transport, bool> seen = new map<Transport, bool>;
 		int now = g_Game.GetTime();
 		foreach (Object o : objs)
 		{
-			CarScript car = CarScript.Cast(o);
+			Transport car = Transport.Cast(o);
 			if (!car)
 				continue;
 			vector cp = car.GetPosition();
@@ -231,17 +235,17 @@ modded class MissionServer
 			}
 		}
 		// cars that left the circle may be tested again
-		array<CarScript> gone = new array<CarScript>;
-		foreach (CarScript k, bool v : m_DL_CarDone)
+		array<Transport> gone = new array<Transport>;
+		foreach (Transport k, bool v : m_DL_CarDone)
 		{
 			if (!k || !seen.Contains(k))
 				gone.Insert(k);
 		}
-		foreach (CarScript g : gone)
+		foreach (Transport g : gone)
 			m_DL_CarDone.Remove(g);
 	}
 
-	protected void DL_CarSpike(CarScript car)
+	protected void DL_CarSpike(Transport car)
 	{
 		DL_CarData d = m_DL_CarSnap.Capture(car);
 		string json;
@@ -264,7 +268,7 @@ modded class MissionServer
 		}
 		int made;
 		int dropped;
-		CarScript car = m_DL_CarSnap.Build(d, d.pos, d.ori, made, dropped);
+		Transport car = m_DL_CarSnap.Build(d, d.pos, d.ori, made, dropped);
 		if (!car)
 		{
 			Print(DL_Const.LOG_TAG + "CAR SPIKE FAILED: could not create " + d.type);
@@ -287,10 +291,10 @@ modded class MissionServer
 		if (!pb)
 			return;
 		vector pos = pb.GetPosition() + pb.GetDirection() * 5;
-		CarScript car = CarScript.Cast(g_Game.CreateObjectEx(m_DL_Debug.seatTestCar, pos, ECE_SETUP | ECE_UPDATEPATHGRAPH | ECE_CREATEPHYSICS | ECE_TRACE));
+		Transport car = Transport.Cast(g_Game.CreateObjectEx(m_DL_Debug.seatTestCar, pos, ECE_SETUP | ECE_UPDATEPATHGRAPH | ECE_CREATEPHYSICS | ECE_TRACE));
 		if (!car)
 		{
-			Print(DL_Const.LOG_TAG + "SEAT SPIKE FAILED: could not create '" + m_DL_Debug.seatTestCar + "' (not a CarScript class?)");
+			Print(DL_Const.LOG_TAG + "SEAT SPIKE FAILED: could not create '" + m_DL_Debug.seatTestCar + "' (not a Transport class?)");
 			return;
 		}
 		car.SetOrientation(pb.GetOrientation());
@@ -299,7 +303,7 @@ modded class MissionServer
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatSpikeSeat, 2000, false, sid, car);
 	}
 
-	protected void DL_SeatSpikeSeat(string sid, CarScript car)
+	protected void DL_SeatSpikeSeat(string sid, Transport car)
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !car)
@@ -308,7 +312,7 @@ modded class MissionServer
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatSpikeCheck, 4000, false, sid, car);
 	}
 
-	protected void DL_SeatSpikeCheck(string sid, CarScript car)
+	protected void DL_SeatSpikeCheck(string sid, Transport car)
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !car)
@@ -768,7 +772,7 @@ modded class MissionServer
 		vector pos = ap.pos;
 		float yaw = ap.yaw;
 		// M2: his car first, at carPos or else at the arrival point (he then stands 3 m to its left = driver side)
-		CarScript car;
+		Transport car;
 		string carText = "";
 		if (d.car && d.car.type != "")
 		{
@@ -800,7 +804,7 @@ modded class MissionServer
 		}
 		// M3: a passenger. His driver's car is here already -> next to it (right side) and seated; else he waits on
 		// foot 6 m to the right of the arrival point (where the car will appear) and is brought in when it comes.
-		CarScript rideCar;
+		Transport rideCar;
 		bool waitForCar;
 		if (!car && d.carGroup != "")
 		{
@@ -1063,7 +1067,7 @@ modded class MissionServer
 	}
 
 	// no road events (refuse mode): the crew simply drives (or walks) the distance
-	protected DL_Film DL_PlainFilm(DL_Zone z, array<PlayerBase> crew, CarScript car)
+	protected DL_Film DL_PlainFilm(DL_Zone z, array<PlayerBase> crew, Transport car)
 	{
 		DL_Film f = new DL_Film();
 		f.km = z.distanceKm;
@@ -1146,8 +1150,17 @@ modded class MissionServer
 			room.carPos[1] = g_Game.SurfaceY(room.carPos[0], room.carPos[2]);
 			room.convoyId = d.convoyId;
 			room.convoyCars = d.convoyCars;
+			room.boat = d.vehKind == "boat" || (d.car && d.car.type != "" && DL_Veh.KindOf(d.car.type) == "boat");
+			room.landPos = ap.pos;
+			room.landYaw = ap.yaw;
+			if (room.boat)
+			{
+				float byaw;
+				room.carPos = DL_BoatSpot(ap, d.convoyIdx, group, byaw);
+				room.carYaw = byaw;
+			}
 		}
-		if (newRoom && d.car && d.car.type != "")
+		if (newRoom && d.car && d.car.type != "" && !room.boat)
 			room.carPos = DL_FreeCarSpot(room.carPos, room.carYaw, d.car.type, group);
 		if (d.crewCount > room.expected)
 			room.expected = d.crewCount;
@@ -1165,7 +1178,14 @@ modded class MissionServer
 		vector fwd = Vector(room.carYaw, 0, 0).AnglesToVector();
 		vector right = Vector(room.carYaw + 90, 0, 0).AnglesToVector();
 		vector pos;
-		if (isDriver)
+		if (room.boat)
+		{
+			// a boat's crew waits on dry land at the arrival point (side by side) and is seated into the boat from
+			// there: nobody goes into the water
+			vector landRight = Vector(room.landYaw + 90, 0, 0).AnglesToVector();
+			pos = room.landPos + landRight * (1.5 * room.here.Count());
+		}
+		else if (isDriver)
 			pos = room.carPos - right * 3;                                           // driver side
 		else
 			pos = room.carPos + right * 3 + fwd * (1.5 - 1.5 * room.here.Count());   // passengers in a row on the right
@@ -1308,20 +1328,28 @@ modded class MissionServer
 		if (!room)
 			return;
 		room.going = true;
-		vector spot = DL_FreeCarSpot(room.carPos, room.carYaw, room.car.type, group);
-		if (vector.Distance(spot, room.carPos) > 0.5)
+		if (room.boat)
 		{
-			room.carPos = spot;
-			DL_MoveRoomCrew(room);
+			if (!DL_WaterFree(room.carPos, room.carYaw))
+				room.carPos = DL_WaterNear(room.carPos, room.carYaw, group);
+		}
+		else
+		{
+			vector spot = DL_FreeCarSpot(room.carPos, room.carYaw, room.car.type, group);
+			if (vector.Distance(spot, room.carPos) > 0.5)
+			{
+				room.carPos = spot;
+				DL_MoveRoomCrew(room);
+			}
 		}
 		int made;
 		int dropped;
-		CarScript car = m_DL_CarSnap.Build(room.car, room.carPos, Vector(room.carYaw, 0, 0), made, dropped);
+		Transport car = m_DL_CarSnap.Build(room.car, room.carPos, Vector(room.carYaw, 0, 0), made, dropped);
 		string carText;
 		if (car)
 		{
 			car.SetAllowDamage(false);
-			car.DL_SetHidden(true);
+			DL_Veh.SetHidden(car, true);
 			m_DL_GroupCar.Set(group, car);
 			// passengers who come after this get seated in it (old path) for a while, then the tag is forgotten
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ForgetGroupCar, m_DL_Cfg.crewWaitSeconds * 2000, false, group, car);
@@ -1360,7 +1388,7 @@ modded class MissionServer
 
 	// a convoy car is built and seated: when all of the convoy's cars are (or after the convoy wait), all its rooms
 	// lift their black screen together (DL_ConvoyTick)
-	protected void DL_ConvoyRoomReady(string group, CarScript car)
+	protected void DL_ConvoyRoomReady(string group, Transport car)
 	{
 		DL_Room room = m_DL_Rooms.Get(group);
 		if (!room)
@@ -1390,7 +1418,7 @@ modded class MissionServer
 			if (!all && now - ca.firstReady < DL_ConvoyWaitMs())
 				continue;
 			int at = 0;
-			foreach (string g, CarScript c : ca.ready)
+			foreach (string g, Transport c : ca.ready)
 			{
 				DL_Room r = m_DL_Rooms.Get(g);
 				if (r)
@@ -1399,12 +1427,135 @@ modded class MissionServer
 			if (now < at)
 				continue;
 			Print(DL_Const.LOG_TAG + "convoy " + id + ": " + ca.ready.Count().ToString() + "/" + ca.expected.ToString() + " cars ready, lifting all black screens");
-			foreach (string rg, CarScript rc : ca.ready)
+			foreach (string rg, Transport rc : ca.ready)
 				reveal.Insert(rg);
 			done.Insert(id);
 		}
 		foreach (string d : done)
 			m_DL_Convoys.Remove(d);
+	}
+
+	// ---------------- where a boat can float ----------------
+
+	// the water spot for the k-th boat arriving at ap: the point's boat spot (and the places behind it) when set,
+	// else the nearest free water around the arrival point; yaw = which way it faces
+	protected vector DL_BoatSpot(DL_ArrivalPoint ap, int k, string who, out float yaw)
+	{
+		vector base = ap.pos;
+		yaw = ap.yaw;
+		if (ap.boatPos[0] != 0 || ap.boatPos[2] != 0)
+		{
+			base = ap.boatPos;
+			yaw = ap.boatYaw;
+		}
+		vector want = base - Vector(yaw, 0, 0).AnglesToVector() * (9 * k);
+		if (DL_WaterFree(want, yaw))
+			return DL_OnWater(want);
+		return DL_WaterNear(base, yaw, who);
+	}
+
+	// as DL_BoatSpot for the first boat, without logging; "0 0 0" = no free water near
+	protected vector DL_BoatSpotQuiet(DL_ArrivalPoint ap, out float yaw)
+	{
+		vector base = ap.pos;
+		yaw = ap.yaw;
+		if (ap.boatPos[0] != 0 || ap.boatPos[2] != 0)
+		{
+			base = ap.boatPos;
+			yaw = ap.boatYaw;
+		}
+		if (DL_WaterFree(base, yaw))
+			return base;
+		for (float r = 6; r <= 400; r += 6)
+		{
+			int n = Math.Max(8, Math.Floor(r / 4));
+			for (int i = 0; i < n; i++)
+			{
+				vector q = base + Vector(i * 360.0 / n, 0, 0).AnglesToVector() * r;
+				if (DL_WaterFree(q, yaw))
+					return q;
+			}
+		}
+		return "0 0 0";
+	}
+
+	// the nearest free water around p (rings of 6 m, up to 400 m), else p itself (logged)
+	protected vector DL_WaterNear(vector p, float yaw, string who)
+	{
+		for (float r = 6; r <= 400; r += 6)
+		{
+			int n = Math.Max(8, Math.Floor(r / 4));
+			for (int i = 0; i < n; i++)
+			{
+				vector q = p + Vector(i * 360.0 / n, 0, 0).AnglesToVector() * r;
+				if (DL_WaterFree(q, yaw))
+				{
+					Print(DL_Const.LOG_TAG + who + "'s boat goes on the water " + Math.Round(r).ToString() + " m from its spot");
+					return DL_OnWater(q);
+				}
+			}
+		}
+		Print(DL_Const.LOG_TAG + "WARNING " + who + "'s boat: no free water within 400 m of " + p.ToString() + ", putting it there anyway");
+		return DL_OnWater(p);
+	}
+
+	// water at least 1 m deep under the whole boat (2.6 x 6.5 m, so it isn't beached), and a box of the boat's size
+	// over the water touches nothing but players and loose items (piers, rocks, other boats count)
+	protected bool DL_WaterFree(vector p, float yaw)
+	{
+		vector fwd = Vector(yaw, 0, 0).AnglesToVector();
+		vector right = Vector(yaw + 90, 0, 0).AnglesToVector();
+		float y = DL_Veh.WaterY(p[0], p[2], 1.0);
+		if (y < 0)
+			return false;
+		array<vector> corners = {p + fwd * 3.3, p - fwd * 3.3, p + right * 1.3, p - right * 1.3};
+		foreach (vector c : corners)
+		{
+			if (DL_Veh.WaterY(c[0], c[2], 0.6) < 0)
+				return false;
+		}
+		vector center = Vector(p[0], y + 1.2, p[2]);
+		array<Object> hits = new array<Object>;
+		array<Object> none = new array<Object>;
+		if (!g_Game.IsBoxCollidingGeometry(center, Vector(yaw, 0, 0), Vector(3.2, 2, 7.3), ObjIntersectGeom, ObjIntersectView, none, hits))
+			return true;
+		foreach (Object o : hits)
+		{
+			if (!o || o.IsInherited(Man))
+				continue;
+			if (o.IsInherited(ItemBase) && !o.IsInherited(Transport))
+				continue;
+			return false;
+		}
+		return true;
+	}
+
+	// p on the water surface (a little above it, it settles)
+	protected vector DL_OnWater(vector p)
+	{
+		vector q = p;
+		float y = DL_Veh.WaterY(p[0], p[2], 0);
+		if (y < 0)
+			y = g_Game.SurfaceY(p[0], p[2]);
+		q[1] = y + 0.2;
+		return q;
+	}
+
+	// after the arrival: dry (a boat crew never touches the water, but nobody should stay wet from the trip)
+	protected void DL_Dry(PlayerBase pb)
+	{
+		if (!pb)
+			return;
+		if (pb.GetStatWet())
+			pb.GetStatWet().Set(0);
+		array<EntityAI> worn = new array<EntityAI>;
+		pb.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, worn);
+		foreach (EntityAI e : worn)
+		{
+			ItemBase ib = ItemBase.Cast(e);
+			if (ib && ib != pb && ib.GetWet() > 0)
+				ib.SetWet(0);
+		}
 	}
 
 	// ---------------- where a car can stand ----------------
@@ -1443,7 +1594,25 @@ modded class MissionServer
 				rep.places.Insert(place);
 				line += " | car " + (k + 1).ToString() + ": " + car + " (truck " + truck + ")";
 			}
-			Print(DL_Const.LOG_TAG + "arrival '" + ap.name + "' car spots" + line);
+			// a boat: the pinned spot, or the nearest free water
+			float byaw;
+			vector bspot = DL_BoatSpotQuiet(ap, byaw);
+			if (bspot[0] == 0 && bspot[2] == 0)
+				rep.boat = "no free water within 400 m";
+			else
+			{
+				rep.boatAt = bspot;
+				if (ap.boatPos[0] != 0 || ap.boatPos[2] != 0)
+				{
+					if (vector.Distance(Vector(bspot[0], 0, bspot[2]), Vector(ap.boatPos[0], 0, ap.boatPos[2])) < 1)
+						rep.boat = "its boat spot is free";
+					else
+						rep.boat = "its boat spot is taken or dry: free water " + Math.Round(vector.Distance(Vector(bspot[0], 0, bspot[2]), Vector(ap.boatPos[0], 0, ap.boatPos[2]))).ToString() + " m from it";
+				}
+				else
+					rep.boat = "free water " + Math.Round(vector.Distance(Vector(bspot[0], 0, bspot[2]), Vector(ap.pos[0], 0, ap.pos[2]))).ToString() + " m from the point";
+			}
+			Print(DL_Const.LOG_TAG + "arrival '" + ap.name + "' car spots" + line + " | boat: " + rep.boat);
 			report.spots.Insert(rep);
 		}
 		// to the hub: its Map page shows the places in green / red
@@ -1541,7 +1710,7 @@ modded class MissionServer
 		{
 			if (!o || o.IsInherited(Man))
 				continue;                               // the crew waiting there (they move with the car)
-			if (o.IsInherited(ItemBase) && !o.IsInherited(CarScript))
+			if (o.IsInherited(ItemBase) && !o.IsInherited(Transport))
 				continue;                               // loose loot
 			why = o.GetType();
 			if (why == "")
@@ -1581,7 +1750,7 @@ modded class MissionServer
 
 	// everyone seated: lift the black screen; the driver's client starts the engine (PHYSICS cars are simulated on the
 	// driver's machine, so vanilla ActionStartEngine starts them there too, actionstartengine.c:51-65)
-	protected void DL_RoomReveal(string group, CarScript car)
+	protected void DL_RoomReveal(string group, Transport car)
 	{
 		DL_Room room = m_DL_Rooms.Get(group);
 		if (!room)
@@ -1589,7 +1758,7 @@ modded class MissionServer
 		m_DL_Rooms.Remove(group);
 		bool serverStarts = car != null && car.GetNetworkMoveStrategy() != NetworkMoveStrategy.PHYSICS;
 		if (car)
-			car.DL_SetHidden(false);
+			DL_Veh.SetHidden(car, false);
 		int seated = 0;
 		foreach (string m : room.here)
 		{
@@ -1597,6 +1766,7 @@ modded class MissionServer
 			if (!pb)
 				continue;
 			pb.DL_SetHidden(false);
+			DL_Dry(pb);
 			if (car && car.CrewMemberIndex(pb) >= 0)
 				seated++;
 			bool engine = car != null && m == group && car.CrewDriver() == pb;
@@ -1605,7 +1775,7 @@ modded class MissionServer
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, pb);
 		}
 		if (serverStarts && car.CrewDriver())
-			car.EngineStart();
+			DL_Veh.EngineStart(car);
 		string how = "driver's client";
 		if (serverStarts)
 			how = "server";
@@ -1617,10 +1787,10 @@ modded class MissionServer
 		}
 	}
 
-	protected void DL_RoomEngineCheck(string group, CarScript car)
+	protected void DL_RoomEngineCheck(string group, Transport car)
 	{
 		if (car)
-			Print(DL_Const.LOG_TAG + "waiting room of " + group + ": engine of the " + car.GetType() + " running " + car.EngineIsOn().ToString() + ", " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car)));
+			Print(DL_Const.LOG_TAG + "waiting room of " + group + ": engine of the " + car.GetType() + " running " + DL_Veh.EngineIsOn(car).ToString() + ", " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car)));
 	}
 
 	// no car is coming: the passengers go on on foot
@@ -1643,14 +1813,14 @@ modded class MissionServer
 		}
 	}
 
-	protected void DL_ForgetGroupCar(string group, CarScript car)
+	protected void DL_ForgetGroupCar(string group, Transport car)
 	{
 		if (m_DL_GroupCar.Get(group) == car)
 			m_DL_GroupCar.Remove(group);
 	}
 
 	// M3: the driver's car just arrived; seat the passengers who got here before it (one per second)
-	protected void DL_BringWaitingCrew(string driverSid, CarScript car)
+	protected void DL_BringWaitingCrew(string driverSid, Transport car)
 	{
 		if (!car)
 			return;
@@ -1674,7 +1844,7 @@ modded class MissionServer
 			Print(DL_Const.LOG_TAG + driverSid + "'s car is here, bringing in " + k.ToString() + " waiting passenger(s)");
 	}
 
-	protected void DL_BringToCar(string psid, CarScript car, int seat)
+	protected void DL_BringToCar(string psid, Transport car, int seat)
 	{
 		PlayerBase pb = DL_FindPlayer(psid);
 		if (!pb || !car || pb.GetCommand_Vehicle())
@@ -1684,7 +1854,7 @@ modded class MissionServer
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatTraveller, 1500, false, psid, car, seat);
 	}
 
-	protected void DL_SeatTraveller(string sid, CarScript car, int seat)
+	protected void DL_SeatTraveller(string sid, Transport car, int seat)
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !car)
@@ -1698,14 +1868,14 @@ modded class MissionServer
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatTravellerCheck, 4000, false, sid, car);
 	}
 
-	protected void DL_SeatTravellerCheck(string sid, CarScript car)
+	protected void DL_SeatTravellerCheck(string sid, Transport car)
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (pb && car)
 			Print(DL_Const.LOG_TAG + sid + " seated in his " + car.GetType() + ": " + (car.CrewMemberIndex(pb) >= 0).ToString() + " (seat " + car.CrewMemberIndex(pb).ToString() + "), " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car)));
 	}
 
-	protected void DL_EndCarProtection(CarScript car)
+	protected void DL_EndCarProtection(Transport car)
 	{
 		if (car)
 			car.SetAllowDamage(true);
@@ -1778,7 +1948,7 @@ modded class MissionServer
 				continue;
 			// travel cost (Research/travel-cost-design.md): the price goes on the countdown; in refuse mode a crew
 			// that can't pay doesn't get one
-			DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, DL_CarOf(pb) != null);
+			DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, DL_CarOf(pb) != null, DL_CarOf(pb));
 			string missing = DL_TravelCost.Shortfall(price, DL_CrewOf(pb), DL_CarOf(pb), m_DL_Snap, m_DL_CarSnap);
 			if (missing != "" && DL_RefusesShortTrips())
 			{
@@ -1843,6 +2013,7 @@ modded class MissionServer
 	{
 		string sid = pb.GetIdentity().GetPlainId();
 		bool convoy = DL_CarOf(pb) != null;
+		string kind = DL_PartyKind(pb);
 		DL_Party party;
 		if (DL_Together(convoy))
 		{
@@ -1851,7 +2022,7 @@ modded class MissionServer
 				int room = DL_GroupMax();
 				if (p.convoy)
 					room = DL_ConvoyMax();
-				if (p.zone == z && p.convoy == convoy && p.leaders.Count() < room)
+				if (p.zone == z && p.kind == kind && p.leaders.Count() < room)
 				{
 					party = p;
 					break;
@@ -1865,6 +2036,7 @@ modded class MissionServer
 			party.id = m_DL_PartyN;
 			party.zone = z;
 			party.convoy = convoy;
+			party.kind = kind;
 			m_DL_Parties.Insert(party);
 		}
 		party.leaders.Insert(sid);
@@ -1873,6 +2045,17 @@ modded class MissionServer
 		if (party.leaders.Count() > 1)
 			Print(DL_Const.LOG_TAG + sid + " joins the " + DL_PartyWord(party) + " " + party.id.ToString() + " in " + z.name + ": " + party.leaders.Count().ToString() + " now, countdown again");
 		DL_PartyCountdown(party, m_DL_Cfg.countdownSeconds);
+	}
+
+	// on foot, or a land vehicle (car, truck, motorbike: they convoy together), or a boat (only with boats)
+	protected string DL_PartyKind(PlayerBase pb)
+	{
+		Transport t = DL_CarOf(pb);
+		if (!t)
+			return "foot";
+		if (DL_Veh.IsBoat(t))
+			return "water";
+		return "land";
 	}
 
 	protected string DL_PartyWord(DL_Party party)
@@ -1888,8 +2071,10 @@ modded class MissionServer
 		string zoneName = party.zone.name;
 		if (party.leaders.Count() > 1)
 		{
-			if (party.convoy)
-				zoneName += " - convoy of " + party.leaders.Count().ToString() + " cars";
+			if (party.kind == "water")
+				zoneName += " - convoy of " + party.leaders.Count().ToString() + " boats";
+			else if (party.convoy)
+				zoneName += " - convoy of " + party.leaders.Count().ToString() + " vehicles";
 			else
 				zoneName += " - group of " + party.leaders.Count().ToString();
 		}
@@ -1916,7 +2101,10 @@ modded class MissionServer
 				bool inCar = false;
 				if (pb)
 					inCar = DL_CarOf(pb) != null;
-				bool stays = pb && pb.IsAlive() && !m_DL_Leaving.Contains(l) && !m_DL_MustLeaveZone.Contains(l) && DL_ZoneAt(pb.GetPosition()) == party.zone && !DL_IsCrewPassenger(pb) && inCar == party.convoy;
+				string nowKind = "";
+				if (pb)
+					nowKind = DL_PartyKind(pb);
+				bool stays = pb && pb.IsAlive() && !m_DL_Leaving.Contains(l) && !m_DL_MustLeaveZone.Contains(l) && DL_ZoneAt(pb.GetPosition()) == party.zone && !DL_IsCrewPassenger(pb) && nowKind == party.kind;
 				if (stays)
 					continue;
 				party.leaders.RemoveOrdered(k);
@@ -1976,7 +2164,7 @@ modded class MissionServer
 		array<ref DL_TravelPrice> prices = new array<ref DL_TravelPrice>;
 		foreach (DL_PartyUnit gu : units)
 		{
-			DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, gu.car != null);
+			DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, gu.car != null, gu.car);
 			string missing = DL_TravelCost.Shortfall(price, gu.crew, gu.car, m_DL_Snap, m_DL_CarSnap);
 			if (missing != "" && DL_RefusesShortTrips())
 			{
@@ -2145,7 +2333,7 @@ modded class MissionServer
 	{
 		array<PlayerBase> crew = new array<PlayerBase>;
 		crew.Insert(pb);
-		CarScript car = DL_CarOf(pb);
+		Transport car = DL_CarOf(pb);
 		if (!car || car.CrewDriver() != pb)
 			return crew;
 		for (int c = 0; c < car.CrewSize(); c++)
@@ -2160,7 +2348,7 @@ modded class MissionServer
 	// a passenger of a car with a player at the wheel: that driver's trip takes him
 	protected bool DL_IsCrewPassenger(PlayerBase pb)
 	{
-		CarScript car = DL_CarOf(pb);
+		Transport car = DL_CarOf(pb);
 		if (!car || car.CrewDriver() == pb)
 			return false;
 		PlayerBase driver = PlayerBase.Cast(car.CrewDriver());
@@ -2168,12 +2356,12 @@ modded class MissionServer
 	}
 
 	// The car he drives, or null (on foot / not a car). HumanCommandVehicle.GetTransport (human.c:716 in 1.30).
-	protected CarScript DL_CarOf(PlayerBase pb)
+	protected Transport DL_CarOf(PlayerBase pb)
 	{
 		HumanCommandVehicle vc = pb.GetCommand_Vehicle();
 		if (!vc)
 			return null;
-		return CarScript.Cast(vc.GetTransport());
+		return DL_Veh.VehicleOf(pb);
 	}
 
 	// "" = may travel (on foot, or at the wheel of a car whose crew are all players who can travel), else the reason.
@@ -2182,9 +2370,9 @@ modded class MissionServer
 		HumanCommandVehicle vc = pb.GetCommand_Vehicle();
 		if (!vc)
 			return "";
-		CarScript car = CarScript.Cast(vc.GetTransport());
+		Transport car = DL_Veh.VehicleOf(pb);
 		if (!car)
-			return "Only cars can travel for now. Get out to travel on foot.";
+			return "Only cars, trucks, motorbikes and boats can travel. Get out to travel on foot.";
 		if (car.CrewDriver() != pb)
 			return "Only a car with a player at the wheel can travel. Get out to travel on foot.";
 		for (int c = 0; c < car.CrewSize(); c++)
@@ -2227,11 +2415,11 @@ modded class MissionServer
 	// never leaves without its crew being accounted for. Passengers who were taken already arrive on foot then.
 	protected void DL_Depart(PlayerBase pb, DL_Zone z)
 	{
-		CarScript car = DL_CarOf(pb);
+		Transport car = DL_CarOf(pb);
 		array<PlayerBase> crew = DL_CrewOf(pb);
 		string sid = pb.GetIdentity().GetPlainId();
 		// the price again: someone may have eaten, drunk or burnt fuel during the countdown
-		DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, car != null);
+		DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, car != null, car);
 		string missing = DL_TravelCost.Shortfall(price, crew, car, m_DL_Snap, m_DL_CarSnap);
 		if (missing != "" && DL_RefusesShortTrips())
 		{
@@ -2277,7 +2465,7 @@ modded class MissionServer
 	}
 
 	// one unit leaves (a walker, or a car with its crew): its road may be shared with a party (journey, film)
-	protected void DL_DepartUnit(PlayerBase pb, DL_Zone z, CarScript car, array<PlayerBase> crew, DL_TravelPrice price, DL_Journey journey, DL_Film film)
+	protected void DL_DepartUnit(PlayerBase pb, DL_Zone z, Transport car, array<PlayerBase> crew, DL_TravelPrice price, DL_Journey journey, DL_Film film)
 	{
 		string sid = pb.GetIdentity().GetPlainId();
 		m_DL_Leaving.Set(sid, true);
@@ -2286,8 +2474,8 @@ modded class MissionServer
 		{
 			// stop it where it is while the hub answers: engine off, handbrake, no damage (Car.EngineStop/SetHandbrake,
 			// car.c:236/209 in 1.30). Anything that changes after the driver's snapshot doesn't travel.
-			car.EngineStop();
-			car.SetHandbrake(1);
+			DL_Veh.EngineStop(car);
+			DL_Veh.Handbrake(car, 1);
 			car.SetAllowDamage(false);
 		}
 		if (!car || crew.Count() <= 1)
@@ -2323,7 +2511,7 @@ modded class MissionServer
 	// crewCount = players in the car (driver included) for the target's waiting room, 0 = on foot.
 	// price = the trip's cost (null = free): taken off the snapshot that travels, never off the live character/car
 	// journey != null (weakened mode): his snapshot was made and charged by the road already, use it as it is
-	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, CarScript car, string carGroup, int seat, int crewCount, DL_TravelPrice price, DL_Journey journey, DL_Film film)
+	protected void DL_SendDepart(PlayerBase pb, DL_Zone z, Transport car, string carGroup, int seat, int crewCount, DL_TravelPrice price, DL_Journey journey, DL_Film film)
 	{
 		string sid = pb.GetIdentity().GetPlainId();
 		DL_DepartReq q = new DL_DepartReq();
@@ -2359,6 +2547,12 @@ modded class MissionServer
 		}
 		if (film)
 			q.payload.film = film;
+		if (q.payload.vehKind == "")
+		{
+			Transport ride = DL_CarOf(pb);
+			if (ride)
+				q.payload.vehKind = DL_Veh.Kind(ride);
+		}
 		string ppid;
 		if (m_DL_PartyIdOf.Find(sid, ppid))
 		{
@@ -2437,7 +2631,7 @@ modded class MissionServer
 	void DL_OnDepartAnswer(string sid, bool ok, string body)
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
-		CarScript car = m_DL_TravelCar.Get(sid);
+		Transport car = m_DL_TravelCar.Get(sid);
 		m_DL_TravelCar.Remove(sid);
 		DL_DepartResp r;
 		string err;
@@ -2503,7 +2697,7 @@ modded class MissionServer
 	// Derk 2026-10-18: move the departed car (with the logging-out driver still in it) out of everyone's reach until
 	// it can be deleted. Not 0 0 0: that is under the ground / at the world's edge, and an engine delete of an occupied
 	// car is what crashed the server. The position is logged 1 s later to see that the move held.
-	protected void DL_ParkCar(CarScript car)
+	protected void DL_ParkCar(Transport car)
 	{
 		vector p = m_DL_Cfg.parkingSpot;
 		if (p[0] == 0 && p[2] == 0)
@@ -2517,7 +2711,7 @@ modded class MissionServer
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_LogCarPos, 1000, false, car);
 	}
 
-	protected void DL_LogCarPos(CarScript car)
+	protected void DL_LogCarPos(Transport car)
 	{
 		if (car)
 			Print(DL_Const.LOG_TAG + car.GetType() + " 1 s after parking is at " + car.GetPosition().ToString());
@@ -2527,7 +2721,7 @@ modded class MissionServer
 	// violation, crash_2026-10-18_20-02-09.log) deleting the car while his logging-out character (vanilla keeps it in
 	// the world for the logout time, 15 s) still sat in it. Wait for the seats to empty: his character goes when the
 	// logout ends (HandleBody -> doomed -> DL_Forget) or at once via DL_RemoveTraveller.
-	protected void DL_RemoveCar(CarScript car, int tries = 0)
+	protected void DL_RemoveCar(Transport car, int tries = 0)
 	{
 		if (!car)
 			return;
@@ -2686,6 +2880,8 @@ class DL_SpotPlace
 class DL_SpotReport
 {
 	string arrival;
+	string boat;                  // where a boat would go: "pinned spot free" / "water 35 m away" / "no water within 400 m"
+	vector boatAt;                // that spot (0 0 0 = none)
 	ref array<ref DL_SpotPlace> places = new array<ref DL_SpotPlace>;
 }
 

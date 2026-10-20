@@ -37,7 +37,7 @@ class DL_FilmCast
 	static const string WEAPON = "aks74u=aks74urifle;akm=akmrifle;ak74=ak74rifle;ak101=ak74rifle;aug=augrifle;m4a1=m4rifle;m16=m4rifle;fal=fncalrifle;svd=svdrifle;vss=vssrifle;asval=vssrifle;sks=sksrifle;sawedoff_mosin=sawedmosin;mosin=mosinnagant;winchester=repeaterrifle;repeater=repeaterrifle;cz527=sporterrifle;cr527=sporterrifle;ruger=sporterrifle;izh18=sporterrifle;b95=sporterrifle;scout=sv98rifle;m70=sv98rifle;saiga=saigashotgun;mp133=r670shotgun;remington=r670shotgun;sawedoff_izh=sawedizh;izh43=bm16shotgun;bk43=bm16shotgun;mp5=mp5smg;ump=mp5smg;bizon=bizonsmg;pp19=bizonsmg;mac=mac10pistol;cz61=mac10pistol;glock=glockpistol;fnx=fnxpistol;cz75=fnxpistol;magnum=magnumpistol;deagle=magnumpistol;crossbow=crossbow;bow=improvisedbow;fireaxe=fireaxe;hatchet=axered;woodaxe=fireaxe;axe=axered;bat=baseballbat;crowbar=crowbar;pickaxe=pickaxe;shovel=shovel;sledge=sledgehammer;pitchfork=pitchfork;wrench=pipewrench;machete=knifeany;knife=knifeany;sword=sword";
 
 	// colour words in DayZ class names (a whole "_" part of the name, lower case) -> DL_FilmPlayer.Tint names
-	static const string COLOURS = ",black,white,gray,grey,red,blue,green,yellow,orange,pink,brown,beige,olive,lime,purple,violet,khaki,tan,navy,lightblue,darkblue,bluedark,darkgreen,greendark,maroon,wine,";
+	static const string COLOURS = ",black,white,gray,grey,red,blue,green,yellow,orange,pink,brown,beige,olive,lime,purple,violet,khaki,tan,navy,lightblue,darkblue,bluedark,darkgreen,greendark,maroon,wine,camo,";
 
 	static string ColourOf(string type)
 	{
@@ -145,7 +145,17 @@ class DL_FilmCast
 		t.ToLower();
 		string look = "4x4";
 		string colour = "grey";
-		if (t.Contains("offroadhatchback"))
+		if (t.Contains("motorbike"))
+		{
+			look = "bike";                     // Motorbike_01 / Motorbike_02
+			colour = "red";
+		}
+		else if (t.Contains("boat"))
+		{
+			look = "boat";                     // Boat_01
+			colour = "blue";
+		}
+		else if (t.Contains("offroadhatchback"))
 			colour = "green";                  // Ada 4x4
 		else if (t.Contains("civiliansedan"))
 		{

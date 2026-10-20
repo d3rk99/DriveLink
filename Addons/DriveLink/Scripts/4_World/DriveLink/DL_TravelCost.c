@@ -33,7 +33,16 @@ class DL_TravelPrice
 class DL_TravelCost
 {
 	// null = free (no distance on the zone, or no rules)
-	static DL_TravelPrice Price(DL_TravelRules t, DL_Zone z, bool byCar)
+	// fuel per 10 km by kind: a motorbike burns 40 % of what a car does, a boat as much as a car
+	static float FuelScale(EntityAI veh)
+	{
+		if (DL_Veh.Kind(veh) == "bike")
+			return 0.4;
+		return 1.0;
+	}
+
+	// veh = the vehicle (its kind scales the fuel, a boat needs no spare wheel); null = a car (or on foot)
+	static DL_TravelPrice Price(DL_TravelRules t, DL_Zone z, bool byCar, Transport veh = null)
 	{
 		if (!t || !z || z.distanceKm <= 0)
 			return null;
@@ -45,7 +54,7 @@ class DL_TravelCost
 		{
 			p.foodPct = t.foodCarPct * k;
 			p.waterPct = t.waterCarPct * k;
-			p.fuelL = t.fuelLiters * k;
+			p.fuelL = t.fuelLiters * k * FuelScale(veh);
 			p.engineWearPct = t.wearEnginePct * k;
 			p.wheelWearPct = t.wearWheelsPct * k;
 		}
@@ -54,7 +63,7 @@ class DL_TravelCost
 			p.foodPct = t.foodFootPct * k;
 			p.waterPct = t.waterFootPct * k;
 		}
-		if (byCar && t.spareNeededKm > 0 && z.distanceKm > t.spareNeededKm)
+		if (byCar && t.spareNeededKm > 0 && z.distanceKm > t.spareNeededKm && !DL_Veh.IsBoat(veh))
 			p.spareKm = t.spareNeededKm;
 		if (t.timeEnabled)
 		{
@@ -86,14 +95,14 @@ class DL_TravelCost
 		return pb.GetStatWater().Get() / PlayerConstants.SL_WATER_MAX * 100.0;
 	}
 
-	static float FuelLOf(CarScript car)
+	static float FuelLOf(Transport car)
 	{
-		return car.GetFluidFraction(CarFluid.FUEL) * car.GetFluidCapacity(CarFluid.FUEL);
+		return DL_Veh.Fraction(car, CarFluid.FUEL) * DL_Veh.Capacity(car, CarFluid.FUEL);
 	}
 
 	// "" = everyone can pay; else what is missing, per person: "Britney: water 12% of 30%; car: fuel 4 L of 30 L".
 	// Counts bars + stomach + food/drink they carry (the driver also the trunk) and the tank + gasoline canisters.
-	static string Shortfall(DL_TravelPrice p, array<PlayerBase> crew, CarScript car, DL_Snapshot snap, DL_CarSnapshot carSnap)
+	static string Shortfall(DL_TravelPrice p, array<PlayerBase> crew, Transport car, DL_Snapshot snap, DL_CarSnapshot carSnap)
 	{
 		if (!p)
 			return "";
@@ -139,9 +148,9 @@ class DL_TravelCost
 		{
 			float fuel = FuelLOf(car) + canisters;
 			if (fuel < p.fuelL)
-				miss.Insert("car: fuel " + Math.Floor(fuel).ToString() + " L of " + Math.Ceil(p.fuelL).ToString() + " L (tank + gasoline canisters)");
+				miss.Insert(DL_Veh.Kind(car) + ": fuel " + Math.Floor(fuel).ToString() + " L of " + Math.Ceil(p.fuelL).ToString() + " L (tank + gasoline canisters)");
 			if (p.spareKm > 0 && !HasSpareOrKit(car, cd, snaps))
-				miss.Insert("car: a spare " + WheelTypeText(car) + " or a tyre repair kit (trips over " + Math.Round(p.spareKm).ToString() + " km)");
+				miss.Insert(DL_Veh.Kind(car) + ": a spare " + WheelTypeText(car) + " or a tyre repair kit (trips over " + Math.Round(p.spareKm).ToString() + " km)");
 		}
 		string res = "";
 		foreach (string ms : miss)
@@ -157,7 +166,7 @@ class DL_TravelCost
 	// ---------------- spare wheel / tyre repair kit ----------------
 
 	// the wheel types this car runs on (its CarWheel attachments), e.g. HatchbackWheel
-	static array<string> WheelTypes(CarScript car)
+	static array<string> WheelTypes(Transport car)
 	{
 		array<string> types = new array<string>;
 		for (int i = 0; i < car.GetInventory().AttachmentCount(); i++)
@@ -176,7 +185,7 @@ class DL_TravelCost
 		return sl.Contains("spare");
 	}
 
-	static string WheelTypeText(CarScript car)
+	static string WheelTypeText(Transport car)
 	{
 		array<string> t = WheelTypes(car);
 		if (t.Count() == 0)
@@ -186,9 +195,11 @@ class DL_TravelCost
 
 	// a spare = a wheel of one of those types that is NOT on the car (trunk cargo, or anywhere in the crew's gear);
 	// a kit = a TireRepairKit with uses left. Ruined wheels are other classes (..._Ruined), so they don't count.
-	static bool HasSpareOrKit(CarScript car, DL_CarData cd, array<ref DL_PlayerData> crew)
+	static bool HasSpareOrKit(Transport car, DL_CarData cd, array<ref DL_PlayerData> crew)
 	{
 		array<string> types = WheelTypes(car);
+		if (types.Count() == 0)
+			return true;                        // no wheels (a boat): nothing to carry
 		array<ref DL_ItemData> all = new array<ref DL_ItemData>;
 		if (cd)
 		{
@@ -410,13 +421,13 @@ class DL_TravelCost
 	}
 
 	// fuel + engine/wheel wear off the car's snapshot; the live car only gives the max health of its parts.
-	static string ChargeCar(DL_CarData d, CarScript car, DL_TravelPrice p, DL_PlayerData driver)
+	static string ChargeCar(DL_CarData d, Transport car, DL_TravelPrice p, DL_PlayerData driver)
 	{
 		if (!p || !d || !car || !p.byCar)
 			return "";
 		string res = "";
 		// fuel: fraction of the tank
-		float cap = car.GetFluidCapacity(CarFluid.FUEL);
+		float cap = DL_Veh.Capacity(car, CarFluid.FUEL);
 		if (cap <= 0 && d.fluidCaps.Count() > CarFluid.FUEL)
 			cap = d.fluidCaps[CarFluid.FUEL];
 		if (cap > 0 && d.fluids.Count() > CarFluid.FUEL)
