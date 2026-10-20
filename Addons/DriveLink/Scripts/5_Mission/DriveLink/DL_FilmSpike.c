@@ -78,6 +78,12 @@ class DL_Sprite
 		m_Sheet.SetAlpha(a);
 	}
 
+	// draw order among the film's widgets (higher = on top), changed every frame by depth
+	void SetSort(int s)
+	{
+		m_Clip.SetSort(s);
+	}
+
 	// show only the top part of the cell (frac 0..1 of its height): a rider on a motorbike, legs behind the tank
 	void Cut(float frac)
 	{

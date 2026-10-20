@@ -212,6 +212,25 @@ class DL_FilmPerson
 		s.MoveTo(sx, sy);
 	}
 
+	// his draw order: base = his depth (DL_FilmPlayer.Depth); skin, clothes, weapons in their order inside it; a
+	// slung weapon is behind him, except when he walks away (facing up: it is on his back, towards us)
+	void SortAt(int base, int facing)
+	{
+		int n = layers.Count();
+		int first = base + 1;
+		if (back)
+		{
+			if (facing == 1)
+				back.SetSort(base + n + 1);
+			else
+				back.SetSort(base);
+		}
+		for (int i = 0; i < n; i++)
+			layers[i].SetSort(first + i);
+		if (hand)
+			hand.SetSort(first + n + 1);
+	}
+
 	void HideRide()
 	{
 		rideShown = false;
@@ -340,6 +359,11 @@ class DL_FilmThing
 	bool used;
 
 	// cw x ch = the cell in the texture; scale = how big it shows (1 = one texel per film pixel)
+	void SetSort(int s)
+	{
+		sprite.SetSort(s);
+	}
+
 	void DL_FilmThing(Widget parent, int sort, string tex, float px, float cw, float ch, float texW, float texH, float scale = 1)
 	{
 		w = cw * scale;
@@ -415,6 +439,20 @@ class DL_FilmPlayer
 	static const float WALK = 28;
 	static const float CAR_GAP = 12;  // between cars in a convoy, film px
 	static const float SIDE_LANE = 84; // where people walk beside a convoy
+	// draw order: the ground (1-2), roadside props (3), wrecks (4), a boat's wake (5) stay behind; everything else in
+	// the scene is sorted by depth every frame (Depth: further down the window = nearer = on top); smoke and muzzle
+	// flash, then the caption bars, above it all
+	static const int SORT_TOP = 900000;
+	static const int SORT_TEXT = 950000;
+
+	// the draw order of something whose front (a person's feet, a vehicle's front edge) is at film y
+	static int Depth(float y)
+	{
+		int d = Math.Floor((y + 300) * 4);
+		if (d < 0)
+			d = 0;
+		return 100 + d * 16;           // 16 per step: room for one figure's layers inside it
+	}
 
 	protected static int s_DemoN;
 
@@ -633,6 +671,8 @@ class DL_FilmPlayer
 		m_Fuel.sprite.Cell(0, 0, 12, 12);
 		m_Flash = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 255, 235, 130), 9, 0, 0, 3 * m_Px, 3 * m_Px);
 		m_Flash.Show(false);
+		m_Puff.SetSort(SORT_TOP);
+		m_Flash.SetSort(SORT_TOP + 1);
 		// the cars, in the middle of the road, one behind the other
 		m_Leaving = false;
 		m_WalkY = m_ViewH * 0.40;
@@ -668,15 +708,15 @@ class DL_FilmPlayer
 		float band = winH * 0.075;
 		if (m_Convoy)
 			band = winH * 0.058;
-		DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(150, 0, 0, 0), 10, 0, winH - band, winW, band);
-		m_Caption = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, winH - band * 0.93, winW, band * 0.87, flags, ARGB(255, 240, 225, 190), 11, m_Root));
+		DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(150, 0, 0, 0), SORT_TEXT, 0, winH - band, winW, band);
+		m_Caption = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, winH - band * 0.93, winW, band * 0.87, flags, ARGB(255, 240, 225, 190), SORT_TEXT + 1, m_Root));
 		// how to skip, top of the window: everyone must vote on a trip, Space alone for the F9 demo
 		m_SkipText = null;
 		if (m_Film.skip != "none")
 		{
 			float sh2 = winH * 0.045;
-			DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(120, 0, 0, 0), 10, 0, 0, winW, sh2 * 1.2);
-			m_SkipText = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, sh2 * 0.1, winW, sh2, flags, ARGB(255, 200, 200, 200), 11, m_Root));
+			DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(120, 0, 0, 0), SORT_TEXT, 0, 0, winW, sh2 * 1.2);
+			m_SkipText = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, sh2 * 0.1, winW, sh2, flags, ARGB(255, 200, 200, 200), SORT_TEXT + 1, m_Root));
 			if (m_Film.skip == "vote")
 				m_SkipText.SetText("Space: vote to skip (everyone has to)");
 			else
@@ -823,9 +863,9 @@ class DL_FilmPlayer
 			if (c.look == "moped")
 			{
 				bx = 10;
-				by = 22;
+				by = 25;                           // close to the bars
 				if (i > 0)
-					by = 13;
+					by = 15;
 			}
 			cut = 19.0 / 32.0;
 			sx = bleft + bx;
@@ -2124,6 +2164,14 @@ class DL_FilmPlayer
 				bob = Math.Sin(m_T * 18 + c.idx * 1.7) * 0.5;
 			c.drawX = c.x + bob;
 			c.sprite.MoveTo(m_Ox + (c.x - c.w / 2 + bob) * m_Px, m_Oy + (c.y - c.h / 2) * m_Px);
+			float front = c.y + c.h / 2 - 4;
+			if (c.over)
+			{
+				c.sprite.SetSort(Depth(c.Top()));      // open: its riders sit on it ...
+				c.over.SetSort(Depth(front) + 8);      // ... and its bars / motor are over them
+			}
+			else
+				c.sprite.SetSort(Depth(front));
 			if (c.over)
 				c.over.MoveTo(m_Ox + (c.x - c.w / 2 + bob) * m_Px, m_Oy + (c.y - c.h / 2) * m_Px);
 			if (c.wake)
@@ -2165,6 +2213,7 @@ class DL_FilmPlayer
 			SeatPos(rc, seatN[rc.idx], rx, ry, cut, row, backRow);
 			seatN[rc.idx] = seatN[rc.idx] + 1;
 			rp.RideAt(m_Px, m_Ox, m_Oy, rx, ry, row, 0, cut, backRow);
+			rp.SortAt(Depth(ry - 16 + 32 * cut), row % 4);
 		}
 		foreach (DL_FilmPerson p : m_Crew)
 		{
@@ -2172,6 +2221,13 @@ class DL_FilmPlayer
 				p.y -= dy;   // left lying on the road, it scrolls away
 			p.Step(dt);
 			p.Update(dt, m_Px, m_Ox, m_Oy);
+			if (p.shown)
+			{
+				float feet = p.y + 13;
+				if (p.down)
+					feet = p.y;
+				p.SortAt(Depth(feet), p.dir);
+			}
 		}
 		if (m_Zed)
 		{
@@ -2179,11 +2235,18 @@ class DL_FilmPlayer
 				m_Zed.y -= dy;
 			m_Zed.Step(dt);
 			m_Zed.Update(dt, m_Px, m_Ox, m_Oy);
+			m_Zed.SortAt(Depth(m_Zed.y + 13), m_Zed.dir);
 		}
 		if (m_Tool)
+		{
 			m_Tool.Place(m_Px, m_Ox, m_Oy);
+			m_Tool.SetSort(Depth(m_Tool.y + m_Tool.h / 2));
+		}
 		if (m_Fuel)
+		{
 			m_Fuel.Place(m_Px, m_Ox, m_Oy);
+			m_Fuel.SetSort(Depth(m_Fuel.y + m_Fuel.h / 2) + 12);  // carried: just in front of him
+		}
 		if (m_Puff)
 		{
 			m_Puff.y -= dt * 3;
