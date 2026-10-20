@@ -1,5 +1,5 @@
 # Builds the road-animation textures into Addons/DriveLink/gui/anim/ (Research/road-animation-research.md).
-#   - DriveLink's own pixel-art strips (drawn here, committed as source): road, tree line
+#   - DriveLink's own pixel art (drawn here, committed as source): the top-down ground tile
 #   - MiniDayZ sprite sheets copied from the local pack (C:\DayZMods\_assets\minidayz): PROTOTYPE ONLY, never
 #     committed (gitignored) until Bohemia OKs them or they are replaced
 # Every texture is a power-of-two PNG named *_ca.png, converted to .paa with DayZ Tools ImageToPAA (DXT5 + alpha).
@@ -20,52 +20,39 @@ MINIDAYZ = {  # texture name -> file in the pack
 }
 
 
-def road_strip():
-    # 256 x 64, tiles left-right: grass verge, asphalt with a dashed centre line, grass verge (drawn at 128x32, x2)
-    im = Image.new('RGBA', (128, 32), (0, 0, 0, 0))
+def ground_tile():
+    # 256 x 256, loops top-to-bottom (top-down view like MiniDayZ): a road down the middle with a dashed centre line,
+    # dirt shoulders, grass with speckle, tree crowns seen from above (drawn at 128x128, x2)
+    im = Image.new('RGBA', (128, 128), (88, 116, 56, 255))
     d = ImageDraw.Draw(im)
-    rnd = random.Random(7)
-    d.rectangle([0, 0, 127, 7], fill=(86, 112, 52, 255))        # far verge
-    d.rectangle([0, 8, 127, 9], fill=(120, 108, 84, 255))       # kerb / dirt edge
-    d.rectangle([0, 10, 127, 25], fill=(62, 64, 68, 255))       # asphalt
-    d.rectangle([0, 26, 127, 27], fill=(120, 108, 84, 255))
-    d.rectangle([0, 28, 127, 31], fill=(78, 104, 46, 255))      # near verge
-    for x in range(0, 128, 16):                                 # dashed line, period 16 -> seamless at 128
-        d.rectangle([x, 17, x + 7, 18], fill=(205, 196, 150, 255))
-    for _ in range(90):                                         # asphalt speckle + grass tufts
-        x, y = rnd.randrange(128), rnd.randrange(10, 26)
-        im.putpixel((x, y), (72, 74, 78, 255) if rnd.random() < 0.5 else (54, 56, 60, 255))
-    for _ in range(60):
-        x, y = rnd.randrange(128), rnd.choice(list(range(0, 8)) + list(range(28, 32)))
-        im.putpixel((x, y), (104, 132, 62, 255))
-    return im.resize((256, 64), Image.NEAREST)
-
-
-def treeline_strip():
-    # 256 x 64, tiles left-right: a band of pine/birch silhouettes over a pale sky edge (transparent above)
-    im = Image.new('RGBA', (128, 32), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    rnd = random.Random(11)
-    d.rectangle([0, 24, 127, 31], fill=(46, 70, 40, 255))       # ground under the trees
-    x = 0
-    while x < 128:
-        h = rnd.randint(12, 22)
-        w = rnd.randint(5, 8)
-        col = rnd.choice([(34, 58, 34, 255), (40, 66, 38, 255), (30, 50, 32, 255)])
-        top = 28 - h
-        for i in range(h):                                     # pine: triangle
-            half = max(1, int((i + 1) * w / (2 * h)))
-            cx = x + w // 2
-            d.line([((cx - half) % 128, top + i), ((cx + half) % 128, top + i)], fill=col)
-        x += rnd.randint(4, 8)
-    return im.resize((256, 64), Image.NEAREST)
+    rnd = random.Random(21)
+    for _ in range(700):                                        # grass speckle
+        x, y = rnd.randrange(128), rnd.randrange(128)
+        im.putpixel((x, y), rnd.choice([(80, 106, 50, 255), (98, 126, 62, 255), (74, 98, 46, 255)]))
+    d.rectangle([44, 0, 47, 127], fill=(122, 108, 80, 255))     # left shoulder
+    d.rectangle([80, 0, 83, 127], fill=(122, 108, 80, 255))     # right shoulder
+    d.rectangle([48, 0, 79, 127], fill=(64, 66, 70, 255))       # asphalt
+    for y in range(0, 128, 16):                                 # dashed centre line, period 16 -> seamless at 128
+        d.rectangle([63, y, 64, y + 7], fill=(205, 196, 150, 255))
+    for _ in range(160):
+        x, y = rnd.randrange(48, 80), rnd.randrange(128)
+        if not (62 <= x <= 65):
+            im.putpixel((x, y), rnd.choice([(56, 58, 62, 255), (72, 74, 78, 255)]))
+    for side in ((2, 38), (90, 124)):                           # tree crowns, wrapped vertically so the tile loops
+        for _ in range(7):
+            cx, cy, r = rnd.randint(*side), rnd.randrange(128), rnd.randint(5, 9)
+            for oy in (-128, 0, 128):
+                d.ellipse([cx - r + 2, cy - r + 3 + oy, cx + r + 2, cy + r + 3 + oy], fill=(52, 72, 40, 255))   # shadow
+                d.ellipse([cx - r, cy - r + oy, cx + r, cy + r + oy], fill=(42, 82, 44, 255))
+                d.ellipse([cx - r + 2, cy - r + 1 + oy, cx + r - 3, cy + r - 4 + oy], fill=(56, 100, 52, 255))  # light
+    return im.resize((256, 256), Image.NEAREST)
 
 
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(OWN_SRC, exist_ok=True)
     pngs = []
-    for name, fn in (('road_ca', road_strip), ('trees_ca', treeline_strip)):
+    for name, fn in (('ground_ca', ground_tile),):
         p = os.path.join(OWN_SRC, name + '.png')
         fn().save(p)
         pngs.append(p)

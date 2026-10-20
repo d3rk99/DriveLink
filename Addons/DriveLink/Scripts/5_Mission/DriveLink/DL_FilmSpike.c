@@ -1,18 +1,17 @@
 // DriveLink road animation - ENGINE SPIKE (Research/road-animation-research.md, build order 1). Client only.
-// F9 opens/closes a window that plays a test scene: the UAZ drives right, the road and the tree line scroll past
-// (parallax), a survivor runs along the verge. Proves: .paa textures packed in the mod, frame picking from a sprite
+// F9 opens/closes a window that plays a test scene, top-down like MiniDayZ (Derk 2026-10-20): the ground (road + trees)
+// scrolls up while the UAZ drives down the middle of the road, a survivor walks down the verge. Proves: .paa textures packed in the mod, frame picking from a sprite
 // sheet by CLIPPING (a CLIPCHILDREN frame shows one cell of the whole sheet moved behind it; ImageWidget.SetUV
 // would not take a script float[4][2]: "Incompatible parameter uv", 2026-10-20), endless scrolling by sliding copies
 // of a tiling strip inside a clipping band, per-frame updates from MissionGameplay.OnUpdate. Debug feature: remove or gate before
-// publishing. Art: road/trees = DriveLink's own; UAZ + skin = MiniDayZ, prototype only.
+// publishing. Art: ground tile = DriveLink's own; UAZ + skin = MiniDayZ, prototype only.
 
 class DL_FilmSpike
 {
 	static const string DIR = "DriveLink/gui/anim/";
 	static const string PLAIN = "#(argb,8,8,3)color(1,1,1,1,CO)";
 	protected Widget m_Root;
-	protected ref DL_Strip m_Trees;
-	protected ref DL_Strip m_Road;
+	protected ref DL_Strip m_Ground;
 	protected ref DL_Sprite m_Car;
 	protected ref DL_Sprite m_Walker;
 	protected bool m_Open;
@@ -20,8 +19,7 @@ class DL_FilmSpike
 	protected float m_T;
 	protected float m_W;
 	protected float m_H;
-	protected float m_RoadTop;
-	protected float m_RoadH;
+	protected float m_Px;         // screen pixels per texture pixel (everything at the same pixel scale)
 
 	void Update(float dt)
 	{
@@ -63,7 +61,7 @@ class DL_FilmSpike
 
 	static ImageWidget Image(Widget parent, string tex, int color, int sort, float x, float y, float w, float h)
 	{
-		ImageWidget img = ImageWidget.Cast(g_Game.GetWorkspace().CreateWidget(ImageWidgetTypeID, x, y, w, h, Flags() | WidgetFlags.STRETCH | WidgetFlags.NOFILTER, color, sort, parent));
+		ImageWidget img = ImageWidget.Cast(g_Game.GetWorkspace().CreateWidget(ImageWidgetTypeID, x, y, w, h, Flags() | WidgetFlags.STRETCH | WidgetFlags.NOFILTER | WidgetFlags.SOURCEALPHA | WidgetFlags.BLEND, color, sort, parent));
 		if (!img)
 			return null;
 		if (!img.LoadImageFile(0, tex))
@@ -86,28 +84,22 @@ class DL_FilmSpike
 		int sw;
 		int sh;
 		GetScreenSize(sw, sh);
-		m_W = sw * 0.6;
-		m_H = sh * 0.42;
+		m_H = sh * 0.7;
+		m_W = m_H * 0.62;
 		m_Root = ws.CreateWidget(FrameWidgetTypeID, (sw - m_W) / 2, sh * 0.12, m_W, m_H, Flags() | WidgetFlags.CLIPCHILDREN, ARGB(255, 255, 255, 255), 31000);
 		if (!m_Root)
 			return false;
 		Image(m_Root, PLAIN, ARGB(255, 20, 20, 20), 0, 0, 0, m_W, m_H);                       // frame
-		float bandTop = m_H * 0.09;
-		float treesH = m_H * 0.22;
-		m_RoadH = m_H * 0.36;
-		float skyH = m_H - bandTop - treesH - m_RoadH - m_H * 0.05;
-		Image(m_Root, PLAIN, ARGB(255, 150, 172, 182), 1, 4, bandTop, m_W - 8, skyH + treesH * 0.5); // sky
-		m_Trees = new DL_Strip(m_Root, DIR + "trees_ca.paa", 2, 4, bandTop + skyH, m_W - 8, treesH, 256, 64);
-		m_RoadTop = bandTop + skyH + treesH;
-		m_Road = new DL_Strip(m_Root, DIR + "road_ca.paa", 3, 4, m_RoadTop, m_W - 8, m_RoadH, 256, 64);
-		// UAZ 3/4 view facing right: cell (0,73) 100x73 of the 256x256 sheet
-		float carW = m_RoadH * 1.6;
-		m_Car = new DL_Sprite(m_Root, DIR + "uaz_ca.paa", 5, carW, carW * 73 / 100, 256, 256);
-		m_Car.Cell(0, 73, 100, 73);
-		// survivor: 32x32 cells, row 3 of the 128x128 sheet runs right
-		float wh = m_RoadH * 0.7;
-		m_Walker = new DL_Sprite(m_Root, DIR + "skin_biker_ca.paa", 6, wh, wh, 128, 128);
-		TextWidget cap = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, 2, m_W, m_H * 0.07, Flags() | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 230, 210, 170), 7, m_Root));
+		float top = m_H * 0.06;
+		float gw = m_W - 8;
+		m_Px = gw / 256.0;                                                                   // the 256-px ground tile fills the width
+		m_Ground = new DL_Strip(m_Root, DIR + "ground_ca.paa", 1, 4, top, gw, m_H - top - 4, 256, 256, true);
+		// UAZ seen from above, pointing down: cell (176,80) 68x74 of the 256x256 sheet (shadow included)
+		m_Car = new DL_Sprite(m_Root, DIR + "uaz_ca.paa", 5, 68 * m_Px, 74 * m_Px, 256, 256);
+		m_Car.Cell(176, 80, 68, 74);
+		// survivor: 32x32 cells, row 1 of the 128x128 sheet walks towards the viewer (down)
+		m_Walker = new DL_Sprite(m_Root, DIR + "skin_biker_ca.paa", 6, 32 * m_Px, 32 * m_Px, 128, 128);
+		TextWidget cap = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, 2, m_W, top - 4, Flags() | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 230, 210, 170), 7, m_Root));
 		if (cap)
 			cap.SetText("DriveLink road film - engine test (F9 closes)");
 		return true;
@@ -116,22 +108,20 @@ class DL_FilmSpike
 	protected void Animate(float dt)
 	{
 		m_T += dt;
-		// the car drives right = the world moves left; the tree line is farther away, so slower
-		m_Road.Scroll(m_T * 260);
-		m_Trees.Scroll(m_T * 100);
-		float carW = m_RoadH * 1.6;
-		float carH = carW * 73 / 100;
-		float bob = Math.Sin(m_T * 18) * 1.5;
-		m_Car.MoveTo((m_W - carW) / 2, m_RoadTop + m_RoadH * 0.5 - carH + bob);
-		// the survivor runs right along the near verge, slower than the scenery, and wraps around
-		int frame = Math.Floor(m_T * 10);
+		float top = m_H * 0.06;
+		// the car drives down = the ground moves up
+		m_Ground.Scroll(m_T * 140 * m_Px);
+		float bob = Math.Sin(m_T * 18) * 0.6 * m_Px;
+		m_Car.MoveTo(4 + (256 - 68) / 2.0 * m_Px + bob, top + m_H * 0.38);
+		// the survivor walks down the left verge, slower than the car: on screen he drifts up and comes back from below
+		int frame = Math.Floor(m_T * 8);
 		frame = frame % 4;
-		m_Walker.Cell(frame * 32, 96, 32, 32);
-		float wh = m_RoadH * 0.7;
-		float span = m_W + wh;
-		float wx = m_T * 120;
-		wx = wx - Math.Floor(wx / span) * span - wh;
-		m_Walker.MoveTo(wx, m_RoadTop + m_RoadH - wh * 0.95);
+		m_Walker.Cell(frame * 32, 32, 32, 32);
+		float wh = 32 * m_Px;
+		float span = m_H - top + wh;
+		float wy = m_T * 80 * m_Px;
+		wy = wy - Math.Floor(wy / span) * span;
+		m_Walker.MoveTo(4 + 20 * m_Px, m_H - wy);
 	}
 }
 
@@ -177,12 +167,25 @@ class DL_Strip
 	protected ref array<ImageWidget> m_Tiles = new array<ImageWidget>;
 	protected float m_TileW;
 
-	void DL_Strip(Widget parent, string tex, int sort, float x, float y, float w, float h, float texW, float texH)
+	protected bool m_Vertical;    // true: tiles stacked top to bottom, scrolling up (top-down view)
+
+	void DL_Strip(Widget parent, string tex, int sort, float x, float y, float w, float h, float texW, float texH, bool vertical = false)
 	{
+		m_Vertical = vertical;
 		m_Clip = DL_FilmSpike.Clip(parent, sort, x, y, w, h);
-		m_TileW = texW * (h / texH); // square texels
-		int n = Math.Ceil(w / m_TileW) + 1;
-		for (int i = 0; i < n; i++)
+		int n;
+		int i;
+		if (vertical)
+		{
+			m_TileW = texH * (w / texW); // tile height, square texels
+			n = Math.Ceil(h / m_TileW) + 1;
+			for (i = 0; i < n; i++)
+				m_Tiles.Insert(DL_FilmSpike.Image(m_Clip, tex, ARGB(255, 255, 255, 255), 0, 0, i * m_TileW, w, m_TileW + 1));
+			return;
+		}
+		m_TileW = texW * (h / texH);
+		n = Math.Ceil(w / m_TileW) + 1;
+		for (i = 0; i < n; i++)
 			m_Tiles.Insert(DL_FilmSpike.Image(m_Clip, tex, ARGB(255, 255, 255, 255), 0, i * m_TileW, 0, m_TileW + 1, h));
 	}
 
@@ -190,6 +193,11 @@ class DL_Strip
 	{
 		float o = offsetPx - Math.Floor(offsetPx / m_TileW) * m_TileW;
 		for (int i = 0; i < m_Tiles.Count(); i++)
-			m_Tiles[i].SetPos(i * m_TileW - o, 0);
+		{
+			if (m_Vertical)
+				m_Tiles[i].SetPos(0, i * m_TileW - o);
+			else
+				m_Tiles[i].SetPos(i * m_TileW - o, 0);
+		}
 	}
 }

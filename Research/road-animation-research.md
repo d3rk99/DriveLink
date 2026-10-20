@@ -52,10 +52,10 @@ MiniDayZ being Bohemia's IP does not by itself let a DayZ mod redistribute it. T
 - **Art:** prototype with the MiniDayZ sprites on the test servers only. Before publishing, get Bohemia's written
   OK or swap in original art.
 - **When:** on arrival only, on the arrival black screen, before the car and crew appear.
-- **View:** side view. The car sits in the middle facing right, and the road and countryside scroll past.
+- **View:** ~~side view~~ changed 2026-10-20 after the F9 spike: **top-down like MiniDayZ**. The ground (road + trees from above) scrolls up while the car drives down the middle of the road; the sprites were drawn for this view.
 - **Length:** 20-40 s, skippable (Space/Esc). The text story stays as a caption.
-- **Scenery:** simple pixel art drawn for DriveLink (sky, tree line, grass, road strips), with pack wrecks as
-  roadside props.
+- **Scenery:** simple pixel art drawn for DriveLink: a looping top-down ground tile (road, shoulders, grass, tree
+  crowns), with pack wrecks as roadside props.
 - **Car sprite:** closest match. Hatchback and sedans use the Volga; Offroad_02, trucks and anything unknown use
   the UAZ.
 - **Skins:** fixed per player, one of the 20 picked from the steam id.
@@ -70,3 +70,10 @@ MiniDayZ being Bohemia's IP does not by itself let a DayZ mod redistribute it. T
    arrive), skip key, caption.
 4. **Art and sound:** scenery strips, car and skin mapping, sound sets.
 5. **Room timing:** the waiting room holds the reveal until the film ends or is skipped.
+
+## 7. Spike results (2026-10-20)
+- **PASS:** `.paa` textures packed in the mod load in game (`DriveLink/gui/anim/...`). Frame picking works by
+  clipping (a CLIPCHILDREN frame over the whole sheet). Scrolling by sliding tiles is smooth.
+- `ImageWidget.SetUV(float uv[4][2])` can't be called from script: "Incompatible parameter 'uv'". Use clipping.
+- Transparent pixels drew black until the images got `WidgetFlags.SOURCEALPHA | BLEND`.
+- Palette PNGs (the skins) make ImageToPAA fail; save them as RGBA first.
