@@ -252,17 +252,17 @@ def top_truck(rgb):
             d.line((x0, y, x1, y), fill=tyre_hi)               # tread
 
     # tyres: rear twin axle under the bed, front axle under the wings
-    for y0 in (12, 26):
-        wheel(0, y0, 4, y0 + 10)
-        wheel(W - 5, y0, W - 1, y0 + 10)
-    wheel(0, 86, 4, 97)
-    wheel(W - 5, 86, W - 1, 97)
+    for y0 in (9, 24):                                        # twin rear axle: long tyres, only 1 px out at the side
+        wheel(1, y0, 5, y0 + 13)
+        wheel(W - 6, y0, W - 2, y0 + 13)
+    wheel(1, 83, 5, 100)
+    wheel(W - 6, 83, W - 2, 100)
     # chassis between bed and cab
     d.rectangle((7, 54, W - 8, 60), fill=(44, 44, 42, 255))
 
     # the canvas bed
     cv, cv_dark, cv_light, cv_line = (212, 204, 182), (178, 170, 148), (230, 224, 206), (96, 90, 76)
-    x0, y0, x1, y1 = 2, 0, W - 3, 55
+    x0, y0, x1, y1 = 4, 0, W - 5, 55
     d.rounded_rectangle((x0, y0, x1, y1), radius=6, fill=cv_line + (255,))
     d.rounded_rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), radius=5, fill=cv + (255,))
     for by in range(y0 + 4, y1 - 4, 11):                     # the canvas bulges out between the hoops
