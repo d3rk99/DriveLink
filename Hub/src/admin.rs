@@ -30,6 +30,8 @@ pub fn routes(h: Shared) -> Router<Shared> {
         .route("/admin/api/state", get(state))
         .route("/admin/api/layout/{server}", post(save_layout))
         .route("/admin/api/maps/{map}/build", post(build_map))
+        .route("/admin/api/maps/{map}/pbo", post(pin_map_pbo))
+        .route("/admin/api/maps/{map}/image", post(map_image).layer(axum::extract::DefaultBodyLimit::max(200 << 20)))
         .route("/admin/maps/{map}/{z}/{file}", get(tile))
         .route("/admin/api/servers", post(save_server))
         .route("/admin/api/servers/{id}/delete", post(delete_server))
@@ -122,7 +124,7 @@ async fn state(State(h): State<Shared>) -> Response {
         }));
     }
     drop(db);
-    let avail = crate::maps::available(&cfg.dayz_path);
+    let avail = crate::maps::available(&cfg);
     let mut maps = serde_json::Map::new();
     let status = h.maps.lock().unwrap().clone();
     let mut names: Vec<String> = avail.keys().cloned().collect();
@@ -135,7 +137,9 @@ async fn state(State(h): State<Shared>) -> Response {
     }
     names.sort();
     for n in names {
-        maps.insert(n.clone(), json!({"inGameFiles": avail.contains_key(&n), "meta": crate::maps::meta(&h.dir, &n), "status": status.get(&n)}));
+        let size = cfg.servers.iter().find(|s| s.world.eq_ignore_ascii_case(&n) && s.world_size > 0).map(|s| s.world_size);
+        maps.insert(n.clone(), json!({"inGameFiles": avail.contains_key(&n), "pbo": avail.get(&n).map(|p| p.display().to_string()), "pinned": cfg.map_pbos.contains_key(&n),
+                                      "meta": crate::maps::meta(&h.dir, &n), "status": status.get(&n), "worldSize": size}));
     }
     let tools = crate::maps::tools_dir(&cfg.dayz_tools_path);
     let pending: Vec<crate::api::Pending> = h.pending.lock().unwrap().values().cloned().collect();
@@ -425,9 +429,9 @@ async fn firewall_apply(State(h): State<Shared>) -> Response {
 
 async fn build_map(State(h): State<Shared>, Path(map): Path<String>) -> Response {
     let cfg = h.cfg();
-    let avail = crate::maps::available(&cfg.dayz_path);
+    let avail = crate::maps::available(&cfg);
     let Some(pbo) = avail.get(&map).cloned() else {
-        return (StatusCode::NOT_FOUND, format!("no worlds_{map}_data.pbo found (set the DayZ folder on the Setup page)")).into_response();
+        return (StatusCode::NOT_FOUND, format!("no data PBO with satellite tiles found for {map} (install the map mod, or pick its PBO on the Map page)")).into_response();
     };
     let Some(tools) = crate::maps::tools_dir(&cfg.dayz_tools_path) else {
         return (StatusCode::NOT_FOUND, "DayZ Tools not found (install it from Steam, or set its folder on the Setup page)").into_response();
@@ -443,6 +447,77 @@ async fn build_map(State(h): State<Shared>, Path(map): Path<String>) -> Response
     }
     let (dir, status) = (h.dir.clone(), h.maps.clone());
     std::thread::spawn(move || crate::maps::build(dir, map, pbo, tools, status));
+    Json(json!({"ok": true, "status": "starting"})).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct PinForm {
+    #[serde(default)]
+    path: String,
+}
+
+// POST /admin/api/maps/{map}/pbo {path}: this map's data PBO, by hand ("" = forget it, find it by itself again)
+async fn pin_map_pbo(State(h): State<Shared>, Path(map): Path<String>, body: axum::body::Bytes) -> Response {
+    let f: PinForm = match serde_json::from_slice(&body) {
+        Ok(f) => f,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("bad form: {e}")).into_response(),
+    };
+    let map = map.to_lowercase();
+    let path = f.path.trim().trim_matches('"').to_string();
+    if !path.is_empty() {
+        let p = std::path::PathBuf::from(&path);
+        if !p.is_file() {
+            return (StatusCode::BAD_REQUEST, format!("no such file: {path}")).into_response();
+        }
+        if crate::maps::probe_pbo(&p).is_none() {
+            return (StatusCode::BAD_REQUEST, "that PBO has no satellite tiles (layers\\s_*_lco.paa) the hub can read - upload a picture of the map instead").into_response();
+        }
+    }
+    let res = h.update_cfg(|c| {
+        if path.is_empty() {
+            c.map_pbos.remove(&map);
+        } else {
+            c.map_pbos.insert(map.clone(), path.clone());
+        }
+        Ok(())
+    });
+    match res {
+        Ok(()) => {
+            crate::logf!("map {map}: data PBO {}", if path.is_empty() { "found by itself again".to_string() } else { path.clone() });
+            Json(json!({"ok": true})).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ImageQ {
+    size: f64,
+}
+
+// POST /admin/api/maps/{map}/image?size=<metres>  body = a PNG / JPG of the whole map, north up
+async fn map_image(State(h): State<Shared>, Path(map): Path<String>, axum::extract::Query(q): axum::extract::Query<ImageQ>, body: axum::body::Bytes) -> Response {
+    let map = map.to_lowercase();
+    if !map.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') || map.is_empty() {
+        return (StatusCode::BAD_REQUEST, "bad map name").into_response();
+    }
+    if !(q.size.is_finite() && (500.0..=100_000.0).contains(&q.size)) {
+        return (StatusCode::BAD_REQUEST, "the map size must be 500 - 100000 m").into_response();
+    }
+    if body.len() < 100 {
+        return (StatusCode::BAD_REQUEST, "no picture sent").into_response();
+    }
+    {
+        let mut st = h.maps.lock().unwrap();
+        if let Some(s) = st.get(&map) {
+            if !s.starts_with("ready") && !s.starts_with("FAILED") {
+                return Json(json!({"ok": true, "status": s})).into_response();
+            }
+        }
+        st.insert(map.clone(), "starting".into());
+    }
+    let (dir, status, bytes, size) = (h.dir.clone(), h.maps.clone(), body.to_vec(), q.size);
+    std::thread::spawn(move || crate::maps::build_from_image(dir, map, bytes, size, status));
     Json(json!({"ok": true, "status": "starting"})).into_response()
 }
 

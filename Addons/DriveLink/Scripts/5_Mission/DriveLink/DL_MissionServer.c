@@ -347,6 +347,8 @@ modded class MissionServer
 		g_Game.GetWorldName(world);
 		world.ToLower();
 		h.world = world;
+		if (g_Game.GetWorld())
+			h.worldSize = g_Game.GetWorld().GetWorldSize();
 		string hj;
 		string herr;
 		JsonFileLoader<DL_HelloReq>.MakeData(h, hj, herr, false);

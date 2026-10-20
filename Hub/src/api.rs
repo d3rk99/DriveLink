@@ -150,6 +150,7 @@ struct Base {
     port: u16,
     query_port: u16,
     world: String,
+    world_size: u32,
 }
 
 /// Checks the key + server id (body, else URL). Ok(server id) or the refusal to send back.
@@ -209,7 +210,7 @@ fn check(h: &Hub, path: &str, addr: &SocketAddr, q: &HashMap<String, String>, bo
     h.seen.lock().unwrap().insert(server.id.clone(), addr.ip().to_string());
     // the server tells its game/query port on every hello: keep hub.json right without anyone typing it
     let world = b.world.to_lowercase();
-    if path == "/api/hello" && ((b.port != 0 && b.port != server.port) || (b.query_port != 0 && b.query_port != server.query_port) || (!world.is_empty() && world != server.world)) {
+    if path == "/api/hello" && ((b.port != 0 && b.port != server.port) || (b.query_port != 0 && b.query_port != server.query_port) || (!world.is_empty() && world != server.world) || (b.world_size != 0 && b.world_size != server.world_size)) {
         let id = server.id.clone();
         let res = h.update_cfg(|c| {
             if let Some(s) = c.servers.iter_mut().find(|s| s.id == id) {
@@ -221,6 +222,9 @@ fn check(h: &Hub, path: &str, addr: &SocketAddr, q: &HashMap<String, String>, bo
                 }
                 if !world.is_empty() {
                     s.world = world.clone();
+                }
+                if b.world_size != 0 {
+                    s.world_size = b.world_size;
                 }
             }
             Ok(())

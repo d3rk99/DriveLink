@@ -26,6 +26,7 @@ class DL_HelloReq
 	int port;
 	int queryPort;
 	string world;
+	int worldSize;            // the map's size in metres (the hub's Map page: a map made from a picture)
 	ref array<ref DL_Zone> zones;
 	ref array<ref DL_ArrivalPoint> arrivals;
 }

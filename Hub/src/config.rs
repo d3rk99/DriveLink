@@ -1,5 +1,6 @@
 // hub.json - the same file as the Go hub's (it keeps working unchanged), plus the optional HTTPS listener.
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -20,6 +21,9 @@ pub struct ServerEntry {
     /// the map it runs (GetWorldName, lower case: chernarusplus, enoch, sakhal...), reported by the server
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub world: String,
+    /// that map's size in metres (World.GetWorldSize), reported by the server; 0 = not known yet
+    #[serde(default, skip_serializing_if = "is_zero32")]
+    pub world_size: u32,
     /// the join id the DayZ server made for itself before it had a serverId (approved in /admin)
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub claim: String,
@@ -129,10 +133,17 @@ fn is_zero(v: &u16) -> bool {
     *v == 0
 }
 
+fn is_zero32(v: &u32) -> bool {
+    *v == 0
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     /// plain HTTP, e.g. "0.0.0.0:7290"; "" = off
+    /// map name -> its data PBO, set by hand on the Map page (a modded map the hub doesn't find by itself)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub map_pbos: HashMap<String, String>,
     #[serde(default)]
     pub listen: String,
     /// HTTPS, e.g. "0.0.0.0:7291"; "" = off. Without tlsCert/tlsKey the hub makes a self-signed certificate.
@@ -202,6 +213,7 @@ pub fn load_or_create(path: &Path) -> Result<(Config, bool), String> {
                 admin_password: String::new(),
                 dayz_path: String::new(),
                 dayz_tools_path: String::new(),
+                map_pbos: HashMap::new(),
                 public_host: String::new(),
             };
             save(path, &c)?;

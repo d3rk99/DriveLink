@@ -89,7 +89,7 @@
 <script src="/admin/vendor/leaflet.js"></script>
 <script>
 "use strict";
-const SIZES = { chernarusplus: 15360, enoch: 12800, sakhal: 15360 };
+const SIZES = { chernarusplus: 15360, enoch: 12800, sakhal: 15360, deerisle: 16384, namalsk: 12800, banov: 15360, esseker: 12800, takistanplus: 12800, chiemsee: 10240, greencounty: 10240 };
 let S = null, cur = null, map = null, tiles = null, layer = null, tool = null, sel = null, saveTimer = null, drawing = null;
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -112,17 +112,43 @@ function render(rebuildMap) {
 function renderMapBox() {
   const s = srv(), m = S.maps[s.map] || {};
   const opts = Object.keys(S.maps).map(k => `<option value="${esc(k)}" ${k === s.map ? "selected" : ""}>${esc(k)}</option>`).join("");
+  const building = m.status && !/^(ready|FAILED)/.test(m.status);
   let line;
-  if (m.meta) line = `Map ready (${Math.round(m.meta.size)} m).`;
-  else if (m.status && !/^(ready|FAILED)/.test(m.status)) line = `Building: ${esc(m.status)}`;
+  if (building) line = `Building: ${esc(m.status)}`;
+  else if (m.meta) line = `Map ready (${Math.round(m.meta.size)} m).${m.inGameFiles && S.tools ? ` <button id="build" class="small">Rebuild from game files</button>` : ""}`;
   else if (m.inGameFiles && S.tools) line = `No map image yet. <button id="build">Build from game files</button>`;
   else if (m.inGameFiles) line = `DayZ Tools not found (install it from Steam).`;
-  else line = `No game files for this map found - a grid is shown.`;
+  else line = `No game files for this map found on this PC - a grid is shown. Install the map mod here (subscribe in the DayZ launcher), point the hub at its data PBO, or make the map from a picture (below).`;
   if (m.status && /^FAILED/.test(m.status)) line += `<div style="color:var(--bad)">${esc(m.status)}</div>`;
-  $("mapbox").innerHTML = `<h2>Map</h2><select id="mapSel">${opts || `<option>${esc(s.map || "?")}</option>`}</select><div class="hint" style="margin-top:6px">${line}</div>`;
+  const size = m.worldSize || (m.meta && m.meta.size) || SIZES[s.map] || "";
+  $("mapbox").innerHTML = `<h2>Map</h2><select id="mapSel">${opts || `<option>${esc(s.map || "?")}</option>`}</select><div class="hint" style="margin-top:6px">${line}</div>
+    ${m.pbo ? `<div class="hint" style="margin-top:4px;word-break:break-all">Game files: ${esc(m.pbo)}${m.pinned ? " (picked by hand)" : ""}</div>` : ""}
+    <details style="margin-top:6px"><summary class="hint">Modded map? Other ways to get it</summary>
+      <div class="hint" style="margin-top:6px">The hub finds a map mod by itself when it is installed on this PC (DayZ launcher, or the server's @mod folder): any PBO with the map's satellite tiles. If it picks the wrong one, or the mod is somewhere else, give the PBO here:</div>
+      <div class="btns"><input id="pboPath" placeholder="C:\\...\\@MapMod\\Addons\\data.pbo" value="${m.pinned ? esc(m.pbo || "") : ""}"><button id="pboPin">Use this PBO</button>${m.pinned ? `<button id="pboUnpin">Find it by itself</button>` : ""}</div>
+      <div class="hint" style="margin-top:8px">Or make it from <b>one picture of the whole map</b> (PNG / JPG, north up, edge to edge - e.g. the map author's map image). Good for maps whose files are packed so the tools can't read them.</div>
+      <div class="btns"><input type="file" id="imgFile" accept="image/png,image/jpeg" style="width:auto"><label style="display:inline">Map size <input id="imgSize" type="number" min="500" step="1" value="${size}" style="width:90px"> m</label><button id="imgUp">Make the map</button></div>
+      ${m.worldSize ? `<div class="hint">Size as the server reports it: ${m.worldSize} m.</div>` : ""}
+      <div class="status" id="mapMsg"></div></details>`;
   $("mapSel").onchange = e => { s.map = e.target.value; save(); render(true); };
+  const msg = (t, bad) => { const e = $("mapMsg"); if (e) { e.textContent = t; e.className = "status " + (bad ? "badtxt" : "ok"); } };
   const b = $("build");
   if (b) b.onclick = async () => { await fetch(`/admin/api/maps/${encodeURIComponent(s.map)}/build`, { method: "POST" }); pollBuild(); };
+  const pin = async path => {
+    try { await post(`/admin/api/maps/${encodeURIComponent(s.map)}/pbo`, { path }); await refresh(); renderMapBox(); msg(path ? "Saved. Build the map from it now." : "The hub finds it by itself again."); }
+    catch (e) { msg(e.message, true); }
+  };
+  $("pboPin").onclick = () => pin($("pboPath").value.trim());
+  if ($("pboUnpin")) $("pboUnpin").onclick = () => pin("");
+  $("imgUp").onclick = async () => {
+    const f = $("imgFile").files[0], sz = +$("imgSize").value;
+    if (!f) return msg("Pick a picture first.", true);
+    if (!(sz >= 500)) return msg("Enter the map's size in metres (the server reports it once it has run with this build).", true);
+    msg(`Uploading ${Math.round(f.size / 1048576)} MB...`);
+    const r = await fetch(`/admin/api/maps/${encodeURIComponent(s.map)}/image?size=${sz}`, { method: "POST", body: f });
+    if (!r.ok) return msg(await r.text(), true);
+    pollBuild();
+  };
 }
 
 function pollBuild() {
@@ -146,7 +172,7 @@ function buildMap() {
   map = L.map("map", { crs, minZoom: m.meta ? m.meta.minZoom : -6, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, boxZoom: false });
   const bounds = [[0, 0], [size, size]];
   if (m.meta) {
-    tiles = L.tileLayer(`/admin/maps/${encodeURIComponent(s.map)}/{z}/{x}_{y}.jpg`, { tileSize: m.meta.tileSize, minNativeZoom: m.meta.minZoom, maxNativeZoom: 0, minZoom: m.meta.minZoom, maxZoom: 3, noWrap: true, bounds }).addTo(map);
+    tiles = L.tileLayer(`/admin/maps/${encodeURIComponent(s.map)}/{z}/{x}_{y}.jpg?v=${encodeURIComponent(m.status || "")}`, { tileSize: m.meta.tileSize, minNativeZoom: m.meta.minZoom, maxNativeZoom: m.meta.maxZoom ?? 0, minZoom: m.meta.minZoom, maxZoom: 3, noWrap: true, bounds }).addTo(map);
   } else {
     const g = [];
     for (let v = 0; v <= size; v += 1000) { g.push([[v, 0], [v, size]]); g.push([[0, v], [size, v]]); }

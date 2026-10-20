@@ -142,7 +142,7 @@ fn admin(cmd: &str, rest: &[String]) -> Result<(), String> {
         "map" => {
             // DriveLinkHub.exe map            -> list maps found in the game files
             // DriveLinkHub.exe map <name>     -> build its tiles now (what the editor's button does)
-            let avail = maps::available(&cfg.dayz_path);
+            let avail = maps::available(&cfg);
             let Some(name) = rest.first() else {
                 for (m, p) in &avail {
                     println!("{m}: {}{}", p.display(), if maps::meta(&dir, m).is_some() { "  (built)" } else { "" });

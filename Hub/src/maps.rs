@@ -8,6 +8,12 @@
 //
 // Output: maps/<map>/meta.json + a Leaflet tile pyramid maps/<map>/<z>/<col>_<row>.jpg with z = 0 at 1 m/px (step
 // px tiles) and z = -1, -2, ... halving until one tile covers the map.
+//
+// Modded maps (Research/R3-hub-map.md, 2026-10-20): every PBO in the mod folders (client !Workshop\@*\Addons, server
+// @*\addons, the folders in hub.json) is looked at by its HEADER only (the file list, nothing unpacked): the one with
+// a layers\s_*_lco.paa set is a map's data PBO, whatever it is called; its path names the world (matched against the
+// worlds the servers report). hub.json mapPbos pins a PBO by hand. A map whose PBO can't be read (packed / no tiles)
+// can be made from one uploaded picture of the whole map (build_from_image).
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -79,10 +85,17 @@ pub fn tools_dir(tools_path: &str) -> Option<PathBuf> {
     c.into_iter().find(|p| p.join(r"PboUtils\BankRev.exe").is_file() && p.join(r"ImageToPAA\ImageToPAA.exe").is_file())
 }
 
-/// map name -> its worlds_<map>_data.pbo
-pub fn available(dayz_path: &str) -> HashMap<String, PathBuf> {
+/// map name -> the PBO with its satellite tiles: pinned by hand (hub.json mapPbos), the vanilla worlds_<map>_data.pbo,
+/// then any PBO in a mod folder whose file list has a layers\s_*_lco.paa set (named after the world it is for)
+pub fn available(cfg: &crate::config::Config) -> HashMap<String, PathBuf> {
     let mut m = HashMap::new();
-    for dir in addon_dirs(dayz_path) {
+    for (name, p) in &cfg.map_pbos {
+        let pb = PathBuf::from(p);
+        if pb.is_file() {
+            m.insert(name.to_lowercase(), pb);
+        }
+    }
+    for dir in addon_dirs(&cfg.dayz_path) {
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
                 let n = e.file_name().to_string_lossy().to_lowercase();
@@ -92,7 +105,222 @@ pub fn available(dayz_path: &str) -> HashMap<String, PathBuf> {
             }
         }
     }
+    let known: Vec<String> = cfg.servers.iter().map(|s| s.world.to_lowercase()).filter(|w| !w.is_empty()).collect();
+    for dir in mod_addon_dirs(&cfg.dayz_path) {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if !p.extension().map(|x| x.eq_ignore_ascii_case("pbo")).unwrap_or(false) {
+                    continue;
+                }
+                if let Some(cands) = probe_pbo(&p) {
+                    let stem = p.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+                    let name = world_name(&cands, &stem, &known);
+                    if !name.is_empty() {
+                        m.entry(name).or_insert(p);
+                    }
+                }
+            }
+        }
+    }
     m
+}
+
+/// mods' addon folders: the client's !Workshop\@*\Addons, @* beside DayZ / DayZServer, and under the hub.json folder
+pub fn mod_addon_dirs(dayz_path: &str) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if !dayz_path.is_empty() {
+        let p = PathBuf::from(dayz_path);
+        let base = if p.ends_with("addons") { p.parent().map(Path::to_path_buf).unwrap_or(p.clone()) } else { p };
+        roots.push(base.clone());
+        roots.push(base.join("!Workshop"));
+    }
+    for lib in steam_libraries() {
+        for game in ["DayZ", "DayZServer"] {
+            let g = lib.join("steamapps").join("common").join(game);
+            roots.push(g.clone());
+            roots.push(g.join("!Workshop"));
+        }
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for r in roots {
+        let Ok(rd) = std::fs::read_dir(&r) else { continue };
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if !n.starts_with('@') || !e.path().is_dir() {
+                continue;
+            }
+            if let Ok(sub) = std::fs::read_dir(e.path()) {
+                for s in sub.flatten() {
+                    if s.path().is_dir() && s.file_name().to_string_lossy().eq_ignore_ascii_case("addons") && !out.contains(&s.path()) {
+                        out.push(s.path());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// PBO header looks, cached by file size + time (the Servers page asks every 5 s)
+type ProbeCache = Mutex<HashMap<PathBuf, (u64, Option<std::time::SystemTime>, Option<Vec<String>>)>>;
+fn probe_cache() -> &'static ProbeCache {
+    static C: std::sync::OnceLock<ProbeCache> = std::sync::OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Does this PBO hold a map's satellite tiles (layers\s_XXX_YYY_lco.paa)? Then the path segments before "layers"
+/// (prefix included, lower case), else None. Reads the header only: entries of name\0 + 5 x u32, the first one may be
+/// the "Vers" header extension (key\0 value\0 ... \0, with the prefix), an empty name with method 0 ends the list.
+pub fn probe_pbo(p: &Path) -> Option<Vec<String>> {
+    let md = std::fs::metadata(p).ok()?;
+    let (len, mtime) = (md.len(), md.modified().ok());
+    if let Some((l, t, v)) = probe_cache().lock().unwrap().get(p) {
+        if *l == len && *t == mtime {
+            return v.clone();
+        }
+    }
+    let found = read_pbo_header(p);
+    probe_cache().lock().unwrap().insert(p.to_path_buf(), (len, mtime, found.clone()));
+    found
+}
+
+fn read_pbo_header(p: &Path) -> Option<Vec<String>> {
+    use std::io::Read;
+    let f = std::fs::File::open(p).ok()?;
+    let mut r = std::io::BufReader::new(f);
+    let cstr = |r: &mut std::io::BufReader<std::fs::File>| -> Option<String> {
+        let mut b = Vec::new();
+        let mut one = [0u8; 1];
+        loop {
+            r.read_exact(&mut one).ok()?;
+            if one[0] == 0 {
+                break;
+            }
+            b.push(one[0]);
+            if b.len() > 1024 {
+                return None; // not a PBO header (or a packed one)
+            }
+        }
+        Some(String::from_utf8_lossy(&b).to_string())
+    };
+    let mut prefix = String::new();
+    let mut first = true;
+    for _ in 0..500_000 {
+        let name = cstr(&mut r)?;
+        let mut nums = [0u8; 20];
+        r.read_exact(&mut nums).ok()?;
+        let method = u32::from_le_bytes([nums[0], nums[1], nums[2], nums[3]]);
+        if name.is_empty() {
+            if first && method == 0x5665_7273 {
+                // header extension: key/value pairs
+                loop {
+                    let k = cstr(&mut r)?;
+                    if k.is_empty() {
+                        break;
+                    }
+                    let v = cstr(&mut r)?;
+                    if k.eq_ignore_ascii_case("prefix") {
+                        prefix = v;
+                    }
+                }
+                first = false;
+                continue;
+            }
+            return None; // end of the list: no tiles in it
+        }
+        first = false;
+        let full = format!("{}\\{}", prefix, name).to_lowercase().replace('/', "\\");
+        if let Some(i) = full.find("\\layers\\s_") {
+            if full.ends_with("_lco.paa") {
+                return Some(full[..i].split('\\').filter(|s| !s.is_empty()).map(str::to_string).collect());
+            }
+        }
+    }
+    None
+}
+
+/// the world a map PBO is for: a world a server reports that its path names, else the last non-generic part of the
+/// path (worlds_X_data / X_data / X_terrain -> X), else the file name
+pub fn world_name(cands: &[String], stem: &str, known: &[String]) -> String {
+    let clean = |s: &str| -> String {
+        let mut t = s.to_lowercase();
+        for pre in ["worlds_", "world_"] {
+            if let Some(r) = t.strip_prefix(pre) {
+                t = r.to_string();
+            }
+        }
+        for suf in ["_data", "_terrain", "_world", "_layers"] {
+            if let Some(r) = t.strip_suffix(suf) {
+                t = r.to_string();
+            }
+        }
+        t
+    };
+    let generic = ["dz", "worlds", "world", "data", "terrain", "layers", "maps", "map", "addons"];
+    let parts: Vec<String> = cands.iter().map(|c| clean(c)).filter(|c| !c.is_empty() && !generic.contains(&c.as_str())).collect();
+    for k in known {
+        if parts.iter().any(|p| p == k) || clean(stem) == *k {
+            return k.clone();
+        }
+    }
+    if let Some(last) = parts.last() {
+        return last.clone();
+    }
+    clean(stem)
+}
+
+/// A map from ONE picture of the whole map (the owner uploads it: a map whose PBO can't be read). The picture covers
+/// x 0..size, z 0..size (north up); tiles of 512 px from the zoom where the picture is at its own resolution (never
+/// upscaled, at most 8192 px across) down to one tile.
+pub fn build_from_image(dir: PathBuf, map: String, bytes: Vec<u8>, size: f64, status: Status) {
+    let set = |s: String| {
+        crate::logf!("map {map}: {s}");
+        status.lock().unwrap().insert(map.clone(), s);
+    };
+    let res = (|| -> Result<Meta, String> {
+        set(format!("reading the picture ({} kB)", bytes.len() / 1024));
+        let img = image::load_from_memory(&bytes).map_err(|e| format!("not a PNG or JPG picture: {e}"))?.to_rgb8();
+        drop(bytes);
+        let w = img.width().max(img.height()) as f64;
+        let ts: u32 = 512;
+        let mut z = ((w / size).log2().floor() as i32).min(0).min(((8192.0 / size).log2().floor()) as i32);
+        let max_zoom = z;
+        let root = dir.join("maps").join(&map);
+        let _ = std::fs::remove_dir_all(&root);
+        let mut px = (size * 2f64.powi(z)).round().max(1.0) as u32;
+        set(format!("{}x{} picture for {size} m: zoom {z} at {px} px", img.width(), img.height()));
+        let mut level = image::imageops::resize(&img, px, px, image::imageops::FilterType::Lanczos3);
+        drop(img);
+        loop {
+            let out = root.join(z.to_string());
+            std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+            let n = px.div_ceil(ts);
+            for y in 0..n {
+                for x in 0..n {
+                    let mut tile = image::RgbImage::new(ts, ts);
+                    let (cx, cy) = (x * ts, y * ts);
+                    let part = image::imageops::crop_imm(&level, cx, cy, ts.min(px - cx), ts.min(px - cy)).to_image();
+                    image::imageops::replace(&mut tile, &part, 0, 0);
+                    tile.save(out.join(format!("{x}_{y}.jpg"))).map_err(|e| e.to_string())?;
+                }
+            }
+            set(format!("zoom level {z} done"));
+            if n <= 1 {
+                break;
+            }
+            px = px.div_ceil(2);
+            level = image::imageops::resize(&level, px, px, image::imageops::FilterType::Triangle);
+            z -= 1;
+        }
+        let meta = Meta { map: map.clone(), size, tile_size: ts, min_zoom: z, max_zoom };
+        std::fs::write(root.join("meta.json"), serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| e.to_string())?;
+        Ok(meta)
+    })();
+    match res {
+        Ok(m) => set(format!("ready ({} m, zoom {}..{}, from a picture)", m.size, m.min_zoom, m.max_zoom)),
+        Err(e) => set(format!("FAILED: {e}")),
+    }
 }
 
 pub fn meta(dir: &Path, map: &str) -> Option<Meta> {
