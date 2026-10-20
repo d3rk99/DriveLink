@@ -17,6 +17,7 @@ modded class MissionGameplay
 	protected string m_DL_WaitMsg;
 	protected float m_DL_WaitAge;      // seconds since the last update from the server
 	protected bool m_DL_StartEngine;
+	protected ref DL_FilmSpike m_DL_Film = new DL_FilmSpike(); // F9 debug window (road animation engine spike)
 
 	override void OnMissionStart()
 	{
@@ -27,6 +28,8 @@ modded class MissionGameplay
 	override void OnMissionFinish()
 	{
 		GetDayZGame().Event_OnRPC.Remove(DL_OnRpc);
+		if (m_DL_Film)
+			m_DL_Film.Close();
 		DL_WaitHide();
 		if (m_DL_WaitRoot)
 			m_DL_WaitRoot.Unlink();
@@ -82,6 +85,8 @@ modded class MissionGameplay
 	override void OnUpdate(float timeslice)
 	{
 		super.OnUpdate(timeslice);
+		if (m_DL_Film)
+			m_DL_Film.Update(timeslice);
 		if (m_DL_WaitWanted)
 		{
 			m_DL_WaitAge += timeslice;
