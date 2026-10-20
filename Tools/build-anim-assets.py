@@ -247,7 +247,7 @@ def top_truck(rgb):
     paint, dark, light, line = shade(rgb, 1), shade(rgb, 0.72), shade(rgb, 1.15, 12), shade(rgb, 0.42)
 
     def wheel(x0, y0, x1, y1):
-        d.rectangle((x0, y0, x1, y1), fill=tyre)
+        d.rounded_rectangle((x0, y0, x1, y1), radius=2, fill=tyre)
         for y in range(y0 + 1, y1, 3):
             d.line((x0, y, x1, y), fill=tyre_hi)               # tread
 
@@ -263,34 +263,38 @@ def top_truck(rgb):
     # the canvas bed
     cv, cv_dark, cv_light, cv_line = (212, 204, 182), (178, 170, 148), (230, 224, 206), (96, 90, 76)
     x0, y0, x1, y1 = 2, 0, W - 3, 55
-    d.rounded_rectangle((x0, y0, x1, y1), radius=3, fill=cv_line + (255,))
-    d.rounded_rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), radius=2, fill=cv + (255,))
+    d.rounded_rectangle((x0, y0, x1, y1), radius=6, fill=cv_line + (255,))
+    d.rounded_rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), radius=5, fill=cv + (255,))
+    for by in range(y0 + 4, y1 - 4, 11):                     # the canvas bulges out between the hoops
+        d.ellipse((x0 - 1, by, x0 + 3, by + 8), fill=cv_line + (255,))
+        d.ellipse((x0, by + 1, x0 + 4, by + 7), fill=cv + (255,))
+        d.ellipse((x1 - 3, by, x1 + 1, by + 8), fill=cv_line + (255,))
+        d.ellipse((x1 - 4, by + 1, x1, by + 7), fill=cv + (255,))
     for hy in range(y0 + 9, y1 - 3, 11):                     # hoops under the canvas, sagging between them
         d.line((x0 + 2, hy, x1 - 2, hy), fill=cv_light + (255,))
         d.line((x0 + 2, hy + 1, x1 - 2, hy + 1), fill=cv_dark + (255,))
         d.line((x0 + 6, hy + 5, x1 - 6, hy + 5), fill=shade(cv, 0.94) + (255,))
-    d.line((x0 + 1, y0 + 1, x0 + 1, y1 - 2), fill=cv_dark + (255,))   # the canvas falls over the sides
-    d.line((x1 - 1, y0 + 1, x1 - 1, y1 - 2), fill=cv_dark + (255,))
-    d.rectangle((x0 + 2, y0 + 1, x1 - 2, y0 + 3), fill=cv_dark + (255,))  # rear flap
+    d.line((x0 + 1, y0 + 5, x0 + 1, y1 - 6), fill=cv_dark + (255,))   # the canvas falls over the sides
+    d.line((x1 - 1, y0 + 5, x1 - 1, y1 - 6), fill=cv_dark + (255,))
+    d.rounded_rectangle((x0 + 3, y0 + 1, x1 - 3, y0 + 4), radius=2, fill=cv_dark + (255,))  # rear flap
     for _ in range(26):                                       # dirt
         px_, py_ = rnd.randint(x0 + 3, x1 - 3), rnd.randint(y0 + 4, y1 - 3)
         d.point((px_, py_), fill=shade(cv, 0.86) + (255,))
-    d.line((x0 + 1, y1 - 1, x1 - 1, y1 - 1), fill=shade(cv, 0.8) + (255,))
+    d.line((x0 + 5, y1 - 1, x1 - 5, y1 - 1), fill=shade(cv, 0.8) + (255,))
 
     # the cab
     cx0, cx1 = 5, W - 6
-    d.rectangle((cx0, 59, cx1, 76), fill=line + (255,))
-    d.rectangle((cx0 + 1, 60, cx1 - 1, 75), fill=paint + (255,))
-    d.line((cx0 + 1, 60, cx1 - 1, 60), fill=light + (255,))
-    d.line((cx0 + 1, 75, cx1 - 1, 75), fill=dark + (255,))
+    d.rounded_rectangle((cx0, 58, cx1, 80), radius=5, fill=line + (255,))
+    d.rounded_rectangle((cx0 + 1, 59, cx1 - 1, 79), radius=4, fill=paint + (255,))
+    d.line((cx0 + 5, 59, cx1 - 5, 59), fill=light + (255,))
+    d.line((cx0 + 2, 75, cx1 - 2, 75), fill=dark + (255,))
     d.ellipse((11, 62, 21, 72), fill=dark + (255,))           # roof hatch
     d.ellipse((12, 63, 20, 71), fill=light + (255,))
     d.ellipse((13, 64, 19, 70), fill=paint + (255,))
     # windscreen (two panes) and mirrors
     glass, glass_hi = (46, 50, 58, 255), (84, 92, 104, 255)
-    d.rectangle((cx0, 76, cx1, 82), fill=line + (255,))
-    d.rectangle((cx0 + 2, 77, 24, 81), fill=glass)
-    d.rectangle((27, 77, cx1 - 2, 81), fill=glass)
+    d.rounded_rectangle((cx0 + 2, 76, 24, 81), radius=2, fill=glass)
+    d.rounded_rectangle((27, 76, cx1 - 2, 81), radius=2, fill=glass)
     d.line((cx0 + 3, 77, cx0 + 6, 77), fill=glass_hi)
     d.line((28, 77, 31, 77), fill=glass_hi)
     for mx in (1, W - 4):
@@ -298,24 +302,27 @@ def top_truck(rgb):
     d.line((3, 78, cx0, 78), fill=(70, 70, 72, 255))
     d.line((cx1, 78, W - 4, 78), fill=(70, 70, 72, 255))
     # front wings (wide) and the bonnet (tapering) between them
-    d.rectangle((2, 88, W - 3, 103), fill=line + (255,))
-    d.rectangle((3, 89, W - 4, 102), fill=paint + (255,))
-    d.line((3, 89, W - 4, 89), fill=light + (255,))
-    d.polygon([(cx0, 82), (cx1, 82), (W - 12, 101), (11, 101)], fill=line + (255,))
-    d.polygon([(cx0 + 1, 83), (cx1 - 1, 83), (W - 13, 100), (12, 100)], fill=paint + (255,))
+    for wx0, wx1 in ((2, 18), (W - 19, W - 3)):              # the wings, round over the wheels
+        d.rounded_rectangle((wx0, 86, wx1, 103), radius=6, fill=line + (255,))
+        d.rounded_rectangle((wx0 + 1, 87, wx1 - 1, 102), radius=5, fill=paint + (255,))
+        d.line((wx0 + 5, 87, wx1 - 5, 87), fill=light + (255,))
+    d.polygon([(cx0 + 1, 80), (cx1 - 1, 80), (W - 12, 99), (11, 99)], fill=line + (255,))
+    d.rounded_rectangle((11, 94, W - 12, 102), radius=4, fill=line + (255,))
+    d.polygon([(cx0 + 2, 80), (cx1 - 2, 80), (W - 13, 98), (12, 98)], fill=paint + (255,))
+    d.rounded_rectangle((12, 94, W - 13, 101), radius=3, fill=paint + (255,))
     d.line((W // 2 - 1, 84, W // 2 - 1, 99), fill=dark + (255,))   # bonnet crease
     d.line((W // 2, 84, W // 2, 99), fill=light + (255,))
     for vy in range(90, 99, 2):                               # vents on the sides of the bonnet
         d.line((13, vy, 16, vy), fill=line + (255,))
         d.line((W - 17, vy, W - 14, vy), fill=line + (255,))
-    d.rectangle((17, 98, W - 18, 101), fill=(40, 40, 40, 255))   # grille
+    d.rounded_rectangle((17, 97, W - 18, 101), radius=1, fill=(40, 40, 40, 255))   # grille
     for gx in range(18, W - 18, 2):
         d.point((gx, 99), fill=(90, 90, 90, 255))
-    d.rectangle((5, 97, 8, 100), fill=(236, 226, 168, 255))  # headlights
-    d.rectangle((W - 9, 97, W - 6, 100), fill=(236, 226, 168, 255))
+    d.ellipse((5, 96, 9, 100), fill=(236, 226, 168, 255))    # headlights
+    d.ellipse((W - 10, 96, W - 6, 100), fill=(236, 226, 168, 255))
     # bumper
-    d.rectangle((3, 103, W - 4, 106), fill=(58, 58, 58, 255))
-    d.line((3, 103, W - 4, 103), fill=(92, 92, 92, 255))
+    d.rounded_rectangle((3, 102, W - 4, 106), radius=2, fill=(58, 58, 58, 255))
+    d.line((5, 102, W - 6, 102), fill=(92, 92, 92, 255))
     return im
 
 
