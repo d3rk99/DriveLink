@@ -324,14 +324,25 @@ def top_truck(rgb):
     d.rounded_rectangle((3, 102, W - 4, 106), radius=2, fill=(58, 58, 58, 255))
     d.line((5, 102, W - 6, 102), fill=(92, 92, 92, 255))
     # a little wear, like the MiniDayZ cars (less is more): a few rust specks on the paint, one dent in the left wing
-    rust, rust_dark = (122, 70, 38, 255), (88, 50, 30, 255)
+    rust, rust_dark, rust_light = (122, 70, 38, 255), (84, 48, 30, 255), (150, 96, 56, 255)
     px = im.load()
-    for x, y, big in ((40, 63, True), (8, 70, False), (33, 89, False), (44, 93, True), (14, 84, False)):
-        if px[x, y][:3] == paint:
-            px[x, y] = rust_dark
-            if big:
-                px[x + 1, y] = rust
-                px[x, y + 1] = rust
+    # rust where it starts on a real truck: the wing edges, a cab corner, under the windscreen, round the hatch -
+    # a few ragged patches (dark core, lighter rim, a speck or two around), only on paint
+    rr = random.Random(5)
+    for bx, by, rx, ry in ((44, 92, 2.6, 2.0), (7, 98, 2.4, 1.8), (41, 75, 2.8, 1.6), (13, 83, 1.4, 2.6), (22, 67, 1.6, 1.4)):
+        for y in range(int(by - ry - 2), int(by + ry + 3)):
+            for x in range(int(bx - rx - 2), int(bx + rx + 3)):
+                if not (0 <= x < W and 0 <= y < H) or px[x, y][:3] not in (paint, dark, light):
+                    continue
+                e = ((x - bx) / rx) ** 2 + ((y - by) / ry) ** 2 + rr.uniform(-0.35, 0.35)
+                if e < 0.35:
+                    px[x, y] = rust_dark
+                elif e < 0.8:
+                    px[x, y] = rust
+                elif e < 1.15:
+                    px[x, y] = rust_light
+                elif e < 1.9 and rr.random() < 0.18:
+                    px[x, y] = rust                         # a stray speck near the patch
     d.arc((6, 90, 11, 95), 200, 340, fill=dark + (255,))     # the dent: a shadowed hollow with a lit lower lip
     d.point((8, 94), fill=light + (255,))
     return im

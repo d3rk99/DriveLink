@@ -32,6 +32,7 @@ class DL_FilmPerson
 	bool shown;
 	bool zed;
 	float speed = 60;              // film px/s along the path
+	int car = -1;                  // the film car he rides in (DL_FilmCar.idx), -1 = on foot
 	float homeX;                   // its car door
 	float homeY;
 	float animT;
@@ -298,6 +299,38 @@ class DL_FilmThing
 	}
 }
 
+// one car of the film; a convoy has up to 4, front of the line first
+class DL_FilmCar
+{
+	int idx;
+	ref DL_Sprite sprite;
+	bool truck;               // the M3S: 2 seats (cab doors), 6 wheels
+	float w;                  // shown size, film px (with its shadow)
+	float h;
+	float x;                  // centre, film px
+	float y;
+	float slotY;              // where it belongs in the line (it closes up when a car is left behind)
+	bool inWorld;             // left behind: it scrolls away with the ground
+	bool driveOff;            // the end: it drives out of the bottom
+	float v;
+
+	// half the body (without its shadow strip on the right)
+	float HalfW()
+	{
+		return w / 2 - 3;
+	}
+
+	float HalfH()
+	{
+		return h / 2 - 2;
+	}
+
+	float Top()
+	{
+		return y - h / 2;
+	}
+}
+
 class DL_FilmPlayer
 {
 	static const string DIR = "DriveLink/gui/anim/";
@@ -320,6 +353,8 @@ class DL_FilmPlayer
 	static const int P_CRATE = 15;
 	static const float DRIVE = 150;   // ground speeds, film px/s
 	static const float WALK = 28;
+	static const float CAR_GAP = 12;  // between cars in a convoy, film px
+	static const float SIDE_LANE = 84; // where people walk beside a convoy
 
 	protected static int s_DemoN;
 
@@ -327,18 +362,16 @@ class DL_FilmPlayer
 	protected Widget m_Root;
 	protected ref DL_Strip m_GroundA;
 	protected ref DL_Strip m_GroundB;
-	protected ref DL_Sprite m_Car;
-	protected bool m_Truck;       // the M3S: 2 seats (cab doors), 6 wheels
-	protected float m_CarW;       // shown size, film px (with its shadow)
-	protected float m_CarH;
-	protected bool m_DriveOff;    // the end: the car drives out of the bottom
-	protected float m_CarV;
-	protected bool m_Leaving;     // walking round the car they leave behind
-	protected float m_WalkY;      // the walkers' first row
-	protected float m_CarX;
-	protected float m_CarY;       // film pixels (car centre)
-	protected bool m_CarInWorld;  // left behind: it scrolls away with the ground
-	protected bool m_InCar;       // the crew sits in the car (hidden)
+	protected ref array<ref DL_FilmCar> m_Cars = new array<ref DL_FilmCar>;
+	protected DL_FilmCar m_V;          // the car the scene is about (null = on foot)
+	protected DL_FilmCar m_Donor;      // convoy: the car a spare wheel or a jerry can comes from
+	protected DL_FilmPerson m_Helper;  // convoy: who brings it
+	protected bool m_HelperCarry;
+	protected bool m_Convoy;           // more than one car: the tall window, cars in a line
+	protected float m_LeadY;           // the lead car's place
+	protected float m_Bottom;          // the window's bottom edge, fraction of the screen height (text goes below)
+	protected bool m_Leaving;          // walking round the car they leave behind
+	protected float m_WalkY;           // the walkers' first row
 	protected ref array<ref DL_FilmPerson> m_Crew = new array<ref DL_FilmPerson>;
 	protected ref DL_FilmPerson m_Zed;
 	protected DL_FilmPerson m_Actor;   // who the scene is about
@@ -358,7 +391,7 @@ class DL_FilmPlayer
 	protected int m_Scene;
 	protected int m_Step;         // choreography step inside a scene
 	protected float m_StepT;
-	protected bool m_Ending;      // after the last scene: the crew walks off the bottom
+	protected bool m_Ending;      // after the last scene: the cars drive off, walkers walk off the bottom
 	protected int m_WheelSide;    // flat: -1 left / 1 right
 	protected float m_WheelY;
 	protected int m_ZedSide;
@@ -377,6 +410,12 @@ class DL_FilmPlayer
 	bool IsPlaying()
 	{
 		return m_Playing;
+	}
+
+	// where the window ends (fraction of the screen height): the black screen's text goes below it
+	float BottomFrac()
+	{
+		return m_Bottom;
 	}
 
 	// from RPC_FILM; the same film arriving twice plays once
@@ -409,7 +448,7 @@ class DL_FilmPlayer
 		m_Scene = -1;
 		m_Ending = false;
 		NextScene();
-		Print(DL_Const.LOG_TAG + "road film: " + f.events.Count().ToString() + " scenes, " + f.crew.Count().ToString() + " in the crew, " + f.biomeFrom + " -> " + f.biomeTo + ", car '" + f.car + "'");
+		Print(DL_Const.LOG_TAG + "road film: " + f.events.Count().ToString() + " scenes, " + f.crew.Count().ToString() + " in the crew, " + m_Cars.Count().ToString() + " car(s), " + f.biomeFrom + " -> " + f.biomeTo);
 	}
 
 	void Stop()
@@ -421,9 +460,12 @@ class DL_FilmPlayer
 		m_Crew.Clear();
 		m_Props.Clear();
 		m_Wrecks.Clear();
+		m_Cars.Clear();
+		m_V = null;
+		m_Donor = null;
+		m_Helper = null;
 		m_Zed = null;
 		m_Actor = null;
-		m_Car = null;
 		m_Tool = null;
 		m_Puff = null;
 		m_Fuel = null;
@@ -447,10 +489,24 @@ class DL_FilmPlayer
 		int sw;
 		int sh;
 		GetScreenSize(sw, sh);
+		array<string> looks = new array<string>;
+		foreach (string fl : m_Film.cars)
+			looks.Insert(fl);
+		if (looks.Count() == 0 && m_Film.car != "")
+			looks.Insert(m_Film.car);  // an older film: one car, everyone in it
+		m_Convoy = looks.Count() > 1;
+		// a convoy gets a tall window (the cars in a line), else the wide one
 		float winH = sh * 0.62;
 		float winW = Math.Min(sw * 0.62, winH * 1.15);
-		float winX = (sw - winW) / 2;
 		float winY = sh * 0.035;
+		if (m_Convoy)
+		{
+			winH = sh * 0.80;
+			winW = Math.Min(sw * 0.62, winH * 0.62);
+			winY = sh * 0.02;
+		}
+		float winX = (sw - winW) / 2;
+		m_Bottom = (winY + winH) / sh;
 		m_Root = ws.CreateWidget(FrameWidgetTypeID, winX, winY, winW, winH, DL_FilmSpike.Flags() | WidgetFlags.CLIPCHILDREN, ARGB(255, 255, 255, 255), 31500);
 		if (!m_Root)
 			return false;
@@ -487,29 +543,43 @@ class DL_FilmPlayer
 		m_Fuel.sprite.Cell(0, 0, 12, 12);
 		m_Flash = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 255, 235, 130), 9, 0, 0, 3 * m_Px, 3 * m_Px);
 		m_Flash.Show(false);
-		// the car, in the middle of the road
-		m_CarX = 128;
-		m_CarY = m_ViewH * 0.36;
-		m_CarInWorld = false;
-		m_Car = null;
-		m_DriveOff = false;
+		// the cars, in the middle of the road, one behind the other
 		m_Leaving = false;
-		m_CarV = 0;
 		m_WalkY = m_ViewH * 0.40;
-		BuildCar();
-		m_InCar = m_Car != null;
-		// the crew: in the car (hidden) or walking from the start
+		m_LeadY = m_ViewH * 0.36;
+		if (m_Convoy)
+			m_LeadY = m_ViewH * 0.62;
+		foreach (string look : looks)
+		{
+			DL_FilmCar c = BuildCar(look);
+			if (c)
+			{
+				c.idx = m_Cars.Count();
+				m_Cars.Insert(c);
+			}
+		}
+		Relayout(true);
+		// the crew: in their car (hidden) or walking from the start
+		bool legacy = m_Film.cars.Count() == 0 && m_Film.car != "";
 		foreach (DL_FilmActor a : m_Film.crew)
 		{
 			DL_FilmPerson p = new DL_FilmPerson(m_Root, 8, m_Px, a, "");
+			p.car = a.car;
+			if (legacy)
+				p.car = 0;
+			if (p.car >= m_Cars.Count())
+				p.car = -1;
 			p.Show(false);
 			m_Crew.Insert(p);
 		}
 		m_Zed = new DL_FilmPerson(m_Root, 8, m_Px, null, "zednormalskin1");
 		m_Zed.Show(false);
 		int flags = DL_FilmSpike.Flags() | WidgetFlags.CENTER | WidgetFlags.VCENTER;
-		DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(150, 0, 0, 0), 10, 0, winH - winH * 0.075, winW, winH * 0.075);
-		m_Caption = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, winH - winH * 0.07, winW, winH * 0.065, flags, ARGB(255, 240, 225, 190), 11, m_Root));
+		float band = winH * 0.075;
+		if (m_Convoy)
+			band = winH * 0.058;
+		DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(150, 0, 0, 0), 10, 0, winH - band, winW, band);
+		m_Caption = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, winH - band * 0.93, winW, band * 0.87, flags, ARGB(255, 240, 225, 190), 11, m_Root));
 		// a few props from the start, so the road isn't empty
 		m_NextProp = 0;
 		m_NextWreck = 1.5;
@@ -519,14 +589,13 @@ class DL_FilmPlayer
 		return true;
 	}
 
-	// the car the crew drives: DL_FilmCast.CarSprite "look@colour" -> that body pre-painted in that colour
+	// a car of the film: DL_FilmCast.CarSprite "look@colour" -> that body pre-painted in that colour
 	// (Tools/build-anim-assets.py car_sprites); "uaz" / "volga" = the old MiniDayZ sprites as they are
-	protected void BuildCar()
+	protected DL_FilmCar BuildCar(string carLook)
 	{
-		string look = m_Film.car;
-		m_Truck = false;
+		string look = carLook;
 		if (look == "")
-			return;
+			return null;
 		string colour = "";
 		int at = look.IndexOf("@");
 		if (at > 0)
@@ -534,32 +603,29 @@ class DL_FilmPlayer
 			colour = look.Substring(at + 1, look.Length() - at - 1);
 			look = look.Substring(0, at);
 		}
+		DL_FilmCar c = new DL_FilmCar();
+		c.x = 128;
 		if (look == "volga")
-		{
-			SetOldCar(DIR + "volga_ca.paa", 178, 142, 62, 80);
-			return;
-		}
-		if (look == "uaz")
-		{
-			SetOldCar(DIR + "uaz_ca.paa", 176, 80, 68, 74);
-			return;
-		}
+			SetOldCar(c, DIR + "volga_ca.paa", 178, 142, 62, 80);
+		else if (look == "uaz")
+			SetOldCar(c, DIR + "uaz_ca.paa", 176, 80, 68, 74);
 		// pre-painted in every paint the car comes in (Tools/build-anim-assets.py CAR_PAINTS); sizes with the shadow
-		if (look == "sedan")              // Olga 24 (Volga GAZ-24)
-			SetCar(CarTex("sedan", colour, "white"), 64, 128, 50, 78, 1, 1);
+		else if (look == "sedan")         // Olga 24 (Volga GAZ-24)
+			SetCar(c, CarTex("sedan", colour, "white"), 64, 128, 50, 78, 1, 1);
 		else if (look == "sarka")         // Sarka 120 (Skoda 120): a bit smaller
-			SetCar(CarTex("sedan", colour, "yellow"), 64, 128, 50, 78, 0.95, 0.92);
+			SetCar(c, CarTex("sedan", colour, "yellow"), 64, 128, 50, 78, 0.95, 0.92);
 		else if (look == "gunter")        // Gunter 2 (Golf): a short hatchback
-			SetCar(CarTex("sedan", colour, "red"), 64, 128, 50, 78, 0.95, 0.82);
+			SetCar(c, CarTex("sedan", colour, "red"), 64, 128, 50, 78, 0.95, 0.82);
 		else if (look == "humvee")        // M1025: wide and long
-			SetCar(CarTex("4x4", colour, "olive"), 64, 128, 47, 76, 1.3, 1.06);
+			SetCar(c, CarTex("4x4", colour, "olive"), 64, 128, 47, 76, 1.3, 1.06);
 		else if (look == "truck")         // M3S
 		{
-			m_Truck = true;
-			SetCar(CarTex("truck", colour, "green"), 64, 128, 58, 111, 1, 1);
+			c.truck = true;
+			SetCar(c, CarTex("truck", colour, "green"), 64, 128, 58, 111, 1, 1);
 		}
 		else                              // Ada 4x4 (Niva) and anything else
-			SetCar(CarTex("4x4", colour, "green"), 64, 128, 47, 76, 1, 0.95);
+			SetCar(c, CarTex("4x4", colour, "green"), 64, 128, 47, 76, 1, 0.95);
+		return c;
 	}
 
 	static const string PAINTS_SEDAN = ",white,black,wine,yellow,grey,red,blue,";
@@ -582,21 +648,41 @@ class DL_FilmPlayer
 		return DIR + "car_" + base + "_" + c + "_ca.paa";
 	}
 
-	protected void SetCar(string tex, float texW, float texH, float cw, float ch, float sx, float sy)
+	protected void SetCar(DL_FilmCar c, string tex, float texW, float texH, float cw, float ch, float sx, float sy)
 	{
-		m_CarW = cw * sx;
-		m_CarH = ch * sy;
-		m_Car = new DL_Sprite(m_Root, tex, 6, m_CarW * m_Px, m_CarH * m_Px, texW, texH);
-		m_Car.Cell(0, 0, cw, ch);
+		c.w = cw * sx;
+		c.h = ch * sy;
+		c.sprite = new DL_Sprite(m_Root, tex, 6, c.w * m_Px, c.h * m_Px, texW, texH);
+		c.sprite.Cell(0, 0, cw, ch);
 	}
 
 	// the old MiniDayZ sprites as they are (films from an older server)
-	protected void SetOldCar(string tex, float cx, float cy, float cw, float ch)
+	protected void SetOldCar(DL_FilmCar c, string tex, float cx, float cy, float cw, float ch)
 	{
-		m_CarW = cw;
-		m_CarH = ch;
-		m_Car = new DL_Sprite(m_Root, tex, 6, m_CarW * m_Px, m_CarH * m_Px, 256, 256);
-		m_Car.Cell(cx, cy, cw, ch);
+		c.w = cw;
+		c.h = ch;
+		c.sprite = new DL_Sprite(m_Root, tex, 6, c.w * m_Px, c.h * m_Px, 256, 256);
+		c.sprite.Cell(cx, cy, cw, ch);
+	}
+
+	// the line: the lead car at m_LeadY, each next one right behind (above) it; cars left behind don't count
+	protected void Relayout(bool jump)
+	{
+		float y = m_LeadY;
+		bool first = true;
+		float prevH = 0;
+		foreach (DL_FilmCar c : m_Cars)
+		{
+			if (c.inWorld)
+				continue;
+			if (!first)
+				y -= prevH / 2 + CAR_GAP + c.h / 2;
+			c.slotY = y;
+			if (jump)
+				c.y = y;
+			prevH = c.h;
+			first = false;
+		}
 	}
 
 	// ---------------- helpers ----------------
@@ -607,20 +693,48 @@ class DL_FilmPlayer
 	static const float TRUCK_REAR_AXLE_1 = 31;
 	static const float TRUCK_REAR_AXLE_2 = 16;
 
-	protected float CarTop()
+	protected DL_FilmCar FilmCar(int idx)
 	{
-		return m_CarY - m_CarH / 2;
+		if (idx < 0 || idx >= m_Cars.Count())
+			return null;
+		return m_Cars[idx];
 	}
 
-	// half the car body (without its shadow strip on the right)
-	protected float CarHalfW()
+	// the front car still on the road with them
+	protected DL_FilmCar FirstCar()
 	{
-		return m_CarW / 2 - 3;
+		foreach (DL_FilmCar c : m_Cars)
+		{
+			if (!c.inWorld)
+				return c;
+		}
+		return null;
 	}
 
-	protected float CarHalfH()
+	// the living who ride in car c
+	protected array<DL_FilmPerson> Riders(DL_FilmCar c)
 	{
-		return m_CarH / 2 - 2;
+		array<DL_FilmPerson> a = new array<DL_FilmPerson>;
+		if (!c)
+			return a;
+		foreach (DL_FilmPerson p : m_Crew)
+		{
+			if (!p.down && p.car == c.idx)
+				a.Insert(p);
+		}
+		return a;
+	}
+
+	// someone of car c sits inside it (hidden)
+	protected bool Inside(DL_FilmCar c)
+	{
+		array<DL_FilmPerson> rl = Riders(c);
+		foreach (DL_FilmPerson p : rl)
+		{
+			if (!p.shown)
+				return true;
+		}
+		return false;
 	}
 
 	protected DL_FilmEvent Ev()
@@ -667,44 +781,57 @@ class DL_FilmPlayer
 		return a[Math.RandomInt(0, a.Count())];
 	}
 
+	// everyone who rides gets back in (walkers keep walking)
 	protected void HideCrew()
 	{
 		foreach (DL_FilmPerson p : m_Crew)
 		{
+			if (p.down || p.car < 0)
+				continue;
 			p.path.Clear();
 			p.pose = DL_FilmPerson.NORMAL;
-			if (!p.down)
-				p.Show(false);
+			p.marching = false;
+			p.Show(false);
 		}
-		m_InCar = m_Car != null && !m_CarInWorld;
 	}
 
-	// out of the car: each by his door (driver front left, then front right, rear left, rear right); the truck has its
+	// car c's door for its i-th rider: driver front left, then front right, rear left, rear right; the truck has its
 	// two cab doors only (anyone more climbs down off the back of the bed)
-	protected void GetOut()
+	protected void DoorOf(DL_FilmCar c, int i, out float hx, out float hy)
 	{
-		int i = 0;
-		foreach (DL_FilmPerson p : m_Crew)
+		int side = -1;
+		if (i % 2 == 1)
+			side = 1;
+		int rowN = i / 2;
+		hx = c.x + side * (c.HalfW() + 9);
+		hy = c.y + 8 - rowN * 20;
+		if (c.truck)
 		{
-			if (p.down)
-				continue;
-			int side = -1;
-			if (i % 2 == 1)
-				side = 1;
-			int rowN = i / 2;
-			p.homeX = m_CarX + side * (CarHalfW() + 9);
-			p.homeY = m_CarY + 8 - rowN * 20;
-			if (m_Truck)
+			hy = c.Top() + TRUCK_DOOR_ROW;
+			if (rowN > 0)
 			{
-				p.homeY = CarTop() + TRUCK_DOOR_ROW;
-				if (rowN > 0)
-				{
-					p.homeX = m_CarX + side * 10;          // off the back of the bed
-					p.homeY = CarTop() - 8;
-				}
+				hx = c.x + side * 10;
+				hy = c.Top() - 8;
 			}
-			p.x = p.homeX;
-			p.y = p.homeY;
+		}
+	}
+
+	// out of car c: each of its riders by his door
+	protected void GetOut(DL_FilmCar c)
+	{
+		if (!c)
+			return;
+		int i = 0;
+		array<DL_FilmPerson> rl = Riders(c);
+		foreach (DL_FilmPerson p : rl)
+		{
+			float hx;
+			float hy;
+			DoorOf(c, i, hx, hy);
+			p.homeX = hx;
+			p.homeY = hy;
+			p.x = hx;
+			p.y = hy;
 			p.dir = 0;
 			p.path.Clear();
 			p.marching = false;
@@ -712,26 +839,46 @@ class DL_FilmPlayer
 			p.Show(true);
 			i++;
 		}
-		m_InCar = false;
 	}
 
-	// walk to (side of the car, y) without walking through the car: round its front or back when crossing
-	protected void RouteAround(DL_FilmPerson p, int toSide, float toY)
+	// one rider out of car c, at a door on side (-1 left / 1 right)
+	protected void GetOutOne(DL_FilmPerson p, DL_FilmCar c, int side)
 	{
-		float sideX = m_CarX + toSide * (CarHalfW() + 9);
+		if (!p || !c)
+			return;
+		p.homeX = c.x + side * (c.HalfW() + 9);
+		p.homeY = c.y - 4;
+		if (c.truck)
+			p.homeY = c.Top() + TRUCK_DOOR_ROW;
+		if (!p.shown)
+		{
+			p.x = p.homeX;
+			p.y = p.homeY;
+			p.dir = 0;
+		}
+		p.path.Clear();
+		p.marching = false;
+		p.pose = DL_FilmPerson.NORMAL;
+		p.Show(true);
+	}
+
+	// walk to (side of car c, y) without walking through it: round its front or back when crossing
+	protected void RouteAround(DL_FilmPerson p, DL_FilmCar c, int toSide, float toY)
+	{
+		float sideX = c.x + toSide * (c.HalfW() + 9);
 		int fromSide = -1;
-		if (p.x > m_CarX)
+		if (p.x > c.x)
 			fromSide = 1;
 		if (fromSide != toSide)
 		{
-			bool clear = p.y < m_CarY - CarHalfH() - 4 || p.y > m_CarY + CarHalfH() + 4;
+			bool clear = p.y < c.y - c.HalfH() - 4 || p.y > c.y + c.HalfH() + 4;
 			if (clear)
 				p.Go(sideX, p.y);
 			else
 			{
-				float endY = m_CarY - CarHalfH() - 10;
-				if (p.y + toY > 2 * m_CarY)
-					endY = m_CarY + CarHalfH() + 10;
+				float endY = c.y - c.HalfH() - 10;
+				if (p.y + toY > 2 * c.y)
+					endY = c.y + c.HalfH() + 10;
 				p.Go(p.x, endY);
 				p.Go(sideX, endY);
 			}
@@ -739,46 +886,65 @@ class DL_FilmPlayer
 		p.Go(sideX, toY);
 	}
 
-	// everyone back to his door
-	protected void Board()
+	// car c's riders who are out walk back to their doors
+	protected void Board(DL_FilmCar c)
 	{
-		foreach (DL_FilmPerson p : m_Crew)
+		array<DL_FilmPerson> rl = Riders(c);
+		foreach (DL_FilmPerson p : rl)
 		{
-			if (p.down || !p.shown)
+			if (!p.shown)
 				continue;
 			p.pose = DL_FilmPerson.NORMAL;
 			int side = -1;
-			if (p.homeX > m_CarX)
+			if (p.homeX > c.x)
 				side = 1;
-			RouteAround(p, side, p.homeY);
+			RouteAround(p, c, side, p.homeY);
 		}
 	}
 
-	// all at their doors: in they get
-	protected bool Boarded()
+	// all of car c's riders at their doors: in they get
+	protected bool Boarded(DL_FilmCar c)
 	{
-		foreach (DL_FilmPerson p : m_Crew)
+		array<DL_FilmPerson> rs = Riders(c);
+		foreach (DL_FilmPerson p : rs)
 		{
-			if (!p.down && p.shown && p.Busy())
+			if (p.shown && p.Busy())
 				return false;
 		}
-		HideCrew();
+		foreach (DL_FilmPerson q : rs)
+		{
+			q.path.Clear();
+			q.pose = DL_FilmPerson.NORMAL;
+			q.Show(false);
+		}
 		return true;
 	}
 
+	// the people on foot form up: beside the convoy (its side lane), or (no car with them) in the middle of the road
 	protected void Formation(bool jump)
 	{
+		DL_FilmCar lead = FirstCar();
 		int i = 0;
 		foreach (DL_FilmPerson p : m_Crew)
 		{
-			if (p.down)
+			if (p.down || p.car >= 0)
 				continue;
 			p.Show(true);
 			p.pose = DL_FilmPerson.NORMAL;
-			int col = i % 2;
-			int rowN = i / 2;
-			float fx = 114 + col * 28;
-			float fy = m_WalkY + rowN * 22;
+			float fx;
+			float fy;
+			if (lead)
+			{
+				fx = SIDE_LANE;
+				fy = lead.y - lead.h / 2 + 10 + i * 24;
+			}
+			else
+			{
+				int col = i % 2;
+				int rowN = i / 2;
+				fx = 114 + col * 28;
+				fy = m_WalkY + rowN * 22;
+			}
 			p.path.Clear();
 			if (jump)
 			{
@@ -791,9 +957,22 @@ class DL_FilmPlayer
 				p.Go(fx, fy);
 			i++;
 		}
-		m_InCar = false;
-		if (m_Car && !m_CarInWorld)
-			m_CarInWorld = true;  // the car (if any) is left behind and scrolls away
+	}
+
+	// cars nobody rides any more are left behind (they scroll away as the road moves on); the line closes up
+	protected void LeaveEmptyCars()
+	{
+		bool changed = false;
+		foreach (DL_FilmCar c : m_Cars)
+		{
+			if (!c.inWorld && Riders(c).Count() == 0)
+			{
+				c.inWorld = true;
+				changed = true;
+			}
+		}
+		if (changed)
+			Relayout(false);
 	}
 
 	protected void ShowTool(int prop, float x, float y)
@@ -818,9 +997,15 @@ class DL_FilmPlayer
 			m_Actor.Draw();
 		m_Drawn = false;
 		m_Carrying = false;
+		m_HelperCarry = false;
 		m_Actor = null;
+		m_Helper = null;
+		m_Donor = null;
 		foreach (DL_FilmPerson c : m_Crew)
+		{
 			c.pose = DL_FilmPerson.NORMAL;
+			c.speed = 60;
+		}
 		if (m_Tool)
 			m_Tool.sprite.Show(false);
 		if (m_Fuel)
@@ -844,8 +1029,13 @@ class DL_FilmPlayer
 			m_Target = 0;
 			return;
 		}
-		// who the scene is about (a random living survivor if the name is unknown)
-		if (e.kind == "flat" || e.kind == "fuel" || e.kind == "attack" || e.kind == "died")
+		// the car the scene is about (the event's, else the front one), and who it is about (a random living
+		// survivor if the name is unknown)
+		m_V = FilmCar(e.car);
+		if (!m_V || m_V.inWorld)
+			m_V = FirstCar();
+		m_Donor = FilmCar(e.donor);
+		if (e.kind == "flat" || e.kind == "fuel" || e.kind == "attack" || e.kind == "died" || e.kind == "move")
 		{
 			m_Actor = Who(e.who);
 			if (m_Actor)
@@ -854,48 +1044,56 @@ class DL_FilmPlayer
 		Caption(Line(e));
 		if (e.kind == "drive")
 		{
+			LeaveEmptyCars();
 			m_Target = DRIVE;
 			HideCrew();
 		}
 		else if (e.kind == "walk")
 		{
-			if (m_Car && !m_CarInWorld)
-				LeaveCar();
+			if (m_Cars.Count() == 1 && m_V && !m_V.inWorld && Riders(m_V).Count() > 0)
+				LeaveCar();                       // the only car stays: everyone on foot from here
 			else
 			{
+				LeaveEmptyCars();
+				HideCrew();
 				m_Target = WALK;
 				Formation(true);
 			}
 		}
 	}
 
-	// the car stays (flat, no fuel): they walk down its side and form up in front of it, then set off on foot
+	// the only car stays (flat, no fuel): they walk down its side and form up in front of it, then set off on foot
 	protected void LeaveCar()
 	{
-		if (m_InCar)
-			GetOut();
+		DL_FilmCar c = m_V;
+		if (Inside(c))
+			GetOut(c);
 		m_Target = 0;
 		m_Leaving = true;
-		m_WalkY = m_CarY + CarHalfH() + 16;
+		m_WalkY = c.y + c.HalfH() + 16;
 		int i = 0;
-		foreach (DL_FilmPerson p : m_Crew)
+		array<DL_FilmPerson> rl = Riders(c);
+		foreach (DL_FilmPerson p : rl)
 		{
-			if (p.down)
-				continue;
 			p.pose = DL_FilmPerson.NORMAL;
 			p.marching = false;
 			p.path.Clear();
 			int side = -1;
-			if (p.x > m_CarX)
+			if (p.x > c.x)
 				side = 1;
-			float sideX = m_CarX + side * (CarHalfW() + 9);
-			if (Math.AbsFloat(p.x - sideX) > 2 && p.y > m_CarY - CarHalfH() - 4 && p.y < m_CarY + CarHalfH() + 4)
-				RouteAround(p, side, p.y);       // somewhere odd next to the car: back to its side first
+			float sideX = c.x + side * (c.HalfW() + 9);
+			if (Math.AbsFloat(p.x - sideX) > 2 && p.y > c.y - c.HalfH() - 4 && p.y < c.y + c.HalfH() + 4)
+				RouteAround(p, c, side, p.y);    // somewhere odd next to the car: back to its side first
 			p.Go(sideX, m_WalkY - 4);
 			int col = i % 2;
 			int rowN = i / 2;
 			p.Go(114 + col * 28, m_WalkY + rowN * 22);
 			i++;
+		}
+		foreach (DL_FilmPerson w : m_Crew)
+		{
+			if (!w.down)
+				w.car = -1;
 		}
 	}
 
@@ -905,10 +1103,24 @@ class DL_FilmPlayer
 		if (m_Film.crew.Count() == 1)
 			who = "You";
 		string km = Math.Round(e.km).ToString() + " km";
+		string donorName = "";
+		DL_FilmPerson dp = DriverOf(m_Donor);
+		if (dp)
+			donorName = dp.name;
 		if (e.kind == "drive")
+		{
+			if (m_Convoy)
+				return "The convoy rolls on: " + km;
 			return "On the road: " + km;
+		}
 		if (e.kind == "walk")
+		{
+			if (m_Convoy && FirstCar())
+				return "The convoy keeps to walking pace: " + km;
 			return "On foot: " + km;
+		}
+		if (e.kind == "flat" && e.detail == "spare" && donorName != "")
+			return "Blew a tyre. " + donorName + "'s spare fits: " + who + " puts it on.";
 		if (e.kind == "flat" && e.detail == "spare")
 			return "Blew a tyre. " + who + " put on the spare.";
 		if (e.kind == "flat" && e.detail == "kit")
@@ -917,8 +1129,18 @@ class DL_FilmPlayer
 			return "Blew a tyre - no spare. The car stays here.";
 		if (e.kind == "fuel" && e.detail == "found")
 			return "Out of gas. " + who + " found some fuel!";
+		if (e.kind == "fuel" && e.detail == "shared")
+			return "Running dry. " + who + " brings a jerry can.";
 		if (e.kind == "fuel")
+		{
+			if (m_Convoy)
+				return "Out of gas. Nothing found: the car stays here.";
 			return "Out of gas. Nothing found: on foot from here.";
+		}
+		if (e.kind == "move" && e.detail == "walk")
+			return who + " walks on: no seat left.";
+		if (e.kind == "move")
+			return who + " climbs into another car.";
 		if (e.kind == "attack" && e.detail == "died")
 			return who + " didn't survive the attack.";
 		if (e.kind == "attack")
@@ -928,6 +1150,14 @@ class DL_FilmPlayer
 		if (e.kind == "died")
 			return who + " didn't make it.";
 		return "";
+	}
+
+	protected DL_FilmPerson DriverOf(DL_FilmCar c)
+	{
+		array<DL_FilmPerson> rs = Riders(c);
+		if (rs.Count() == 0)
+			return null;
+		return rs[0];
 	}
 
 	// one step of the current scene's choreography
@@ -961,7 +1191,8 @@ class DL_FilmPlayer
 						mp.marching = true;
 					}
 				}
-				m_CarInWorld = true;              // left behind: it scrolls away
+				if (m_V)
+					m_V.inWorld = true;           // left behind: it scrolls away
 				m_Target = WALK;
 			}
 		}
@@ -969,8 +1200,12 @@ class DL_FilmPlayer
 			m_Km += e.km / len * dt;
 		else if (e.kind == "flat")
 			SceneFlat(e);
+		else if (e.kind == "fuel" && e.detail == "shared")
+			SceneShareFuel(e);
 		else if (e.kind == "fuel")
 			SceneFuel(e);
+		else if (e.kind == "move")
+			SceneMove(e);
 		else if (e.kind == "attack")
 			SceneAttack(e);
 		else if (e.kind == "died")
@@ -982,49 +1217,64 @@ class DL_FilmPlayer
 			NextScene();
 	}
 
-	// stopped: true once the car (or the walkers) stand still
+	// stopped: true once the cars (or the walkers) stand still
 	protected bool Halted()
 	{
 		return m_Speed < 1 || m_StepT > 2;
 	}
 
-	// flat tyre: a random wheel blows, the car stops, the fixer walks round the car to it, works, they get back in
+	// flat tyre: a random wheel blows, the car stops, the fixer walks round the car to it, works, they get back in.
+	// In a convoy the spare may come from another car: someone of that car carries it over.
 	protected void SceneFlat(DL_FilmEvent e)
 	{
-		float hw = CarHalfW();
-		float hh = CarHalfH();
+		DL_FilmCar c = m_V;
+		if (!c)
+			return;
+		float hw = c.HalfW();
+		float hh = c.HalfH();
 		if (m_Step == 0)
 		{
 			m_Target = 0;
 			int wheels = 4;
-			if (m_Truck)
+			if (c.truck)
 				wheels = 6;
 			int wheel = Math.RandomInt(0, wheels);   // even = left, odd = right (screen); wheel / 2 = the axle
 			m_WheelSide = -1;
 			if (wheel % 2 == 1)
 				m_WheelSide = 1;
 			int axle = wheel / 2;
-			m_WheelY = m_CarY + hh - 15;     // the car drives down: its front is at the bottom
+			m_WheelY = c.y + hh - 15;     // the car drives down: its front is at the bottom
 			if (axle >= 1)
-				m_WheelY = m_CarY - hh + 15;
-			if (m_Truck)
+				m_WheelY = c.y - hh + 15;
+			if (c.truck)
 			{
-				m_WheelY = CarTop() + TRUCK_FRONT_AXLE;
+				m_WheelY = c.Top() + TRUCK_FRONT_AXLE;
 				if (axle == 1)
-					m_WheelY = CarTop() + TRUCK_REAR_AXLE_1;
+					m_WheelY = c.Top() + TRUCK_REAR_AXLE_1;
 				else if (axle == 2)
-					m_WheelY = CarTop() + TRUCK_REAR_AXLE_2;
+					m_WheelY = c.Top() + TRUCK_REAR_AXLE_2;
 			}
-			m_Puff.x = m_CarX + m_WheelSide * (hw - 3);
+			m_Puff.x = c.x + m_WheelSide * (hw - 3);
 			m_Puff.y = m_WheelY;
 			m_Puff.sprite.Show(true);
 			NextStep();
 		}
 		else if (m_Step == 1 && m_StepT > 0.8 && Halted())
 		{
-			GetOut();
+			GetOut(c);
 			if (m_Actor)
-				RouteAround(m_Actor, m_WheelSide, m_WheelY);
+				RouteAround(m_Actor, c, m_WheelSide, m_WheelY);
+			if (m_Donor && m_Donor != c && e.detail != "none")
+			{
+				// the spare (or kit) comes from another car of the convoy: its driver carries it over, along the side
+				m_Helper = DriverOf(m_Donor);
+				if (m_Helper)
+				{
+					GetOutOne(m_Helper, m_Donor, m_WheelSide);
+					m_Helper.Go(c.x + m_WheelSide * (hw + 22), m_WheelY + 6);
+					m_HelperCarry = true;
+				}
+			}
 			NextStep();
 		}
 		else if (m_Step == 2)
@@ -1037,14 +1287,18 @@ class DL_FilmPlayer
 					if (m_WheelSide > 0)
 						m_Actor.dir = 3;
 					m_Actor.pose = DL_FilmPerson.USE;
-					if (e.detail == "spare")
-						ShowTool(P_WHEEL, m_Actor.x + m_WheelSide * 9, m_Actor.y + 11);
-					else if (e.detail == "kit")
-						ShowTool(P_CRATE, m_Actor.x + m_WheelSide * 9, m_Actor.y + 11);
+					if (!m_HelperCarry)
+					{
+						if (e.detail == "spare")
+							ShowTool(P_WHEEL, m_Actor.x + m_WheelSide * 9, m_Actor.y + 11);
+						else if (e.detail == "kit")
+							ShowTool(P_CRATE, m_Actor.x + m_WheelSide * 9, m_Actor.y + 11);
+					}
 				}
-				foreach (DL_FilmPerson o : m_Crew)
+				array<DL_FilmPerson> rl = Riders(c);
+				foreach (DL_FilmPerson o : rl)
 				{
-					if (o != m_Actor && !o.down)
+					if (o != m_Actor)
 						o.FaceTo(m_Actor);
 				}
 				NextStep();
@@ -1055,7 +1309,7 @@ class DL_FilmPlayer
 			float work = 2.6;
 			if (e.detail == "none")
 				work = 1.4;                       // nothing to fix it with
-			if (m_StepT > work)
+			if (m_StepT > work && !m_HelperCarry)
 			{
 				m_Tool.sprite.Show(false);
 				if (m_Actor)
@@ -1066,27 +1320,61 @@ class DL_FilmPlayer
 				if (e.detail != "none")
 				{
 					m_Puff.sprite.Show(false);
-					Board();
+					Board(c);
 				}
 				NextStep();
 			}
 		}
 		else if (m_Step == 4 && e.detail != "none")
 		{
-			if (Boarded())
+			bool helperIn = true;
+			if (m_Helper)
+				helperIn = Boarded(m_Donor);
+			if (Boarded(c) && helperIn)
 			{
 				m_Target = DRIVE;
+				if (FirstCar() && Walkers() > 0)
+					m_Target = WALK;
 				NextStep();
 			}
 		}
+		// the helper carries the spare over, leaves it at the wheel, goes back to his car
+		if (m_Helper && m_HelperCarry)
+		{
+			int prop = P_WHEEL;
+			if (e.detail == "kit")
+				prop = P_CRATE;
+			ShowTool(prop, m_Helper.x + 6, m_Helper.y + 8);
+			if (!m_Helper.Busy())
+			{
+				m_HelperCarry = false;
+				ShowTool(prop, c.x + m_WheelSide * (hw + 18), m_WheelY + 12);
+				m_Helper.FaceTo(m_Actor);
+				Board(m_Donor);
+			}
+		}
+	}
+
+	protected int Walkers()
+	{
+		int n = 0;
+		foreach (DL_FilmPerson p : m_Crew)
+		{
+			if (!p.down && p.car < 0)
+				n++;
+		}
+		return n;
 	}
 
 	// out of gas: one goes off to search, comes back (with a can: he fills up, they drive on)
 	protected void SceneFuel(DL_FilmEvent e)
 	{
-		float hw = CarHalfW();
-		float hh = CarHalfH();
-		float topY = m_CarY - hh - 14;
+		DL_FilmCar c = m_V;
+		if (!c)
+			return;
+		float hw = c.HalfW();
+		float hh = c.HalfH();
+		float topY = c.y - hh - 14;
 		if (m_Step == 0)
 		{
 			m_Target = 0;
@@ -1094,9 +1382,11 @@ class DL_FilmPlayer
 		}
 		else if (m_Step == 1 && m_StepT > 0.8 && Halted())
 		{
-			GetOut();
+			GetOut(c);
 			if (m_Actor)
 			{
+				if (!m_Actor.shown)
+					GetOutOne(m_Actor, c, 1);
 				m_Actor.speed = 80;
 				m_Actor.Go(m_Actor.x, topY);
 				m_Actor.Go(300, topY);           // off the right edge, searching
@@ -1109,8 +1399,8 @@ class DL_FilmPlayer
 		{
 			if (m_Actor)
 			{
-				m_Actor.Go(m_CarX + hw + 9, topY);
-				m_Actor.Go(m_CarX + hw + 9, m_CarY - 6); // the filler cap
+				m_Actor.Go(c.x + hw + 9, topY);
+				m_Actor.Go(c.x + hw + 9, c.y - 6); // the filler cap
 			}
 			m_Carrying = e.detail == "found";
 			NextStep();
@@ -1135,14 +1425,16 @@ class DL_FilmPlayer
 		{
 			m_Carrying = false;
 			m_Fuel.sprite.Show(false);
-			Board();
+			Board(c);
 			NextStep();
 		}
 		else if (m_Step == 6)
 		{
-			if (Boarded())
+			if (Boarded(c))
 			{
 				m_Target = DRIVE;
+				if (FirstCar() && Walkers() > 0)
+					m_Target = WALK;
 				NextStep();
 			}
 		}
@@ -1151,6 +1443,127 @@ class DL_FilmPlayer
 			m_Fuel.sprite.Show(true);
 			m_Fuel.x = m_Actor.x - 8;
 			m_Fuel.y = m_Actor.y + 6;
+		}
+	}
+
+	// a convoy: someone from another car brings a jerry can over and pours it in, then goes back to his car
+	protected void SceneShareFuel(DL_FilmEvent e)
+	{
+		DL_FilmCar c = m_V;
+		if (!c)
+			return;
+		DL_FilmCar home = m_Donor;
+		if (!home)
+			home = c;
+		if (m_Step == 0)
+		{
+			m_Target = 0;
+			NextStep();
+		}
+		else if (m_Step == 1 && m_StepT > 0.6 && Halted())
+		{
+			if (m_Actor)
+			{
+				if (m_Actor.car != home.idx)
+					m_Actor = DriverOf(home);
+			}
+			if (m_Actor)
+			{
+				GetOutOne(m_Actor, home, 1);
+				m_Actor.Go(c.x + c.HalfW() + 9, c.y - 6); // the filler cap, on the right
+				m_Carrying = true;
+			}
+			NextStep();
+		}
+		else if (m_Step == 2 && (!m_Actor || !m_Actor.Busy()))
+		{
+			if (m_Actor)
+			{
+				m_Actor.dir = 3;
+				m_Actor.pose = DL_FilmPerson.USE;
+			}
+			NextStep();
+		}
+		else if (m_Step == 3 && m_StepT > 1.4)
+		{
+			m_Carrying = false;
+			m_Fuel.sprite.Show(false);
+			if (m_Actor)
+			{
+				m_Actor.pose = DL_FilmPerson.NORMAL;
+				Board(home);
+			}
+			NextStep();
+		}
+		else if (m_Step == 4)
+		{
+			if (Boarded(home))
+			{
+				m_Target = DRIVE;
+				if (Walkers() > 0)
+					m_Target = WALK;
+				NextStep();
+			}
+		}
+		if (m_Carrying && m_Actor)
+		{
+			m_Fuel.sprite.Show(true);
+			m_Fuel.x = m_Actor.x - 8;
+			m_Fuel.y = m_Actor.y + 6;
+		}
+	}
+
+	// a convoy car was left: one of its crew walks to a free seat in another car, or out to the side lane
+	protected void SceneMove(DL_FilmEvent e)
+	{
+		DL_FilmPerson p = m_Actor;
+		if (!p)
+			return;
+		if (m_Step == 0)
+		{
+			m_Target = 0;
+			NextStep();
+		}
+		else if (m_Step == 1 && Halted())
+		{
+			DL_FilmCar src = FilmCar(p.car);
+			if (!p.shown && src)
+				GetOutOne(p, src, 1);
+			DL_FilmCar dst = FilmCar(e.car);
+			if (dst && e.detail != "walk")
+			{
+				float hx;
+				float hy;
+				DoorOf(dst, 3, hx, hy);           // a rear door on the right
+				p.homeX = hx;
+				p.homeY = hy;
+				RouteAround(p, dst, 1, hy);
+			}
+			else
+			{
+				DL_FilmCar lead = FirstCar();
+				float ly = m_WalkY;
+				if (lead)
+					ly = lead.y - lead.h / 2 + 10 + Walkers() * 24;
+				if (p.x > 128)
+					p.Go(p.x, ly - 20);           // round the front of the cars to the left lane
+				p.Go(SIDE_LANE, ly);
+			}
+			NextStep();
+		}
+		else if (m_Step == 2 && !p.Busy())
+		{
+			if (e.car >= 0 && e.detail != "walk")
+			{
+				p.car = e.car;
+				p.Show(false);
+			}
+			else
+			{
+				p.car = -1;
+				p.dir = 0;
+			}
+			NextStep();
 		}
 	}
 
@@ -1167,17 +1580,20 @@ class DL_FilmPlayer
 		}
 		else if (m_Step == 1 && m_StepT > 0.4 && Halted())
 		{
-			if (m_InCar)
-				GetOut();
 			if (!v)
 			{
 				NextStep();
 				return;
 			}
+			if (!v.shown)
+				GetOut(FilmCar(v.car));
 			m_ZedSide = -1;
 			if (Math.RandomFloat01() < 0.5)
 				m_ZedSide = 1;
+			if (FirstCar() && v.car < 0)
+				m_ZedSide = -1;                    // beside a convoy: from the verge
 			m_Zed.down = false;
+			m_Zed.downT = 0;
 			m_Zed.attacking = false;
 			m_Zed.x = 128 + m_ZedSide * 150;
 			m_Zed.y = v.y - 10;
@@ -1204,7 +1620,7 @@ class DL_FilmPlayer
 				v.pose = DL_FilmPerson.SWING;
 			foreach (DL_FilmPerson o : m_Crew)
 			{
-				if (o != v && !o.down)
+				if (o != v && !o.down && o.shown)
 					o.FaceTo(m_Zed);
 			}
 			NextStep();
@@ -1238,31 +1654,33 @@ class DL_FilmPlayer
 			if (m_Drawn && !v.down)
 				v.Draw();                          // slings it again
 			m_Drawn = false;
-			if (m_Car && !m_CarInWorld)
-				Board();
+			if (!v.down && v.car >= 0)
+				Board(FilmCar(v.car));
 			else
 				Formation(false);
 			NextStep();
 		}
 		else if (m_Step == 5)
 		{
-			if (m_Car && !m_CarInWorld)
+			if (!v.down && v.car >= 0)
 			{
-				if (Boarded())
+				if (Boarded(FilmCar(v.car)))
 				{
 					m_Target = DRIVE;
+					if (Walkers() > 0)
+						m_Target = WALK;
 					NextStep();
 				}
 				return;
 			}
 			foreach (DL_FilmPerson w : m_Crew)
 			{
-				if (!w.down && w.Busy())
+				if (!w.down && w.car < 0 && w.Busy())
 					return;
 			}
 			foreach (DL_FilmPerson m : m_Crew)
 			{
-				if (!m.down)
+				if (!m.down && m.car < 0)
 				{
 					m.dir = 0;
 					m.marching = true;
@@ -1306,7 +1724,8 @@ class DL_FilmPlayer
 		m_Flash.SetPos(m_Ox + (fx - 1.5) * m_Px, m_Oy + (fy - 1.5) * m_Px);
 	}
 
-	// after the last scene: the road stops, they get out and walk off the bottom
+	// after the last scene: the road stops; every car with its crew inside drives out of the bottom, whoever is on
+	// foot walks out
 	protected void SceneEnd()
 	{
 		if (m_Step == 0)
@@ -1316,20 +1735,16 @@ class DL_FilmPlayer
 				p.marching = false;
 			NextStep();
 		}
-		else if (m_Step == 1 && m_InCar && m_Car && !m_CarInWorld)
+		else if (m_Step == 1 && (Halted() || !FirstCar() || Walkers() == 0))
 		{
-			// still in the car: it drives on, out of the bottom of the window (the road stands still)
-			m_DriveOff = true;
-			m_Step = 3;
-			m_StepT = 0;
-		}
-		else if (m_Step == 1 && Halted())
-		{
-			if (m_InCar)
-				GetOut();
+			foreach (DL_FilmCar c : m_Cars)
+			{
+				if (!c.inWorld && Inside(c))
+					c.driveOff = true;
+			}
 			foreach (DL_FilmPerson w : m_Crew)
 			{
-				if (w.down)
+				if (w.down || !w.shown)
 					continue;
 				w.path.Clear();
 				w.speed = 55;
@@ -1345,17 +1760,14 @@ class DL_FilmPlayer
 				if (!g.down && g.shown && g.y < m_ViewH + 30)
 					gone = false;
 			}
-			if (gone || m_StepT > DL_Film.END_SECONDS + 1)
+			foreach (DL_FilmCar dc : m_Cars)
+			{
+				if (dc.driveOff && dc.Top() < m_ViewH)
+					gone = false;
+			}
+			if (gone || m_StepT > DL_Film.END_SECONDS + 2)
 			{
 				Print(DL_Const.LOG_TAG + "road film ended");
-				Stop();
-			}
-		}
-		else if (m_Step == 3)
-		{
-			if (m_CarY - m_CarH / 2 > m_ViewH || m_StepT > DL_Film.END_SECONDS + 1)
-			{
-				Print(DL_Const.LOG_TAG + "road film ended (drove off)");
 				Stop();
 			}
 		}
@@ -1418,22 +1830,22 @@ class DL_FilmPlayer
 			ScrollThing(t, dy);
 		foreach (DL_FilmThing w : m_Wrecks)
 			ScrollThing(w, dy);
-		// the car, the people, the bits of a scene
-		if (m_Car)
+		// the cars: left behind (scroll away), driving off, or in the line (closing up)
+		foreach (DL_FilmCar c : m_Cars)
 		{
-			if (m_CarInWorld)
-				m_CarY -= dy;
-			if (m_DriveOff)
+			if (c.inWorld)
+				c.y -= dy;
+			else if (c.driveOff)
 			{
-				m_CarV = Math.Min(m_CarV + 110 * dt, 170);
-				m_CarY += m_CarV * dt;
+				c.v = Math.Min(c.v + 110 * dt, 170);
+				c.y += c.v * dt;
 			}
+			else if (Math.AbsFloat(c.slotY - c.y) > 0.1)
+				c.y += (c.slotY - c.y) * Math.Min(1, dt * 1.5);
 			float bob = 0;
-			if ((m_Speed > 20 || m_DriveOff) && !m_CarInWorld)
-				bob = Math.Sin(m_T * 18) * 0.5;
-			float carSx = m_Ox + (m_CarX - m_CarW / 2 + bob) * m_Px;
-			float carSy = m_Oy + (m_CarY - m_CarH / 2) * m_Px;
-			m_Car.MoveTo(carSx, carSy);
+			if ((m_Speed > 20 || c.driveOff) && !c.inWorld)
+				bob = Math.Sin(m_T * 18 + c.idx * 1.7) * 0.5;
+			c.sprite.MoveTo(m_Ox + (c.x - c.w / 2 + bob) * m_Px, m_Oy + (c.y - c.h / 2) * m_Px);
 		}
 		foreach (DL_FilmPerson p : m_Crew)
 		{
@@ -1582,9 +1994,10 @@ class DL_FilmPlayer
 
 	// ---------------- demo (F9) ----------------
 
-	protected static DL_FilmActor DemoActor(string name, string skin, string gear, string hand, string back)
+	protected static DL_FilmActor DemoActor(string name, string skin, string gear, string hand, string back, int car)
 	{
 		DL_FilmActor a = new DL_FilmActor();
+		a.car = car;
 		a.name = name;
 		a.skin = skin;
 		gear.Split(",", a.layers);
@@ -1595,20 +2008,64 @@ class DL_FilmPlayer
 
 	// F9 cycles: A = a crew of three through every scene the road has (2 flats, fuel found, fuel lost, walking,
 	// infected fought off, infected kill, rationing, hunger), B = a solo driver whose car is lost to a flat,
-	// C = two in the M3S (cab doors, any of its 6 wheels), driving off at the end
+	// C = two in the M3S (cab doors, any of its 6 wheels), D = a convoy of three (a spare from another car, a shared
+	// jerry can, a car left behind: one climbs into a free seat, one walks beside the convoy), E = a group on foot
 	static DL_Film Demo()
 	{
 		s_DemoN++;
 		DL_Film f = new DL_Film();
 		f.car = "4x4@green";
 		f.biomeFrom = "forest";
-		if (s_DemoN % 3 == 0)
+		int pick = s_DemoN % 5;
+		if (pick == 4)
+		{
+			f.car = "";
+			f.cars.Insert("truck@green");
+			f.cars.Insert("4x4@blue");
+			f.cars.Insert("sedan@white");
+			f.km = 90;
+			f.biomeTo = "field";
+			f.crew.Insert(DemoActor("Derk", "veteran", "orelpants,oreljacket,razgruz,hunterbackpack,helmetarmy", "akmrifle", "", 0));
+			f.crew.Insert(DemoActor("OrionKaelin", "biker", "jeans@black,downjacket@red,taloonbackpack@orange,warmhat@black", "", "sksrifle", 0));
+			f.crew.Insert(DemoActor("Britney", "kate", "sportpants@black,hoodiegray@pink,schoolbackpack@yellow,warmhat@lightblue", "fireaxe", "", 1));
+			f.crew.Insert(DemoActor("Jonas", "redneck", "jeans@blue,hoodiegray@green,mountainbackpack,cowboyhat", "", "mosinnagant", 1));
+			f.crew.Insert(DemoActor("Mika", "def2", "workpants@brown,tshirt@orange,baseballcap@red", "glockpistol", "crowbar", 2));
+			f.Add("drive", 15);
+			f.Add("flat", 15, "Britney", "spare", 1, 0);   // the Ada's spare comes from the truck
+			f.Add("drive", 15);
+			f.Add("fuel", 30, "Derk", "shared", 2, 0);     // the Olga runs dry: a jerry can from the truck
+			f.Add("drive", 15);
+			f.Add("flat", 45, "Jonas", "none", 1);         // the Ada is lost
+			f.Add("move", 45, "Britney", "", 2);           // she climbs into the Olga
+			f.Add("move", 45, "Jonas", "walk", -1);        // the truck and the Olga are full: he walks
+			f.Add("walk", 15);
+			f.Add("attack", 60, "Jonas", "hurt");
+			f.Add("walk", 15);
+			return f;
+		}
+		if (pick == 0)
+		{
+			f.car = "";
+			f.km = 50;
+			f.biomeTo = "snow";
+			f.crew.Insert(DemoActor("Derk", "survivalist", "hunterpants,hunterjacket,hunterbackpack,warmhat@black", "sksrifle", "", -1));
+			f.crew.Insert(DemoActor("OrionKaelin", "bandit", "gorkapants,gorkajacket,vest,gorkahelmet", "", "akmrifle", -1));
+			f.crew.Insert(DemoActor("Britney", "jasmine", "jeans@blue,raincoatblue,schoolbackpack@red,beretred", "", "baseballbat", -1));
+			f.crew.Insert(DemoActor("Mika", "def3", "workpants,sweater@green,improvisedbag,ushanka", "glockpistol", "", -1));
+			f.Add("walk", 20);
+			f.Add("attack", 20, "", "hurt");
+			f.Add("walk", 15);
+			f.Add("ration", 35);
+			f.Add("walk", 15);
+			return f;
+		}
+		if (pick == 3)
 		{
 			f.car = "truck@blue";
 			f.km = 70;
 			f.biomeTo = "field";
-			f.crew.Insert(DemoActor("Derk", "veteran", "orelpants,oreljacket,razgruz,hunterbackpack,helmetarmy", "akmrifle", ""));
-			f.crew.Insert(DemoActor("OrionKaelin", "biker", "jeans@black,downjacket@red,taloonbackpack@orange,warmhat@black", "", "sksrifle"));
+			f.crew.Insert(DemoActor("Derk", "veteran", "orelpants,oreljacket,razgruz,hunterbackpack,helmetarmy", "akmrifle", "", 0));
+			f.crew.Insert(DemoActor("OrionKaelin", "biker", "jeans@black,downjacket@red,taloonbackpack@orange,warmhat@black", "", "sksrifle", 0));
 			f.Add("drive", 20);
 			f.Add("flat", 20, "OrionKaelin", "spare");
 			f.Add("drive", 15);
@@ -1616,13 +2073,13 @@ class DL_FilmPlayer
 			f.Add("drive", 35);
 			return f;
 		}
-		if (s_DemoN % 3 == 1)
+		if (pick == 1)
 		{
 			f.km = 160;
 			f.biomeTo = "desert";
-			f.crew.Insert(DemoActor("Derk", "def1", "gorkapants,gorkajacket,vest,mountainbackpack,helmetmoto@blue", "ak74rifle", "baseballbat"));
-			f.crew.Insert(DemoActor("OrionKaelin", "redneck", "jeans@blue,hoodiegray@red,hunterbackpack@green,cowboyhat", "", "mosinnagant"));
-			f.crew.Insert(DemoActor("Britney", "kate", "sportpants@black,hoodiegray@pink,schoolbackpack@yellow,warmhat@lightblue", "fireaxe", ""));
+			f.crew.Insert(DemoActor("Derk", "def1", "gorkapants,gorkajacket,vest,mountainbackpack,helmetmoto@blue", "ak74rifle", "baseballbat", 0));
+			f.crew.Insert(DemoActor("OrionKaelin", "redneck", "jeans@blue,hoodiegray@red,hunterbackpack@green,cowboyhat", "", "mosinnagant", 0));
+			f.crew.Insert(DemoActor("Britney", "kate", "sportpants@black,hoodiegray@pink,schoolbackpack@yellow,warmhat@lightblue", "fireaxe", "", 0));
 			f.Add("drive", 20);
 			f.Add("flat", 20, "OrionKaelin", "spare");
 			f.Add("drive", 15);
@@ -1645,7 +2102,7 @@ class DL_FilmPlayer
 		f.car = "sedan@wine";
 		f.km = 60;
 		f.biomeTo = "snow";
-		f.crew.Insert(DemoActor("Derk", "survivalist", "workpants@brown,tshirt@orange,taloonbackpack@green,baseballcap@red", "glockpistol", "crowbar"));
+		f.crew.Insert(DemoActor("Derk", "survivalist", "workpants@brown,tshirt@orange,taloonbackpack@green,baseballcap@red", "glockpistol", "crowbar", 0));
 		f.Add("drive", 25);
 		f.Add("flat", 25, "Derk", "none");
 		f.Add("walk", 15);

@@ -202,6 +202,10 @@ class DL_PlayerData
 	string carGroup;
 	// waiting room: how many players were in the car when it left (driver included). 0 = an old snapshot, no waiting.
 	int crewCount;
+	// a convoy: this car's place in the line (0 = the lead car; the target parks them one behind the other);
+	// a group on foot: his place beside the others at the arrival point
+	int convoyIdx;
+	int partySlot;
 	// travel step 4 (weakened mode): what happened on the road (shown on the arrival black screen), and whether he
 	// died there (the target then gives him a fresh character: the road kept his gear)
 	string journey;

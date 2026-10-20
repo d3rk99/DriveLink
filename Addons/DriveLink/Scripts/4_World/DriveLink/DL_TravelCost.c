@@ -337,6 +337,15 @@ class DL_TravelCost
 	// Eat + what neither the supplies nor the bars could pay (unpaid > 0 only when the bars hit 0)
 	static string EatEx(DL_PlayerData d, DL_CarData car, float needFood, float needWater, out float unpaidFood, out float unpaidWater)
 	{
+		array<DL_CarData> trunks = new array<DL_CarData>;
+		if (car)
+			trunks.Insert(car);
+		return EatShared(d, trunks, needFood, needWater, unpaidFood, unpaidWater);
+	}
+
+	// as EatEx, from his own gear first and then from each of trunks in turn (a convoy shares its cars' trunks)
+	static string EatShared(DL_PlayerData d, array<DL_CarData> trunks, float needFood, float needWater, out float unpaidFood, out float unpaidWater)
+	{
 		string eaten = "";
 		foreach (DL_StomachItem s : d.stomach)
 		{
@@ -349,8 +358,11 @@ class DL_TravelCost
 		}
 		array<ref array<ref DL_ItemData>> sources = new array<ref array<ref DL_ItemData>>;
 		sources.Insert(d.items);
-		if (car)
-			sources.Insert(car.items);
+		foreach (DL_CarData tr : trunks)
+		{
+			if (tr)
+				sources.Insert(tr.items);
+		}
 		foreach (array<ref DL_ItemData> list : sources)
 		{
 			for (int i = list.Count() - 1; i >= 0; i--)

@@ -1,9 +1,13 @@
 // DriveLink travel step 4 (Research/travel-cost-design.md section 4 + 4b): "arrive weakened" mode. The source server
-// plays the road ONCE for the whole crew before anyone leaves, in 10 km legs: fuel (luck when it runs dry, else the
+// plays the road ONCE for the whole party before anyone leaves, in 10 km legs: fuel (luck when it runs dry, else the
 // car is left), flat tyres (spare wheel / repair kit, else the car is left), infected on the walked legs, food and
 // water (what nothing could pay = hunger/thirst damage, past half of the cost a chance to die). Everything happens to
 // the SNAPSHOTS (DL_PlayerData / DL_CarData), the live characters are untouched. The result travels in each
 // snapshot (journey = the story, diedOnRoad) and the target shows the story on the black screen.
+// A party (Research/group-travel.md) is one crew in one car, a group on foot, or a convoy of up to 4 cars: they stay
+// together the whole way. A convoy shares: jerry cans, spare wheels that fit, repair kits, the food in every trunk;
+// the crew of a car that is left behind climbs into free seats of the others, whoever doesn't fit walks - and then
+// the whole convoy goes at walking pace.
 
 class DL_Traveller
 {
@@ -11,6 +15,7 @@ class DL_Traveller
 	string name;
 	ref DL_PlayerData d;
 	int seat;                 // car seat, -1 = on foot
+	int veh = -1;             // DL_JVehicle.idx he rides in, -1 = on foot
 	bool dead;
 	float needFood;           // stat units for the whole trip, for the starvation check
 	float needWater;
@@ -18,12 +23,31 @@ class DL_Traveller
 	float unpaidWater;
 }
 
+// one car of the party
+class DL_JVehicle
+{
+	int idx;                  // its place in the line at the start (= the film's car index)
+	CarScript live;
+	ref DL_CarData car;       // the snapshot the road works on
+	string holder;            // steam id of who drives it (his snapshot carries it to the target)
+	int seats;
+	bool lost;
+	bool luckyFuel;           // found fuel: it takes them the rest of the way
+}
+
+// what a party is made of, for Run: a car with its crew (crew[0] = the driver), or one player on foot
+class DL_PartyUnit
+{
+	PlayerBase leader;
+	CarScript car;
+	ref array<PlayerBase> crew = new array<PlayerBase>;
+}
+
 class DL_Journey
 {
 	ref array<ref DL_Traveller> crew = new array<ref DL_Traveller>;
-	ref DL_CarData car;       // the car snapshot; null = on foot from the start
-	bool carLost;
-	string carHolder;         // steam id whose snapshot carries the car (the driver, or who took the wheel)
+	ref array<ref DL_JVehicle> vehicles = new array<ref DL_JVehicle>;
+	bool carLost;             // every car of the party was left on the road
 	ref array<string> story = new array<string>;
 	float drivenKm;
 	float walkedKm;
@@ -81,6 +105,26 @@ class DL_Journey
 		return alive[Math.RandomInt(0, alive.Count())];
 	}
 
+	// the living travellers in car v (v = -1: on foot)
+	protected array<DL_Traveller> In(int v)
+	{
+		array<DL_Traveller> a = new array<DL_Traveller>;
+		foreach (DL_Traveller t : crew)
+		{
+			if (!t.dead && t.veh == v)
+				a.Insert(t);
+		}
+		return a;
+	}
+
+	protected DL_Traveller AnyIn(int v)
+	{
+		array<DL_Traveller> a = In(v);
+		if (a.Count() == 0)
+			return AnyAlive();
+		return a[Math.RandomInt(0, a.Count())];
+	}
+
 	protected string Who(DL_Traveller t)
 	{
 		if (crew.Count() == 1)
@@ -88,94 +132,117 @@ class DL_Journey
 		return t.name;
 	}
 
+	protected bool Convoy()
+	{
+		return vehicles.Count() > 1;
+	}
+
+	protected DL_JVehicle Veh(int idx)
+	{
+		if (idx < 0 || idx >= vehicles.Count())
+			return null;
+		return vehicles[idx];
+	}
+
+	// "the Olga 24", or in a convoy "Derk's Olga 24"
+	protected string CarOf(DL_JVehicle v)
+	{
+		if (!Convoy())
+			return "the " + CarName(v.car);
+		DL_Traveller h = Find(v.holder);
+		if (h)
+			return h.name + "'s " + CarName(v.car);
+		return "the " + CarName(v.car);
+	}
+
 	// ---------------- the road ----------------
 
-	// crewPbs[0] = the driver when car != null. weakened = road events on (refuse mode: costs only, all payable).
+	// one crew: crewPbs[0] = the driver when liveCar != null. weakened = road events on (refuse mode: costs only).
 	static DL_Journey Run(DL_TravelRules t, DL_Zone z, array<PlayerBase> crewPbs, CarScript liveCar, DL_Snapshot snap, DL_CarSnapshot carSnap, bool weakened)
 	{
+		array<ref DL_PartyUnit> units = new array<ref DL_PartyUnit>;
+		DL_PartyUnit u = new DL_PartyUnit();
+		if (crewPbs.Count() > 0)
+			u.leader = crewPbs[0];
+		u.car = liveCar;
+		foreach (PlayerBase pb : crewPbs)
+			u.crew.Insert(pb);
+		units.Insert(u);
+		return RunParty(t, z, units, snap, carSnap, weakened);
+	}
+
+	// a whole party: cars (each with its crew, the driver first) and players on foot, front of the line first
+	static DL_Journey RunParty(DL_TravelRules t, DL_Zone z, array<ref DL_PartyUnit> units, DL_Snapshot snap, DL_CarSnapshot carSnap, bool weakened)
+	{
 		DL_Journey j = new DL_Journey();
-		for (int i = 0; i < crewPbs.Count(); i++)
+		foreach (DL_PartyUnit u : units)
 		{
-			PlayerBase pb = crewPbs[i];
-			if (!pb || !pb.GetIdentity())
-				continue;
-			DL_Traveller tr = new DL_Traveller();
-			tr.sid = pb.GetIdentity().GetPlainId();
-			tr.name = pb.GetIdentity().GetName();
-			tr.d = snap.Capture(pb);
-			tr.seat = -1;
-			if (liveCar)
-				tr.seat = liveCar.CrewMemberIndex(pb);
-			j.crew.Insert(tr);
+			DL_JVehicle v = null;
+			if (u.car)
+			{
+				v = new DL_JVehicle();
+				v.idx = j.vehicles.Count();
+				v.live = u.car;
+				v.car = carSnap.Capture(u.car);
+				v.seats = u.car.CrewSize();
+				j.vehicles.Insert(v);
+				j.film.cars.Insert(DL_FilmCast.CarSprite(u.car.GetType()));
+			}
+			for (int i = 0; i < u.crew.Count(); i++)
+			{
+				PlayerBase pb = u.crew[i];
+				if (!pb || !pb.GetIdentity())
+					continue;
+				DL_Traveller tr = new DL_Traveller();
+				tr.sid = pb.GetIdentity().GetPlainId();
+				tr.name = pb.GetIdentity().GetName();
+				tr.d = snap.Capture(pb);
+				tr.seat = -1;
+				if (v)
+				{
+					tr.veh = v.idx;
+					tr.seat = u.car.CrewMemberIndex(pb);
+					if (v.holder == "")
+						v.holder = tr.sid;
+				}
+				j.crew.Insert(tr);
+			}
 		}
-		if (liveCar && j.crew.Count() > 0)
-		{
-			j.car = carSnap.Capture(liveCar);
-			j.carHolder = j.crew[0].sid;
-			j.film.car = DL_FilmCast.CarSprite(liveCar.GetType());
-		}
+		if (j.vehicles.Count() == 1)
+			j.film.car = j.film.cars[0];
 		j.film.km = z.distanceKm;
 		foreach (DL_Traveller ft : j.crew)
-			j.film.crew.Insert(DL_FilmCast.From(ft.name, ft.sid, ft.d));
+		{
+			DL_FilmActor fa = DL_FilmCast.From(ft.name, ft.sid, ft.d);
+			fa.car = ft.veh;
+			j.film.crew.Insert(fa);
+		}
 		float km = z.distanceKm;
 		float done = 0;
-		bool luckyFuel = false;
 		while (done < km - 0.001)
 		{
 			float leg = Math.Min(10.0, km - done);
 			float f = leg / 10.0;
 			float at = done + leg;
-			bool driving = j.car != null && !j.carLost;
-			if (driving)
+			// each car: a driver, fuel, wear, a flat
+			foreach (DL_JVehicle cv : j.vehicles)
 			{
-				DL_TravelPrice cp = new DL_TravelPrice();
-				cp.byCar = true;
-				cp.fuelL = t.fuelLiters * f;
-				cp.engineWearPct = t.wearEnginePct * f;
-				cp.wheelWearPct = t.wearWheelsPct * f;
-				if (luckyFuel)
-					cp.fuelL = 0; // the fuel they found takes them the rest of the way
-				DL_Traveller drv = j.Find(j.carHolder);
-				DL_PlayerData drvD;
-				if (drv)
-					drvD = drv.d;
-				if (j.FuelHave(liveCar, drvD) + 0.01 < cp.fuelL)
-				{
-					DL_Traveller finder = j.AnyAlive();
-					if (weakened && finder && Roll(t.luckGasPct))
-					{
-						luckyFuel = true;
-						cp.fuelL = j.FuelHave(liveCar, drvD); // what was left goes first
-						j.story.Insert("Ran out of gas " + Math.Round(at).ToString() + " km in. Luckily, " + j.Who(finder) + " found some fuel.");
-						j.film.Add("fuel", done, finder.name, "found");
-					}
-					else
-					{
-						j.carLost = true;
-						j.story.Insert("Ran out of gas " + Math.Round(at).ToString() + " km in and had to leave the " + DL_Journey.CarName(j.car) + " behind.");
-						driving = false;
-						string seeker = "";
-						if (finder)
-							seeker = finder.name;
-						j.film.Add("fuel", done, seeker, "lost");
-					}
-				}
-				if (driving)
-				{
-					DL_TravelCost.ChargeCar(j.car, liveCar, cp, drvD);
-					j.film.Add("drive", leg);
-					if (weakened && j.FlatTyre(t, f, liveCar, at))
-						driving = false;
-				}
+				if (cv.lost)
+					continue;
+				if (!j.TakeWheel(cv, done))
+					continue;
+				j.DriveLeg(t, cv, f, done, at, weakened);
 			}
-			// food + water for this leg, at car or walking rates
+			bool walking = j.In(-1).Count() > 0;
+			// food + water for this leg: in a seat at car rates, walking at foot rates; own gear first, then the trunks
 			foreach (DL_Traveller tv : j.crew)
 			{
 				if (tv.dead)
 					continue;
+				bool seated = tv.veh >= 0;
 				float foodPct = t.foodFootPct;
 				float waterPct = t.waterFootPct;
-				if (driving)
+				if (seated)
 				{
 					foodPct = t.foodCarPct;
 					waterPct = t.waterCarPct;
@@ -184,16 +251,13 @@ class DL_Journey
 				float nw = waterPct * f / 100.0 * PlayerConstants.SL_WATER_MAX;
 				tv.needFood += nf;
 				tv.needWater += nw;
-				DL_CarData trunk;
-				if (driving && tv.sid == j.carHolder)
-					trunk = j.car;
 				float uf;
 				float uw;
-				DL_TravelCost.EatEx(tv.d, trunk, nf, nw, uf, uw);
+				DL_TravelCost.EatShared(tv.d, j.Trunks(tv.veh), nf, nw, uf, uw);
 				tv.unpaidFood += uf;
 				tv.unpaidWater += uw;
 				// on foot: the infected
-				if (!driving && weakened && Roll(t.bitePct * f))
+				if (!seated && weakened && Roll(t.bitePct * f))
 				{
 					tv.d.health = Math.Max(1, tv.d.health - 30);
 					tv.d.blood = Math.Max(2500, tv.d.blood - 750);
@@ -213,12 +277,16 @@ class DL_Journey
 					}
 				}
 			}
-			if (driving)
-				j.drivenKm += leg;
-			else
+			// the party keeps together: one walking means all go at walking pace
+			if (walking)
 			{
 				j.walkedKm += leg;
 				j.film.Add("walk", leg);
+			}
+			else
+			{
+				j.drivenKm += leg;
+				j.film.Add("drive", leg);
 			}
 			done += leg;
 		}
@@ -252,26 +320,148 @@ class DL_Journey
 		}
 		if (t.timeEnabled)
 			j.seconds = Math.Round(j.drivenKm / Math.Max(0.5, t.speedCarKmh) * 3600 + j.walkedKm / Math.Max(0.5, t.speedFootKmh) * 3600);
-		if (j.walkedKm > 0 && j.car)
-			j.story.Insert("Walked the last " + Math.Round(j.walkedKm).ToString() + " km.");
-		if (luckyFuel && j.car && !j.carLost && j.car.fluids.Count() > CarFluid.FUEL)
-			j.car.fluids[CarFluid.FUEL] = Math.Max(j.car.fluids[CarFluid.FUEL], 0.03); // arrives nearly dry
-		j.Finish();
+		if (j.walkedKm > 0 && j.vehicles.Count() > 0)
+		{
+			if (j.Convoy() && !j.carLost)
+				j.story.Insert("The convoy kept to walking pace for the last " + Math.Round(j.walkedKm).ToString() + " km.");
+			else
+				j.story.Insert("Walked the last " + Math.Round(j.walkedKm).ToString() + " km.");
+		}
+		foreach (DL_JVehicle lv : j.vehicles)
+		{
+			if (lv.luckyFuel && !lv.lost && lv.car.fluids.Count() > CarFluid.FUEL)
+				lv.car.fluids[CarFluid.FUEL] = Math.Max(lv.car.fluids[CarFluid.FUEL], 0.03); // arrives nearly dry
+		}
+		j.Finish(km);
 		return j;
 	}
 
-	// tank + gasoline canisters (trunk, then what the car holder carries), litres
-	float FuelHave(CarScript liveCar, DL_PlayerData holder)
+	// the trunks a traveller in car v can eat from: his own car's first, then the rest of the convoy's
+	protected array<DL_CarData> Trunks(int v)
 	{
-		if (!car)
+		array<DL_CarData> a = new array<DL_CarData>;
+		DL_JVehicle own = Veh(v);
+		if (own && !own.lost)
+			a.Insert(own.car);
+		foreach (DL_JVehicle o : vehicles)
+		{
+			if (!o.lost && o != own)
+				a.Insert(o.car);
+		}
+		return a;
+	}
+
+	// car v has a living driver (the next one in it takes the wheel, else someone on foot climbs in); false = nobody
+	// is left to drive it, it stays
+	protected bool TakeWheel(DL_JVehicle v, float at)
+	{
+		DL_Traveller h = Find(v.holder);
+		if (h && !h.dead && h.veh == v.idx)
+			return true;
+		DL_Traveller next;
+		array<DL_Traveller> inIt = In(v.idx);
+		if (inIt.Count() > 0)
+			next = inIt[0];
+		else
+		{
+			array<DL_Traveller> walkers = In(-1);
+			if (walkers.Count() > 0)
+			{
+				next = walkers[0];
+				next.veh = v.idx;
+				if (Convoy())
+					film.Add("move", at, next.name, "", v.idx);
+			}
+		}
+		if (!next)
+		{
+			v.lost = true;
+			story.Insert("Nobody was left to drive " + CarOf(v) + ": it stayed on the road.");
+			return false;
+		}
+		v.holder = next.sid;
+		next.seat = 0;
+		story.Insert(next.name + " took the wheel" + Of(v) + ".");
+		return true;
+	}
+
+	// " of Derk's Gunter 2" in a convoy, "" with one car
+	protected string Of(DL_JVehicle v)
+	{
+		if (!Convoy())
+			return "";
+		return " of " + CarOf(v);
+	}
+
+	// one 10 km leg of car v: fuel (its own, a jerry can from the convoy, luck, else it stays), wear, a flat
+	protected void DriveLeg(DL_TravelRules t, DL_JVehicle v, float f, float done, float at, bool weakened)
+	{
+		DL_TravelPrice cp = new DL_TravelPrice();
+		cp.byCar = true;
+		cp.fuelL = t.fuelLiters * f;
+		cp.engineWearPct = t.wearEnginePct * f;
+		cp.wheelWearPct = t.wearWheelsPct * f;
+		if (v.luckyFuel)
+			cp.fuelL = 0; // the fuel they found takes them the rest of the way
+		DL_PlayerData drvD;
+		DL_Traveller drv = Find(v.holder);
+		if (drv)
+			drvD = drv.d;
+		float have = FuelHave(v, drvD);
+		if (have + 0.01 < cp.fuelL)
+		{
+			string donor;
+			int donorVeh = -1;
+			float moved = ShareFuel(v, cp.fuelL - have, donor, donorVeh);
+			if (moved > 0 && have + moved + 0.01 >= cp.fuelL)
+			{
+				story.Insert(CarOf(v) + " ran low on fuel " + Math.Round(at).ToString() + " km in: " + donor + "'s jerry can kept it going.");
+				film.Add("fuel", done, donor, "shared", v.idx, donorVeh);
+			}
+			else
+			{
+				DL_Traveller finder = AnyIn(v.idx);
+				if (weakened && finder && Roll(t.luckGasPct))
+				{
+					v.luckyFuel = true;
+					cp.fuelL = FuelHave(v, drvD); // what was left goes first
+					story.Insert(Cap(CarOf(v)) + " ran out of gas " + Math.Round(at).ToString() + " km in. Luckily, " + Who(finder) + " found some fuel.");
+					film.Add("fuel", done, finder.name, "found", v.idx);
+				}
+				else
+				{
+					string seeker = "";
+					if (finder)
+						seeker = finder.name;
+					film.Add("fuel", done, seeker, "lost", v.idx);
+					Abandon(v, at, "Ran out of gas " + Math.Round(at).ToString() + " km in and had to leave " + CarOf(v) + " behind.");
+					return;
+				}
+			}
+		}
+		DL_TravelCost.ChargeCar(v.car, v.live, cp, drvD);
+		if (weakened)
+			FlatTyre(t, f, v, at);
+	}
+
+	protected static string Cap(string s)
+	{
+		if (s == "")
+			return s;
+		string first = s.Substring(0, 1);
+		first.ToUpper();
+		return first + s.Substring(1, s.Length() - 1);
+	}
+
+	// tank + gasoline canisters (trunk, then what the driver carries), litres
+	float FuelHave(DL_JVehicle v, DL_PlayerData holder)
+	{
+		if (!v || !v.car)
 			return 0;
-		float cap = liveCar.GetFluidCapacity(CarFluid.FUEL);
-		if (cap <= 0 && car.fluidCaps.Count() > CarFluid.FUEL)
-			cap = car.fluidCaps[CarFluid.FUEL];
 		float l = 0;
-		if (car.fluids.Count() > CarFluid.FUEL)
-			l = car.fluids[CarFluid.FUEL] * cap;
-		foreach (DL_ItemData it : car.items)
+		if (v.car.fluids.Count() > CarFluid.FUEL)
+			l = v.car.fluids[CarFluid.FUEL] * FuelCap(v);
+		foreach (DL_ItemData it : v.car.items)
 		{
 			if (DL_TravelCost.IsFuel(it))
 				l += it.quantity / 1000;
@@ -287,6 +477,72 @@ class DL_Journey
 		return l;
 	}
 
+	protected float FuelCap(DL_JVehicle v)
+	{
+		float cap = v.live.GetFluidCapacity(CarFluid.FUEL);
+		if (cap <= 0 && v.car.fluidCaps.Count() > CarFluid.FUEL)
+			cap = v.car.fluidCaps[CarFluid.FUEL];
+		return cap;
+	}
+
+	// a convoy pours jerry cans from the other cars' trunks and the other travellers into car v's tank: litres moved
+	protected float ShareFuel(DL_JVehicle v, float need, out string donor, out int donorVeh)
+	{
+		donor = "";
+		donorVeh = -1;
+		if (!Convoy())
+			return 0;
+		float moved = 0;
+		float cap = FuelCap(v);
+		if (cap <= 0 || v.car.fluids.Count() <= CarFluid.FUEL)
+			return 0;
+		foreach (DL_JVehicle o : vehicles)
+		{
+			if (o == v)
+				continue;
+			foreach (DL_ItemData it : o.car.items)
+			{
+				if (moved >= need)
+					break;
+				if (!DL_TravelCost.IsFuel(it))
+					continue;
+				float take = Math.Min(it.quantity / 1000, need - moved);
+				it.quantity -= take * 1000;
+				moved += take;
+				if (donor == "")
+				{
+					DL_Traveller oh = Find(o.holder);
+					donor = "the convoy";
+					if (oh)
+						donor = oh.name;
+					donorVeh = o.idx;
+				}
+			}
+		}
+		foreach (DL_Traveller tr : crew)
+		{
+			if (tr.dead || tr.sid == v.holder)
+				continue;
+			foreach (DL_ItemData pi : tr.d.items)
+			{
+				if (moved >= need)
+					break;
+				if (!DL_TravelCost.IsFuel(pi))
+					continue;
+				float ptake = Math.Min(pi.quantity / 1000, need - moved);
+				pi.quantity -= ptake * 1000;
+				moved += ptake;
+				if (donor == "")
+				{
+					donor = tr.name;
+					donorVeh = tr.veh;
+				}
+			}
+		}
+		v.car.fluids[CarFluid.FUEL] = Math.Min(1, v.car.fluids[CarFluid.FUEL] + moved / cap);
+		return moved;
+	}
+
 	static string CarName(DL_CarData c)
 	{
 		if (!c)
@@ -298,10 +554,89 @@ class DL_Journey
 		return c.type;
 	}
 
-	// a flat on this leg? fixed with a spare wheel, else a repair kit, else the car is left. true = car lost.
-	protected bool FlatTyre(DL_TravelRules t, float f, CarScript liveCar, float at)
+	// car v left on the road: its crew climb into free seats of the other cars, whoever doesn't fit walks on
+	protected void Abandon(DL_JVehicle v, float at, string line)
 	{
-		array<string> types = DL_TravelCost.WheelTypes(liveCar);
+		v.lost = true;
+		story.Insert(line);
+		array<DL_Traveller> left = In(v.idx);
+		if (!Convoy())
+		{
+			foreach (DL_Traveller st : left)
+			{
+				st.veh = -1;
+				st.seat = -1;
+			}
+			carLost = true;
+			return;
+		}
+		string walkers = "";
+		foreach (DL_Traveller t : left)
+		{
+			DL_JVehicle to = null;
+			int seat = -1;
+			foreach (DL_JVehicle o : vehicles)
+			{
+				if (o.lost)
+					continue;
+				seat = FreeSeat(o);
+				if (seat >= 0)
+				{
+					to = o;
+					break;
+				}
+			}
+			if (to)
+			{
+				t.veh = to.idx;
+				t.seat = seat;
+				story.Insert(t.name + " climbed into " + CarOf(to) + ".");
+				film.Add("move", at, t.name, "", to.idx);
+			}
+			else
+			{
+				t.veh = -1;
+				t.seat = -1;
+				if (walkers != "")
+					walkers += " and ";
+				walkers += t.name;
+				film.Add("move", at, t.name, "walk", -1);
+			}
+		}
+		if (walkers != "")
+			story.Insert(walkers + " walked on beside the convoy: no seat left.");
+		carLost = true;
+		foreach (DL_JVehicle c : vehicles)
+		{
+			if (!c.lost)
+				carLost = false;
+		}
+	}
+
+	// a free seat in car v (not the driver's), -1 = full
+	protected int FreeSeat(DL_JVehicle v)
+	{
+		for (int s = 1; s < v.seats; s++)
+		{
+			bool taken;
+			taken = false;
+			foreach (DL_Traveller t : In(v.idx))
+			{
+				if (t.seat == s)
+					taken = true;
+			}
+			if (!taken)
+				return s;
+		}
+		return -1;
+	}
+
+	// a flat on this leg? fixed with a spare wheel, else a repair kit, else the car is left. In a convoy the spare
+	// (one that fits this car) or the kit may come from any car or anyone in it.
+	protected void FlatTyre(DL_TravelRules t, float f, DL_JVehicle v, float at)
+	{
+		DL_CarData car = v.car;
+		array<string> types = DL_TravelCost.WheelTypes(v.live);
 		// the wheels it runs on (mounted, not in a spare slot), and how worn they are
 		array<DL_ItemData> running = new array<DL_ItemData>;
 		float frac = 0;
@@ -318,21 +653,26 @@ class DL_Journey
 			}
 		}
 		if (running.Count() == 0)
-			return false;
+			return;
 		frac /= running.Count();
 		if (!Roll(t.flatPct * f * (2.0 - frac)))
-			return false;
+			return;
 		DL_ItemData flat = running[Math.RandomInt(0, running.Count())];
-		DL_Traveller fixer = AnyAlive();
+		DL_Traveller fixer = AnyIn(v.idx);
 		if (!fixer)
 			fixer = crew[0];
 		string where = Math.Round(at).ToString() + " km in";
-		// 1. a spare wheel: the car's spare slot, the trunk, or the crew's gear
+		string onCar = "";
+		if (Convoy())
+			onCar = " on " + CarOf(v);
+		// 1. a spare wheel: this car's spare slot or trunk, its crew's gear; then (convoy) the other cars and people
 		DL_ItemData spare;
 		array<ref DL_ItemData> spareList;
+		int fromVeh = v.idx;
+		string fromName = "";
 		foreach (DL_ItemData c : car.items)
 		{
-			if (c && c != flat && types.Find(c.type) >= 0 && c.health != 0 && (DL_TravelCost.IsSpareSlot(c.slot) || !(c.parent == 0 && c.slot != DL_Const.SLOT_CARGO)))
+			if (c && c != flat && IsLooseWheel(c, types))
 			{
 				spare = c;
 				spareList = car.items;
@@ -343,6 +683,8 @@ class DL_Journey
 		{
 			foreach (DL_Traveller tv : crew)
 			{
+				if (tv.dead || tv.veh != v.idx)
+					continue;
 				foreach (DL_ItemData pi : tv.d.items)
 				{
 					if (pi && types.Find(pi.type) >= 0 && pi.health != 0)
@@ -356,6 +698,53 @@ class DL_Journey
 					break;
 			}
 		}
+		if (!spare && Convoy())
+		{
+			foreach (DL_JVehicle o : vehicles)
+			{
+				if (o == v)
+					continue;
+				foreach (DL_ItemData oc : o.car.items)
+				{
+					if (oc && IsLooseWheel(oc, types))
+					{
+						spare = oc;
+						spareList = o.car.items;
+						fromVeh = o.idx;
+						DL_Traveller oh = Find(o.holder);
+						if (oh)
+							fromName = oh.name;
+						break;
+					}
+				}
+				if (spare)
+					break;
+			}
+		}
+		if (!spare && Convoy())
+		{
+			foreach (DL_Traveller ov : crew)
+			{
+				if (ov.dead || ov.veh == v.idx)
+					continue;
+				foreach (DL_ItemData opi : ov.d.items)
+				{
+					if (opi && types.Find(opi.type) >= 0 && opi.health != 0)
+					{
+						spare = opi;
+						spareList = ov.d.items;
+						fromVeh = ov.veh;
+						fromName = ov.name;
+						break;
+					}
+				}
+				if (spare)
+					break;
+			}
+		}
+		int filmFrom = -1;
+		if (fromVeh != v.idx)
+			filmFrom = fromVeh;
 		if (spare)
 		{
 			// the spare goes where the flat was; the shredded tyre stays by the road
@@ -374,18 +763,40 @@ class DL_Journey
 			spare.slot = slot;
 			spare.cIdx = -1;
 			spare.quickbar = -1;
-			story.Insert("Blew a tyre " + where + ". " + Who(fixer) + " put on the spare.");
-			film.Add("flat", at, fixer.name, "spare");
-			return false;
+			if (fromName != "")
+				story.Insert("Blew a tyre" + onCar + " " + where + ". " + fromName + "'s spare fit: " + Who(fixer) + " put it on.");
+			else
+				story.Insert("Blew a tyre" + onCar + " " + where + ". " + Who(fixer) + " put on the spare.");
+			film.Add("flat", at, fixer.name, "spare", v.idx, filmFrom);
+			return;
 		}
 		// 2. a tyre repair kit: patched to damaged health, the kit loses a use (vanilla: quantity 0-100, PluginRepairing)
 		array<ref array<ref DL_ItemData>> lists = new array<ref array<ref DL_ItemData>>;
+		array<int> listCar = new array<int>;
 		lists.Insert(car.items);
+		listCar.Insert(v.idx);
 		foreach (DL_Traveller tk : crew)
-			lists.Insert(tk.d.items);
-		foreach (array<ref DL_ItemData> list : lists)
 		{
-			foreach (DL_ItemData kit : list)
+			if (!tk.dead && (tk.veh == v.idx || Convoy()))
+			{
+				lists.Insert(tk.d.items);
+				listCar.Insert(tk.veh);
+			}
+		}
+		if (Convoy())
+		{
+			foreach (DL_JVehicle ko : vehicles)
+			{
+				if (ko != v)
+				{
+					lists.Insert(ko.car.items);
+					listCar.Insert(ko.idx);
+				}
+			}
+		}
+		for (int li = 0; li < lists.Count(); li++)
+		{
+			foreach (DL_ItemData kit : lists[li])
 			{
 				if (kit && g_Game.IsKindOf(kit.type, "TireRepairKit") && kit.quantity != 0 && kit.health != 0)
 				{
@@ -394,51 +805,50 @@ class DL_Journey
 					float fmx = g_Game.ConfigGetFloat("CfgVehicles " + flat.type + " DamageSystem GlobalHealth Health hitpoints");
 					if (fmx > 0)
 						flat.health = fmx * 0.5;
-					story.Insert("Blew a tyre " + where + ". " + Who(fixer) + " patched it with the repair kit.");
-					film.Add("flat", at, fixer.name, "kit");
-					return false;
+					int kitFrom = -1;
+					if (listCar[li] != v.idx && listCar[li] >= 0)
+						kitFrom = listCar[li];
+					story.Insert("Blew a tyre" + onCar + " " + where + ". " + Who(fixer) + " patched it with the repair kit.");
+					film.Add("flat", at, fixer.name, "kit", v.idx, kitFrom);
+					return;
 				}
 			}
 		}
 		// 3. nothing: the car stays here
-		carLost = true;
-		story.Insert("Blew a tyre " + where + " with no spare and no repair kit: left the " + CarName(car) + " behind.");
-		film.Add("flat", at, fixer.name, "none");
-		return true;
+		film.Add("flat", at, fixer.name, "none", v.idx);
+		Abandon(v, at, "Blew a tyre" + onCar + " " + where + " with no spare and no repair kit: left " + CarOf(v) + " behind.");
+	}
+
+	// a wheel of these types lying in a spare slot or a trunk (not one the car runs on), not ruined
+	protected bool IsLooseWheel(DL_ItemData c, array<string> types)
+	{
+		if (types.Find(c.type) < 0 || c.health == 0)
+			return false;
+		return DL_TravelCost.IsSpareSlot(c.slot) || !(c.parent == 0 && c.slot != DL_Const.SLOT_CARGO);
 	}
 
 	// ---------------- into the snapshots ----------------
 
-	// who carries the car, crew counts and seats now that the road has been played
-	protected void Finish()
+	// who carries each car, crew counts, seats and the convoy order now that the road has been played
+	protected void Finish(float km)
 	{
-		string text = Story();
-		DL_Traveller holder = Find(carHolder);
-		// the driver died but the car goes on: the first one alive takes the wheel
-		if (car && !carLost && holder && holder.dead)
+		foreach (DL_JVehicle v : vehicles)
 		{
-			DL_Traveller next;
-			foreach (DL_Traveller tn : crew)
-			{
-				if (!tn.dead)
-				{
-					next = tn;
-					break;
-				}
-			}
-			if (next)
-			{
-				story.Insert(next.name + " took the wheel.");
-				text = Story();
-				carHolder = next.sid;
-				holder = next;
-				holder.seat = 0;
-			}
-			else
-				carLost = true; // nobody left to drive it
+			if (!v.lost)
+				TakeWheel(v, km);
 		}
-		bool withCar = car && !carLost;
-		int alive = Alive();
+		string text = Story();
+		int slot = 0;
+		map<int, int> lineIdx = new map<int, int>;
+		foreach (DL_JVehicle lv : vehicles)
+		{
+			if (!lv.lost)
+			{
+				lineIdx.Set(lv.idx, slot);
+				slot++;
+			}
+		}
+		int walker = 0;
 		foreach (DL_Traveller t : crew)
 		{
 			t.d.film = film;
@@ -448,17 +858,27 @@ class DL_Journey
 			t.d.carGroup = "";
 			t.d.crewCount = 0;
 			t.d.carSeat = -1;
-			if (t.dead || !withCar)
-				continue; // on foot (or dead): no waiting room
-			t.d.crewCount = alive;
-			if (t.sid == carHolder)
+			t.d.convoyIdx = 0;
+			t.d.partySlot = 0;
+			if (t.dead)
+				continue;
+			DL_JVehicle mine = Veh(t.veh);
+			if (!mine || mine.lost)
 			{
-				t.d.car = car;
+				t.d.partySlot = walker; // on foot: no waiting room, a place beside the others
+				walker++;
+				continue;
+			}
+			t.d.crewCount = In(mine.idx).Count();
+			t.d.convoyIdx = lineIdx.Get(mine.idx);
+			if (t.sid == mine.holder)
+			{
+				t.d.car = mine.car;
 				t.d.carSeat = 0;
 			}
 			else
 			{
-				t.d.carGroup = carHolder;
+				t.d.carGroup = mine.holder;
 				t.d.carSeat = t.seat;
 			}
 		}

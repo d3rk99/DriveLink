@@ -227,7 +227,7 @@ modded class MissionGameplay
 	// with a road film on screen the title, status and story move under it (the film takes the top 2/3)
 	protected void DL_TextLayout(bool low)
 	{
-		if (low == m_DL_TextLow || !m_DL_WaitRoot)
+		if ((low == m_DL_TextLow && !low) || !m_DL_WaitRoot)
 			return;
 		m_DL_TextLow = low;
 		int w;
@@ -238,7 +238,11 @@ modded class MissionGameplay
 		float lineH = h * 0.034;
 		float top = h * 0.30;
 		if (low)
+		{
 			top = h * 0.67;
+			if (m_DL_Film && m_DL_Film.BottomFrac() > 0)
+				top = h * (m_DL_Film.BottomFrac() + 0.015); // under the film window (a convoy's is taller)
+		}
 		if (m_DL_Title)
 			m_DL_Title.SetPos(0, top);
 		if (m_DL_WaitText)
@@ -247,7 +251,7 @@ modded class MissionGameplay
 		for (int i = 0; i < m_DL_StoryLines.Count(); i++)
 		{
 			m_DL_StoryLines[i].SetPos(0, storyTop + i * lineH * 1.15);
-			m_DL_StoryLines[i].Show(!low || i < 5); // under the film: room for 5 lines
+			m_DL_StoryLines[i].Show(!low || storyTop + (i + 1) * lineH * 1.15 < h * 0.99); // under the film: what fits
 		}
 	}
 
