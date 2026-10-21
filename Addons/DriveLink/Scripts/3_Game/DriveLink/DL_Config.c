@@ -55,6 +55,10 @@ class DL_TravelRules
 	float fuelBoatScale = 1;
 	float swimFoodX = 1.5;    // swimming (a boat party with no boat): food and water x this of the foot rates
 	float drownPct = 6;       // weakened: chance to drown per 10 km swum, x2 the 2nd 10 km, x3 the 3rd ...
+	// weakened: what the road may give, chance per 10 km (before anything runs out)
+	float findGasPct = 6;     // a working gas station (a fuel dock for boats): every tank + gasoline canister full
+	float findFoodPct = 8;    // food: a few items into the trunk / their bags
+	float findWaterPct = 12;  // a well (rain at sea): everyone drinks, every bottle / canteen filled
 	float wearEnginePct = 2;
 	float wearWheelsPct = 3;
 	bool timeEnabled;         // on the road for distance / speed, no login anywhere meanwhile

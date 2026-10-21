@@ -73,6 +73,8 @@ class DL_Film
 			return 8;
 		if (e.kind == "move")
 			return 4;
+		if (e.kind == "find")
+			return 5;
 		return 3;                                 // ration, died
 	}
 

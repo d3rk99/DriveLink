@@ -590,6 +590,8 @@ const TRAVEL_FIELDS = [
   ["luckGasPct", "Find fuel when out", "% chance (weakened)"], ["biteDeathPct", "Attack kills", "% of attacks (weakened)"],
   ["bitePct", "Infected attack", "% per 10 km walked (weakened)"], ["starveDeathPct", "Starve / thirst kills", "% when over half short (weakened)"],
   ["spareNeededKm", "Spare wheel needed above", "km, 0 = off (refuse mode: spare wheel or tyre repair kit aboard)"], ["flatPct", "Flat tyre", "% per 10 km (weakened)"],
+  ["findGasPct", "Find a gas station", "% per 10 km by vehicle: every tank + jerry can filled (weakened)"],
+  ["findFoodPct", "Find food", "% per 10 km: a few items into the trunk / bags (weakened)"], ["findWaterPct", "Find water", "% per 10 km: a well (rain at sea), everyone drinks, bottles filled (weakened)"],
   ["swimFoodX", "Swimming: food + water x", "of the foot rates (boat lost at sea)"], ["drownPct", "Drowning", "% per 10 km swum, grows the longer the swim (weakened)"],
 ];
 // difficulty presets (Research/travel-presets.md): they fill the form, Save applies them. Food in kcal, water in ml
@@ -598,19 +600,19 @@ const TRAVEL_PRESETS = {
   easy: { label: "Easy", hint: "Free and instant: no food, water, fuel, wear, time or risk.",
     mode: "refuse", timeEnabled: false, fuelPerVehicle: false, foodFootKcal: 0, waterFootMl: 0, foodCarKcal: 0, waterCarMl: 0,
     fuelLiters: 0, fuelScale: 1, fuelBoatScale: 1, wearEnginePct: 0, wearWheelsPct: 0, speedFootKmh: 5, speedCarKmh: 40,
-    luckGasPct: 100, biteDeathPct: 0, bitePct: 0, starveDeathPct: 0, spareNeededKm: 0, flatPct: 0, swimFoodX: 1, drownPct: 0 },
+    luckGasPct: 100, biteDeathPct: 0, bitePct: 0, starveDeathPct: 0, spareNeededKm: 0, flatPct: 0, swimFoodX: 1, drownPct: 0, findGasPct: 0, findFoodPct: 0, findWaterPct: 0 },
   medium: { label: "Medium", hint: "Arcade: a small bill (half the game's fuel use, a third of real food/water), pay or don't go, no deaths, no waiting.",
     mode: "refuse", timeEnabled: false, fuelPerVehicle: true, foodFootKcal: 300, waterFootMl: 300, foodCarKcal: 25, waterCarMl: 25,
     fuelLiters: 5, fuelScale: 0.5, fuelBoatScale: 1, wearEnginePct: 1, wearWheelsPct: 1, speedFootKmh: 8, speedCarKmh: 60,
-    luckGasPct: 50, biteDeathPct: 0, bitePct: 3, starveDeathPct: 0, spareNeededKm: 0, flatPct: 1, swimFoodX: 1.5, drownPct: 2 },
+    luckGasPct: 50, biteDeathPct: 0, bitePct: 3, starveDeathPct: 0, spareNeededKm: 0, flatPct: 1, swimFoodX: 1.5, drownPct: 2, findGasPct: 10, findFoodPct: 12, findWaterPct: 15 },
   hard: { label: "Hard", hint: "DayZ's own rates: the game's fuel use, food/water as if you jogged it, travel time, the road can hurt or kill.",
     mode: "weakened", timeEnabled: true, fuelPerVehicle: true, foodFootKcal: 650, waterFootMl: 650, foodCarKcal: 50, waterCarMl: 50,
     fuelLiters: 5, fuelScale: 1, fuelBoatScale: 2, wearEnginePct: 2, wearWheelsPct: 3, speedFootKmh: 10, speedCarKmh: 50,
-    luckGasPct: 25, biteDeathPct: 10, bitePct: 5, starveDeathPct: 25, spareNeededKm: 0, flatPct: 3, swimFoodX: 2, drownPct: 6 },
+    luckGasPct: 25, biteDeathPct: 10, bitePct: 5, starveDeathPct: 25, spareNeededKm: 0, flatPct: 3, swimFoodX: 2, drownPct: 6, findGasPct: 6, findFoodPct: 8, findWaterPct: 12 },
   realism: { label: "Realism", hint: "Real numbers: real L/100 km (boats like a real outboard), a hiker's food and water, walking pace, real road risks.",
     mode: "weakened", timeEnabled: true, fuelPerVehicle: true, foodFootKcal: 950, waterFootMl: 1500, foodCarKcal: 20, waterCarMl: 20,
     fuelLiters: 5, fuelScale: 1, fuelBoatScale: 5, wearEnginePct: 3, wearWheelsPct: 4, speedFootKmh: 5, speedCarKmh: 50,
-    luckGasPct: 10, biteDeathPct: 15, bitePct: 8, starveDeathPct: 40, spareNeededKm: 0, flatPct: 4, swimFoodX: 2, drownPct: 10 },
+    luckGasPct: 10, biteDeathPct: 15, bitePct: 8, starveDeathPct: 40, spareNeededKm: 0, flatPct: 4, swimFoodX: 2, drownPct: 10, findGasPct: 4, findFoodPct: 6, findWaterPct: 10 },
 };
 // what an amount of food / water is in things players carry (DayZ nutrition is per 100 g: a 400 g can of baked
 // beans = 800 kcal, a water bottle = 1000 ml)

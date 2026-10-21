@@ -59,6 +59,10 @@ pub struct TravelRules {
     pub fuel_boat_scale: f64, // boats: x this too (the game's boat burns far less than a real outboard)
     pub swim_food_x: f64,     // a boat party with no boat swims: food + water x this of the foot rates
     pub drown_pct: f64,       // weakened: drown chance per 10 km swum (x2 the 2nd 10 km, x3 the 3rd ...)
+    // weakened: what the road gives, chance per 10 km
+    pub find_gas_pct: f64,    // a working gas station / fuel dock: every tank + gasoline canister full
+    pub find_food_pct: f64,   // food items into the trunk / bags
+    pub find_water_pct: f64,  // a well / rain: everyone drinks, every bottle filled
     pub wear_engine_pct: f64, // engine health taken
     pub wear_wheels_pct: f64, // every wheel
     /// on = the character is "on the road" for distance / speed and can't log in anywhere until it arrives
@@ -106,6 +110,9 @@ impl Default for TravelRules {
             fuel_boat_scale: 1.0,
             swim_food_x: 1.5,
             drown_pct: 6.0,
+            find_gas_pct: 6.0,
+            find_food_pct: 8.0,
+            find_water_pct: 12.0,
             wear_engine_pct: 2.0,
             wear_wheels_pct: 3.0,
             time_enabled: false,
@@ -161,7 +168,8 @@ impl TravelRules {
             *v = amount(*v);
         }
         for v in [&mut self.wear_engine_pct, &mut self.wear_wheels_pct,
-                  &mut self.luck_gas_pct, &mut self.bite_pct, &mut self.bite_death_pct, &mut self.starve_death_pct, &mut self.flat_pct, &mut self.drown_pct] {
+                  &mut self.luck_gas_pct, &mut self.bite_pct, &mut self.bite_death_pct, &mut self.starve_death_pct, &mut self.flat_pct, &mut self.drown_pct,
+                  &mut self.find_gas_pct, &mut self.find_food_pct, &mut self.find_water_pct] {
             *v = pct(*v);
         }
         self.spare_needed_km = if self.spare_needed_km.is_finite() { self.spare_needed_km.clamp(0.0, 100000.0) } else { 0.0 };

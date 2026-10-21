@@ -559,6 +559,7 @@ class DL_FilmPlayer
 	protected bool m_Water;            // a boat trip: open water instead of the road (until the boats are left)
 	protected ref DL_Strip m_GroundLand; // a boat trip: the land they walk on when the boats are left
 	protected float m_WalkY;           // the walkers' first row
+	protected float m_FindResume;      // the speed before a find scene stopped them
 	protected ref array<ref DL_FilmPerson> m_Crew = new array<ref DL_FilmPerson>;
 	protected ref DL_FilmPerson m_Zed;
 	protected DL_FilmPerson m_Actor;   // who the scene is about
@@ -1361,7 +1362,7 @@ class DL_FilmPlayer
 		if (!m_V || m_V.inWorld)
 			m_V = FirstCar();
 		m_Donor = FilmCar(e.donor);
-		if (e.kind == "flat" || e.kind == "fuel" || e.kind == "attack" || e.kind == "died" || e.kind == "move")
+		if (e.kind == "flat" || e.kind == "fuel" || e.kind == "attack" || e.kind == "died" || e.kind == "move" || e.kind == "find")
 		{
 			m_Actor = Who(e.who);
 			if (m_Actor)
@@ -1420,6 +1421,29 @@ class DL_FilmPlayer
 		{
 			if (!p.down)
 				p.car = -1;
+		}
+	}
+
+	// the road gives (gas station, food, water): they stop a moment, then go on at the speed they had
+	protected void SceneFind(DL_FilmEvent e)
+	{
+		if (m_Step == 0)
+		{
+			m_FindResume = m_Target;
+			m_Target = 0;
+			foreach (DL_FilmPerson p : m_Crew)
+				p.marching = false;
+			NextStep();
+		}
+		else if (m_Step == 1 && m_StepT > 3)
+		{
+			m_Target = m_FindResume;
+			foreach (DL_FilmPerson q : m_Crew)
+			{
+				if (!q.down && q.shown && q.car < 0)
+					q.marching = true;
+			}
+			NextStep();
 		}
 	}
 
@@ -1610,6 +1634,16 @@ class DL_FilmPlayer
 				return "Out of gas. Nothing found: the car stays here.";
 			return "Out of gas. Nothing found: on foot from here.";
 		}
+		if (e.kind == "find" && e.detail == "gas" && m_V && m_V.kind == "boat")
+			return "A fuel dock! Every tank and can filled.";
+		if (e.kind == "find" && e.detail == "gas")
+			return "A working gas station! Every tank and can filled.";
+		if (e.kind == "find" && e.detail == "water" && m_Water)
+			return "Rain! Everyone drinks, every bottle filled.";
+		if (e.kind == "find" && e.detail == "water")
+			return "A well! Everyone drinks, every bottle filled.";
+		if (e.kind == "find" && e.detail == "food")
+			return who + " found food for the road.";
 		if (e.kind == "move" && e.detail == "swim")
 			return who + " swims on beside the boats: no seat left.";
 		if (e.kind == "died" && e.detail == "drowned")
@@ -1677,6 +1711,8 @@ class DL_FilmPlayer
 		}
 		else if (e.kind == "drive" || e.kind == "walk" || e.kind == "swim")
 			m_Km += e.km / len * dt;
+		else if (e.kind == "find")
+			SceneFind(e);
 		else if (m_V && m_V.kind == "boat" && (e.kind == "flat" || e.kind == "fuel" || e.kind == "move"))
 			SceneBoat(e);
 		else if (e.kind == "flat")

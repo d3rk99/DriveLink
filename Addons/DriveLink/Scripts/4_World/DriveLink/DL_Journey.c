@@ -245,6 +245,9 @@ class DL_Journey
 			float leg = Math.Min(10.0, km - done);
 			float f = leg / 10.0;
 			float at = done + leg;
+			// the road gives: a gas station, food, water (weakened mode; not when everyone is dead)
+			if (weakened && j.Alive() > 0)
+				j.Finds(t, f, done);
 			// each car: a driver, fuel, wear, a flat
 			foreach (DL_JVehicle cv : j.vehicles)
 			{
@@ -391,6 +394,203 @@ class DL_Journey
 		}
 		j.Finish(km);
 		return j;
+	}
+
+	// ---------------- what the road gives ----------------
+	static const string FOUND_FOOD = "BakedBeansCan,SpaghettiCan,SardinesCan,TacticalBaconCan,PeachesCan,Crackers,SaltySticks,Chips,Rice,Apple,Pear,Plum";
+
+	protected void Finds(DL_TravelRules t, float f, float at)
+	{
+		DL_Traveller finder = AnyAlive();
+		string name = "";
+		if (finder)
+			name = finder.name;
+		bool rolling = In(-1).Count() == 0 && Driving() > 0;
+		if (rolling && Roll(t.findGasPct * f))
+		{
+			int cans = FillCanisters();
+			foreach (DL_JVehicle gv : vehicles)
+			{
+				if (!gv.lost && gv.car.fluids.Count() > CarFluid.FUEL)
+					gv.car.fluids[CarFluid.FUEL] = 1;
+			}
+			string place = "a working gas station";
+			if (water)
+				place = "a fuel dock";
+			string what = "every tank";
+			if (cans > 0)
+				what += " and " + cans.ToString() + " jerry can(s)";
+			story.Insert(Cap(place) + " " + Math.Round(at).ToString() + " km in: " + what + " filled up.");
+			film.Add("find", at, name, "gas");
+		}
+		if (Roll(t.findWaterPct * f))
+		{
+			int bottles = FillBottles();
+			foreach (DL_Traveller wt : crew)
+			{
+				if (!wt.dead)
+					wt.d.water = Math.Min(PlayerConstants.SL_WATER_MAX, wt.d.water + 1500);
+			}
+			string src = "a well";
+			if (water)
+				src = "rain";
+			story.Insert(Cap(src) + " " + Math.Round(at).ToString() + " km in: everyone drank, " + bottles.ToString() + " bottle(s) filled.");
+			film.Add("find", at, name, "water");
+		}
+		if (Roll(t.findFoodPct * f))
+		{
+			int n = FindFood();
+			if (n > 0)
+			{
+				story.Insert(Who(finder) + " found food " + Math.Round(at).ToString() + " km in (" + n.ToString() + " items).");
+				film.Add("find", at, name, "food");
+			}
+		}
+	}
+
+	// cars still going with someone at the wheel
+	protected int Driving()
+	{
+		int n = 0;
+		foreach (DL_JVehicle v : vehicles)
+		{
+			if (!v.lost && In(v.idx).Count() > 0)
+				n++;
+		}
+		return n;
+	}
+
+	// every list of items the party has: each living traveller's gear, each car's trunk
+	protected array<ref array<ref DL_ItemData>> AllItems()
+	{
+		array<ref array<ref DL_ItemData>> lists = new array<ref array<ref DL_ItemData>>;
+		foreach (DL_Traveller t : crew)
+		{
+			if (!t.dead)
+				lists.Insert(t.d.items);
+		}
+		foreach (DL_JVehicle v : vehicles)
+		{
+			if (!v.lost)
+				lists.Insert(v.car.items);
+		}
+		return lists;
+	}
+
+	protected int FillCanisters()
+	{
+		int n = 0;
+		array<ref array<ref DL_ItemData>> lists = AllItems();
+		foreach (array<ref DL_ItemData> l : lists)
+		{
+			foreach (DL_ItemData it : l)
+			{
+				if (!it || !g_Game.IsKindOf(it.type, "CanisterGasoline"))
+					continue;
+				it.liquid = LIQUID_GASOLINE;
+				it.quantity = g_Game.ConfigGetFloat("CfgVehicles " + it.type + " varQuantityMax");
+				n++;
+			}
+		}
+		return n;
+	}
+
+	// bottles, canteens ... (not the gasoline canisters, not ones with something else in them): clean water
+	protected int FillBottles()
+	{
+		int n = 0;
+		array<ref array<ref DL_ItemData>> lists = AllItems();
+		foreach (array<ref DL_ItemData> l : lists)
+		{
+			foreach (DL_ItemData it : l)
+			{
+				if (!it || !g_Game.IsKindOf(it.type, "Bottle_Base") || g_Game.IsKindOf(it.type, "CanisterGasoline"))
+					continue;
+				if (it.liquid != 0 && it.quantity > 0 && (it.liquid & LIQUID_GROUP_DRINKWATER) == 0)
+					continue;
+				float full = g_Game.ConfigGetFloat("CfgVehicles " + it.type + " varQuantityMax");
+				if (full <= 0)
+					continue;
+				it.liquid = LIQUID_CLEANWATER;
+				it.quantity = full;
+				it.agents = 0;
+				n++;
+			}
+		}
+		return n;
+	}
+
+	// 1-3 food items per living traveller (no cans when nobody can open them), into a trunk or their clothes
+	protected int FindFood()
+	{
+		array<string> all = new array<string>;
+		FOUND_FOOD.Split(",", all);
+		array<ref DL_PlayerData> living = new array<ref DL_PlayerData>;
+		foreach (DL_Traveller lt : crew)
+		{
+			if (!lt.dead)
+				living.Insert(lt.d);
+		}
+		bool opener = DL_TravelCost.PartyKeep(living, Trunks(-1)) > 0;
+		array<string> pool = new array<string>;
+		foreach (string ft : all)
+		{
+			if (!g_Game.ConfigIsExisting("CfgVehicles " + ft))
+				continue;
+			if (!opener && g_Game.ConfigIsExisting("CfgVehicles " + ft + "_Opened"))
+				continue;
+			pool.Insert(ft);
+		}
+		if (pool.Count() == 0 || living.Count() == 0)
+			return 0;
+		int n = living.Count() + Math.RandomIntInclusive(0, living.Count() * 2);
+		for (int i = 0; i < n; i++)
+			Stow(pool.GetRandomElement());
+		return n;
+	}
+
+	// a found item into a car's trunk, else into the clothes / bag of someone alive (no room = on the ground there)
+	protected void Stow(string type)
+	{
+		DL_ItemData it = new DL_ItemData();
+		it.type = type;
+		it.slot = DL_Const.SLOT_CARGO;
+		it.quantity = g_Game.ConfigGetFloat("CfgVehicles " + type + " varQuantityInit");
+		array<ref DL_ItemData> into;
+		foreach (DL_JVehicle v : vehicles)
+		{
+			if (!v.lost)
+			{
+				into = v.car.items;
+				it.parent = 0;
+				break;
+			}
+		}
+		if (!into)
+		{
+			DL_Traveller t = AnyAlive();
+			if (!t)
+				return;
+			into = t.d.items;
+			it.parent = 0;
+			foreach (DL_ItemData c : into)
+			{
+				if (c && c.parent == 0 && (c.slot == "Back" || c.slot == "Body" || c.slot == "Vest" || c.slot == "Legs"))
+				{
+					it.parent = c.id;
+					if (c.slot == "Back")
+						break;
+				}
+			}
+		}
+		int id = 0;
+		foreach (DL_ItemData x : into)
+		{
+			if (x && x.id > id)
+				id = x.id;
+		}
+		it.id = id + 1;
+		into.Insert(it);
 	}
 
 	// the trunks a traveller in car v can eat from: his own car's first, then the rest of the convoy's
