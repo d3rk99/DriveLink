@@ -568,11 +568,18 @@ class DL_FilmPlayer
 	protected ref DL_FilmThing m_Tool;    // wheel or repair kit in a scene
 	protected ref DL_FilmThing m_Puff;
 	protected ref DL_FilmThing m_Fuel;    // MiniDayZ fuel tank, carried back in the fuel scene
-	protected ref DL_FilmThing m_Station; // MiniDayZ gas station building + its fuelling canopy (a gas station find)
-	protected ref DL_FilmThing m_Canopy;
+	// the gas station (Tools/anim_station.py): the lot (asphalt, pumps, shadows, building) on the ground, the canopy
+	// roof over the people; both one frame of LOT_W x LOT_H film px with its left edge at LOT_X0
+	static const float LOT_X0 = 176;
+	static const float LOT_W = 80;
+	static const float LOT_H = 210;
+	static const float LOT_PUMP_X = 50;    // where the filler stands at the pumps, in the frame
+	static const float LOT_PUMP_Y = 184;
+	protected ref DL_FilmThing m_Roof;
 	protected ref DL_FilmThing m_Pump;    // MiniDayZ water pump (a well find on land)
-	protected ref DL_FilmThing m_Lot;     // the gas station's asphalt (off the road, under canopy + building)
+	protected ref DL_FilmThing m_Lot;
 	protected DL_FilmThing m_FindAt;      // the thing of this find scene they stop at
+	protected float m_FindOffset;         // ... where on it (film px below its centre)
 	protected ref array<DL_FilmCar> m_FillCars = new array<DL_FilmCar>; // gas station: the cars still to fill
 	protected DL_FilmCar m_FillHome;      // ... and the car the filler came out of
 	protected ImageWidget m_Flash;        // muzzle flash
@@ -761,13 +768,13 @@ class DL_FilmPlayer
 		m_Fuel = new DL_FilmThing(m_Root, 9, DIR + "fueltank_ca.paa", m_Px, 12, 12, 16, 16, 1.4);
 		m_Fuel.sprite.Cell(0, 0, 12, 12);
 		// the road's finds (MiniDayZ buildings, front-on like its houses): drawn on the ground layer, by the verge
-		m_Lot = new DL_FilmThing(m_Root, 3, DL_FilmSpike.PLAIN, m_Px, 8, 8, 8, 8, 1);
-		m_Lot.sprite.Cell(0, 0, 8, 8);
-		m_Lot.sprite.SetColor(ARGB(255, 64, 64, 68));
-		m_Canopy = new DL_FilmThing(m_Root, 4, DIR + "gascanopy_ca.paa", m_Px, 284, 130, 512, 256, 0.42);
-		m_Canopy.sprite.Cell(0, 0, 284, 130);
-		m_Station = new DL_FilmThing(m_Root, 4, DIR + "gasstation_ca.paa", m_Px, 107, 107, 128, 128, 0.5);
-		m_Station.sprite.Cell(0, 0, 107, 107);
+		string lotTex = DIR + "gaslot_ca.paa";
+		if (m_Film.biomeFrom == "snow" || m_Film.biomeTo == "snow")
+			lotTex = DIR + "gaslot_snow_ca.paa";       // the snow road's lighter asphalt
+		m_Lot = new DL_FilmThing(m_Root, 3, lotTex, m_Px, LOT_W, LOT_H, 128, 256, 1);
+		m_Lot.sprite.Cell(0, 0, LOT_W, LOT_H);
+		m_Roof = new DL_FilmThing(m_Root, SORT_TOP - 1000, DIR + "gasroof_ca.paa", m_Px, LOT_W, LOT_H, 128, 256, 1);
+		m_Roof.sprite.Cell(0, 0, LOT_W, LOT_H);
 		m_Pump = new DL_FilmThing(m_Root, 3, DIR + "waterpump_ca.paa", m_Px, 20, 28, 32, 32, 1);
 		m_Pump.sprite.Cell(0, 0, 20, 28);
 		m_Flash = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 255, 235, 130), 9, 0, 0, 3 * m_Px, 3 * m_Px);
@@ -1451,26 +1458,17 @@ class DL_FilmPlayer
 			float below = m_ViewH + 40;
 			if (e.detail == "gas")
 			{
-				m_Canopy.x = 256;                      // half off the screen, its left edge clear of the road
-				m_Canopy.y = below + m_Canopy.h / 2;
-				m_Canopy.used = true;
-				m_Canopy.sprite.Show(true);
-				m_Station.x = 196 + m_Station.w / 2 + 6;
-				m_Station.y = m_Canopy.y + m_Canopy.h / 2 + m_Station.h / 2 + 2;
-				m_Station.used = true;
-				m_Station.sprite.Show(true);
-				float lotTop = m_Canopy.y - m_Canopy.h / 2 - 8;
-				float lotBottom = m_Station.y + m_Station.h / 2 + 6;
-				m_Lot.w = 64;
-				m_Lot.h = lotBottom - lotTop;
-				m_Lot.sprite = new DL_Sprite(m_Root, DL_FilmSpike.PLAIN, 3, m_Lot.w * m_Px, m_Lot.h * m_Px, 8, 8);
-				m_Lot.sprite.Cell(0, 0, 8, 8);
-				m_Lot.sprite.SetColor(ARGB(255, 64, 64, 68));
-				m_Lot.x = 192 + 32;
-				m_Lot.y = (lotTop + lotBottom) / 2;
+				// the lot joins the road on its right edge; the canopy runs off the screen
+				m_Lot.x = LOT_X0 + LOT_W / 2;
+				m_Lot.y = below + LOT_H / 2;
 				m_Lot.used = true;
 				m_Lot.sprite.Show(true);
-				m_FindAt = m_Canopy;
+				m_Roof.x = m_Lot.x;
+				m_Roof.y = m_Lot.y;
+				m_Roof.used = true;
+				m_Roof.sprite.Show(true);
+				m_FindAt = m_Lot;
+				m_FindOffset = LOT_PUMP_Y - LOT_H / 2;  // they stop with the lead car level with the pumps
 			}
 			else
 			{
@@ -1479,6 +1477,7 @@ class DL_FilmPlayer
 				m_Pump.used = true;
 				m_Pump.sprite.Show(true);
 				m_FindAt = m_Pump;
+				m_FindOffset = 0;
 			}
 			m_Target = Math.Min(m_Target, DRIVE * 0.6);
 			m_Step = 10;
@@ -1493,7 +1492,7 @@ class DL_FilmPlayer
 			if (lead)
 				refY = lead.y;
 			float stopIn = m_Speed * m_Speed / 336.0 + 2;
-			if (!m_FindAt || !m_FindAt.used || m_FindAt.y - refY <= stopIn || m_StepT > 6)
+			if (!m_FindAt || !m_FindAt.used || m_FindAt.y + m_FindOffset - refY <= stopIn || m_StepT > 6)
 			{
 				m_Target = 0;
 				foreach (DL_FilmPerson sp : m_Crew)
@@ -1517,8 +1516,9 @@ class DL_FilmPlayer
 			if (m_Actor)
 			{
 				GetOutOne(m_Actor, m_FillHome, 1);
-				m_Actor.Go(m_Actor.x, m_Canopy.y);
-				m_Actor.Go(212, m_Canopy.y);
+				float pumpY = m_Lot.y - LOT_H / 2 + LOT_PUMP_Y;
+				m_Actor.Go(m_Actor.x, pumpY);
+				m_Actor.Go(LOT_X0 + LOT_PUMP_X, pumpY);
 				m_Carrying = true;
 			}
 			m_Step = 20;
@@ -1531,8 +1531,8 @@ class DL_FilmPlayer
 			{
 				if (m_Actor)
 				{
-					m_Actor.dir = 2;
-					m_Actor.pose = DL_FilmPerson.USE;   // at the pump, filling the can
+					m_Actor.dir = 1;
+					m_Actor.pose = DL_FilmPerson.USE;   // at the pumps (facing them), filling the can
 				}
 				m_Step = 21;
 				m_StepT = 0;
@@ -2591,8 +2591,7 @@ class DL_FilmPlayer
 		foreach (DL_FilmThing w : m_Wrecks)
 			ScrollThing(w, dy);
 		ScrollThing(m_Lot, dy);
-		ScrollThing(m_Canopy, dy);
-		ScrollThing(m_Station, dy);
+		ScrollThing(m_Roof, dy);
 		ScrollThing(m_Pump, dy);
 		// the cars: left behind (scroll away), driving off, or in the line (closing up)
 		foreach (DL_FilmCar c : m_Cars)

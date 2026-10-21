@@ -8,6 +8,7 @@
 import os, shutil, subprocess, sys, random
 import anim_boat   # Tools/anim_boat.py: the inflatable Boat_01
 import anim_humvee # Tools/anim_humvee.py: the M1025 (Offroad_02)
+import anim_station  # Tools/anim_station.py: the gas station lot + canopy roof (MiniDayZ buildings)
 import anim_bikes  # Tools/anim_bikes.py: the dirt bike (Motorbike_02), the moped (Motorbike_01), the boat wake
 from PIL import Image, ImageDraw
 
@@ -18,9 +19,7 @@ PACK = r'C:\DayZMods\_assets\minidayz\minidayz-assets'
 IMAGE_TO_PAA = r'E:\Steam\steamapps\common\DayZ Tools\Bin\ImageToPAA\ImageToPAA.exe'
 
 MINIDAYZ = {  # texture name -> file in the pack
-    'gasstation_ca': r'buildings\b_gas_station-sheet0.png',          # the road film's gas station find
-    'gascanopy_ca': r'buildings\b_gas_station_fueling-sheet0.png',
-    'waterpump_ca': r'buildings\waterpump-sheet0.png',               # ... and a well
+    'waterpump_ca': r'buildings\waterpump-sheet0.png',               # the road film's well find
     'uaz_ca': r'vehicles\sprites\drivable\car_uaz_anims-sheet0.png',
     'volga_ca': r'vehicles\sprites\drivable\car_volga_anims-sheet0.png',
     'wreck_blue_ca': r'vehicles\sprites\wrecks\car_regular_blue_vert-sheet0.png',
@@ -593,6 +592,11 @@ def main():
         pow2(im).save(dst)  # palette PNGs make ImageToPAA fail; pad to 2^n
         pngs.append(dst)
     pngs += car_sprites(tmp)
+    for name, im in (('gaslot_ca', anim_station.draw_lot('field')), ('gaslot_snow_ca', anim_station.draw_lot('snow')),
+                     ('gasroof_ca', anim_station.draw_roof())):
+        dst = os.path.join(tmp, name + '.png')     # MiniDayZ-derived: built locally, not committed
+        pow2(im).save(dst)
+        pngs.append(dst)
     wake = os.path.join(tmp, 'wake_ca.png')
     pow2(anim_bikes.wake_frames()).save(wake)   # 4 frames of 96 x 128 (512 x 128 sheet)
     pngs.append(wake)
