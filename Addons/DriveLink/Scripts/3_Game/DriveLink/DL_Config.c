@@ -3,7 +3,9 @@
 
 class DL_Const
 {
-	static const string VERSION = "0.3";
+	static const string VERSION = "0.4";
+	// the hub <-> mod protocol (Hub/src/api.rs PROTOCOL): every hub call carries it; another one = travel off here
+	static const int PROTOCOL = 1;
 	static const string LOG_TAG = "[DriveLink] ";
 	static const string DIR = "$profile:DriveLink";
 	static const string CONFIG = "$profile:DriveLink/config.json";

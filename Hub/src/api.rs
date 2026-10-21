@@ -30,9 +30,24 @@ pub struct Hub {
     pub cfg: RwLock<Config>, // edited live from /admin (Servers, Setup) and saved to hub.json
     pub pending: Mutex<HashMap<String, Pending>>, // claim -> a DayZ server asking to join
     pub seen: Mutex<HashMap<String, String>>,     // server id -> the address its last request came from
+    pub versions: Mutex<HashMap<String, ModVersion>>, // server id -> the DriveLink build it last called with
     pub db: Mutex<Connection>,
     /// server id -> its last arrival spot check (POST /api/spots): which convoy places a car / truck fits on
     pub spots: Mutex<HashMap<String, Value>>,
+}
+
+/// The protocol this hub speaks with the DayZ mod (DL_Const.PROTOCOL): requests, answers and the snapshot format.
+/// A server whose mod speaks another one is refused with a clear message, so a trip never goes between builds
+/// that read each other's data differently. Raise it with every change the other side would misread.
+pub const PROTOCOL: u32 = 1;
+
+/// What a DayZ server's mod said it is (every request carries it: ?proto=..&ver=.. or "proto"/"ver" in the body)
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModVersion {
+    pub version: String,
+    pub protocol: u32,
+    pub ok: bool,
 }
 
 /// A DayZ server with the right key that the hub doesn't know yet; it shows up in /admin to be approved.
@@ -152,6 +167,9 @@ struct Base {
     query_port: u16,
     world: String,
     world_size: u32,
+    // the mod's build (also accepted from the URL): protocol 0 = a mod from before the handshake
+    proto: u32,
+    ver: String,
 }
 
 /// Checks the key + server id (body, else URL). Ok(server id) or the refusal to send back.
@@ -168,6 +186,12 @@ fn check(h: &Hub, path: &str, addr: &SocketAddr, q: &HashMap<String, String>, bo
     }
     if b.server_id.is_empty() {
         b.server_id = q.get("serverId").cloned().unwrap_or_default();
+    }
+    if b.proto == 0 {
+        b.proto = q.get("proto").and_then(|v| v.parse().ok()).unwrap_or(0);
+    }
+    if b.ver.is_empty() {
+        b.ver = q.get("ver").cloned().unwrap_or_default();
     }
     let cfg = h.cfg();
     if !bool::from(b.key.as_bytes().ct_eq(cfg.server_key.as_bytes())) {
@@ -209,6 +233,19 @@ fn check(h: &Hub, path: &str, addr: &SocketAddr, q: &HashMap<String, String>, bo
         return Err(refuse(StatusCode::BAD_REQUEST, &format!("unknown serverId {} (add it on the hub's Servers page)", b.server_id)));
     };
     h.seen.lock().unwrap().insert(server.id.clone(), addr.ip().to_string());
+    // the handshake: same protocol, or nothing goes through (the mod switches travel off and says why)
+    let ok = b.proto == PROTOCOL;
+    let ver = if b.ver.is_empty() { "older than 0.4".to_string() } else { b.ver.clone() };
+    let prev = h.versions.lock().unwrap().insert(server.id.clone(), ModVersion { version: ver.clone(), protocol: b.proto, ok });
+    if !ok {
+        let newer = b.proto > PROTOCOL;
+        let what = if newer { "this hub is older than the server's DriveLink mod: update the hub" } else { "the server's DriveLink mod is older than this hub: update the mod on that server" };
+        if prev.map(|p| p.protocol != b.proto || p.ok).unwrap_or(true) {
+            crate::logf!("refused {path} from {}: DriveLink {ver} speaks protocol {}, this hub {PROTOCOL} - {what}", server.id, b.proto);
+        }
+        return Err(reply(StatusCode::OK, json!({"ok": false, "incompatible": true, "hubProtocol": PROTOCOL, "modProtocol": b.proto,
+            "error": format!("DriveLink version mismatch: {what} (mod {ver} = protocol {}, hub = protocol {PROTOCOL}). Travel is off until both match.", b.proto)})));
+    }
     // the server tells its game/query port on every hello: keep hub.json right without anyone typing it
     let world = b.world.to_lowercase();
     if path == "/api/hello" && ((b.port != 0 && b.port != server.port) || (b.query_port != 0 && b.query_port != server.query_port) || (!world.is_empty() && world != server.world) || (b.world_size != 0 && b.world_size != server.world_size)) {

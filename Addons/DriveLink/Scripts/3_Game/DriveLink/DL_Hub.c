@@ -47,6 +47,7 @@ class DL_HelloResp
 	bool pending;             // known key, but not approved on the hub's Servers page yet
 	string serverId;          // the id the hub knows this server by
 	string error;
+	bool incompatible;        // another protocol: the error says whether the mod or the hub is the older one
 	ref DL_Layout layout;
 }
 
@@ -128,6 +129,7 @@ class DL_HubCallback : RestCallback
 
 	override void OnSuccess(string data, int dataSize)
 	{
+		DL_Hub.Handshake(data);
 		Finish(true, data);
 	}
 
@@ -147,6 +149,34 @@ class DL_HubCallback : RestCallback
 class DL_Hub
 {
 	protected static ref array<ref DL_HubCallback> s_Alive = new array<ref DL_HubCallback>;
+	// the hub speaks another protocol (a different DriveLink build): no travel here until both match
+	static bool s_Incompatible;
+
+	// every hub answer: "incompatible" = this mod and the hub are different builds (the hub says which to update);
+	// an ordinary answer after that = they match again (the hub or the mod was updated)
+	static void Handshake(string body)
+	{
+		bool bad = body.Contains("\"incompatible\":true");
+		if (bad && !s_Incompatible)
+		{
+			string why = body;
+			int at = body.IndexOf("\"error\":\"");
+			if (at >= 0)
+			{
+				why = body.Substring(at + 9, body.Length() - at - 9);
+				int end = why.IndexOf("\"");
+				if (end > 0)
+					why = why.Substring(0, end);
+			}
+			DL_Log.Warn("TRAVEL IS OFF on this server: " + why);
+		}
+		else if (!bad && s_Incompatible && body.Contains("\"ok\":true"))
+			DL_Log.Warn("the hub and this server's DriveLink match again: travel is back on");
+		if (bad)
+			s_Incompatible = true;
+		else if (body.Contains("\"ok\":true"))
+			s_Incompatible = false;
+	}
 
 	// M1 retest 2 (2026-10-13): every call ended in OnError(5) = EREST_ERROR (restapi.c:16) and the hub logged
 	// nothing. Changed to the pattern a working mod uses (DaemonForge UniversalApi UniversalRest.c:14-22, read only):
@@ -161,7 +191,8 @@ class DL_Hub
 			api.SetOption(ERestOption.ERESTOPTION_READOPERATION, 15);
 			api.SetOption(ERestOption.ERESTOPTION_CONNECTION, 5);
 		}
-		string url = baseUrl + path;
+		// the handshake rides on every call: this build's protocol and version (the hub refuses another protocol)
+		string url = baseUrl + path + "&proto=" + DL_Const.PROTOCOL.ToString() + "&ver=" + DL_Const.VERSION;
 		RestContext ctx = api.GetRestContext(url);
 		DL_HubCallback cb = new DL_HubCallback(target, fn, what);
 		s_Alive.Insert(cb); // keep it alive until the engine calls it

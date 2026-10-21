@@ -24,7 +24,7 @@ expect() { # name, got, want
   if [ "$2" == "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2] want [$3]"; FAIL=1; fi
 }
 has() { if grep -q -- "$2" "$T/body"; then echo "ok   $1"; else echo "FAIL $1: body $(body)"; FAIL=1; fi; }
-req() { echo "{\"serverId\":\"$1\",\"key\":\"$KEY\"$2}"; }
+req() { echo "{\"serverId\":\"$1\",\"key\":\"$KEY\",\"proto\":1,\"ver\":\"test\"$2}"; }
 
 PAY='{"version":2,"charType":"SurvivorM_Boris","wet":1e-05,"items":[{"id":1,"parent":0,"type":"Apple"}]}'
 WANT='{"version":2,"charType":"SurvivorM_Boris","wet":0.00001,"items":[{"id":1,"parent":0,"type":"Apple"}]}'
@@ -67,25 +67,25 @@ expect "key in the URL" "$(post "/api/hello?serverId=chernarus&key=$KEY" '{}')" 
 
 # joining from the web app: a new server asks with its claim, is approved on the Servers page, learns its id
 apost() { curl -s -m 5 -o "$T/body" -w "%{http_code}" -H "Content-Type: application/json" --data-binary "$2" "$U$1"; }
-expect "join: hello without id" "$(post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"claim\":\"c-123\",\"port\":2502,\"queryPort\":27020,\"world\":\"Sakhal\"}")" 200
+expect "join: hello without id" "$(post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"proto\":1,\"claim\":\"c-123\",\"port\":2502,\"queryPort\":27020,\"world\":\"Sakhal\"}")" 200
 has "join: answer is pending" '"pending":true'
 curl -s -m 5 "$U/admin/api/state" > "$T/body"; has "join: listed on the Servers page" '"claim":"c-123"'
 has "join: suggests this PC's LAN address" '"suggestLan":"'
 expect "join: approve" "$(apost /admin/api/pending/c-123/approve '{"id":"sakhal","name":"Sakhal","lanHost":"127.0.0.1","port":2502}')" 200
 grep -q '"claim": "c-123"' "$T/hub.json" && echo "ok   join: saved in hub.json" || { echo "FAIL join: not in hub.json"; FAIL=1; }
-expect "join: hello by claim" "$(post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"claim\":\"c-123\",\"port\":2502}")" 200
+expect "join: hello by claim" "$(post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"proto\":1,\"claim\":\"c-123\",\"port\":2502}")" 200
 has "join: learns its id" '"serverId":"sakhal"'
 expect "join: works by id now" "$(post /api/arrive "$(req sakhal ",\"steamId\":\"76561198000000009\"")")" 200
-expect "link: hello from a reinstalled livonia" "$(post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"claim\":\"c-456\",\"port\":2402}")" 200
+expect "link: hello from a reinstalled livonia" "$(post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"proto\":1,\"claim\":\"c-456\",\"port\":2402}")" 200
 expect "link: to the existing livonia" "$(apost /admin/api/pending/c-456/approve '{"id":"livonia","name":"x","port":0,"link":true}')" 200
-post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"claim\":\"c-456\"}" >/dev/null; has "link: learns it is livonia" '"serverId":"livonia"'
+post /api/hello "{\"serverId\":\"\",\"key\":\"$KEY\",\"proto\":1,\"claim\":\"c-456\"}" >/dev/null; has "link: learns it is livonia" '"serverId":"livonia"'
 expect "servers page: add" "$(apost /admin/api/servers '{"isNew":true,"id":"deerisle","name":"Deer Isle","lanHost":"10.0.0.5","port":2602}')" 200
 expect "servers page: add twice refused" "$(apost /admin/api/servers '{"isNew":true,"id":"deerisle","name":"Deer Isle","lanHost":"10.0.0.5","port":2602}')" 400
 expect "servers page: edit" "$(apost /admin/api/servers '{"id":"deerisle","name":"Deer Isle 2","lanHost":"10.0.0.6","port":2602}')" 200
 grep -q 'Deer Isle 2' "$T/hub.json" && echo "ok   servers page: edit saved" || { echo "FAIL edit not saved"; FAIL=1; }
 expect "servers page: remove" "$(apost /admin/api/servers/deerisle/delete '')" 200
 expect "removed server refused" "$(post /api/arrive "$(req deerisle ",\"steamId\":\"$SID\"")")" 400
-expect "hello reports a new port" "$(post /api/hello "{\"serverId\":\"livonia\",\"key\":\"$KEY\",\"port\":2412,\"queryPort\":27022}")" 200
+expect "hello reports a new port" "$(post /api/hello "{\"serverId\":\"livonia\",\"key\":\"$KEY\",\"proto\":1,\"port\":2412,\"queryPort\":27022}")" 200
 grep -q '"port": 2412' "$T/hub.json" && echo "ok   reported port saved" || { echo "FAIL reported port not saved"; FAIL=1; }
 expect "settings: public address" "$(apost /admin/api/settings '{"publicHost":"hub.example.com"}')" 200
 grep -q 'hub.example.com' "$T/hub.json" && echo "ok   settings saved" || { echo "FAIL settings not saved"; FAIL=1; }
@@ -111,6 +111,16 @@ curl -s -m 5 "$U/admin/api/players/$P2" > "$T/body"; has "players: detail snapsh
 has "players: detail admin log" '"action":"send"'
 expect "players: drop" "$(apost /admin/api/players/$P2/action '{"action":"drop"}')" 200
 expect "players: unknown steam id" "$(apost /admin/api/players/1/action '{"action":"release"}')" 404
+
+# Version handshake: another protocol is refused with a clear message, nothing goes through
+expect "proto: old mod (no protocol)" "$(post /api/hello "{\"serverId\":\"chernarus\",\"key\":\"$KEY\"}")" 200
+has "proto: old mod refused" '"incompatible":true'
+has "proto: says update the mod" 'update the mod'
+expect "proto: newer mod" "$(post '/api/arrive?proto=99&ver=9.9' "{\"serverId\":\"chernarus\",\"key\":\"$KEY\",\"steamId\":\"76561190000000088\"}")" 200
+has "proto: says update the hub" 'update the hub'
+expect "proto: right one in the URL" "$(post '/api/hello?proto=1&ver=0.4' "{\"serverId\":\"chernarus\",\"key\":\"$KEY\"}")" 200
+has "proto: accepted" '"ok":true'
+curl -s -m 5 "$U/admin/api/state" > "$T/body"; has "proto: version on the Servers page" '"version":"0.4"'
 
 # Starting server: a death elsewhere hands the character to it
 expect "died: no starting server" "$(post /api/died "$(req livonia ",\"steamId\":\"76561190000000077\"")")" 200

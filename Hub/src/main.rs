@@ -69,6 +69,7 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
         cfg: std::sync::RwLock::new(cfg.clone()),
         pending: Default::default(),
         seen: Default::default(),
+        versions: Default::default(),
         db: Mutex::new(conn),
         spots: Default::default(),
     });

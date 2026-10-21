@@ -408,6 +408,12 @@ modded class MissionServer
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendHello, 30000, false);
 			return;
 		}
+		if (r.incompatible)
+		{
+			// DL_Hub.Handshake said why; ask again now and then (the hub may be updated while this server runs)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendHello, 60000, false);
+			return;
+		}
 		if (r.pending)
 		{
 			if (!m_DL_SaidPending)
@@ -513,7 +519,8 @@ modded class MissionServer
 
 	protected bool DL_On()
 	{
-		return m_DL_Cfg && m_DL_Cfg.hubKey != "" && m_DL_Cfg.serverId != ""; // no id = not approved on the hub yet
+		// no id = not approved on the hub yet; another build than the hub's = no travel (DL_Hub.Handshake)
+		return m_DL_Cfg && m_DL_Cfg.hubKey != "" && m_DL_Cfg.serverId != "" && !DL_Hub.s_Incompatible;
 	}
 
 	// ---------------- arrival ----------------

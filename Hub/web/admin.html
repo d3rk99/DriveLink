@@ -586,13 +586,14 @@ function renderServers() {
   h += `<div class="box"><h2>Connected to this hub</h2>`;
   if (!S.servers.length) h += `<div class="hint">No servers yet. Start a DayZ server with the DriveLink mod and this hub's address + key (see <a href="#" id="goSetup" style="color:var(--accent)">Setup</a>): it shows up above to approve. Or add one by hand.</div>`;
   else {
-    h += `<table><tr><th>Name</th><th>Status</th><th>Map</th><th>Address</th><th>Port</th></tr>`;
+    h += `<table><tr><th>Name</th><th>Status</th><th>Map</th><th>Address</th><th>Port</th><th>DriveLink</th></tr>`;
     S.servers.forEach((s, i) => {
       const st = ago(s.seenSecondsAgo);
       const cls = st === "online" ? "ok" : st ? "warn" : "hint";
       h += `<tr class="click" data-edit="${i}"><td><b>${esc(s.name)}</b> <span class="hint">${esc(s.id)}</span></td>
         <td class="${cls}">${esc(st || "never connected")}${s.local ? ' <span class="hint">(this PC)</span>' : ""}</td><td>${esc(s.map || "?")}</td>
-        <td>${esc(s.lanHost || "-")}${s.publicHost ? " / " + esc(s.publicHost) : ""}</td><td>${s.port}${s.queryPort ? ` <span class="hint">q ${s.queryPort}</span>` : ""}</td></tr>`;
+        <td>${esc(s.lanHost || "-")}${s.publicHost ? " / " + esc(s.publicHost) : ""}</td><td>${s.port}${s.queryPort ? ` <span class="hint">q ${s.queryPort}</span>` : ""}</td>
+        <td>${!s.mod ? `<span class="hint">-</span>` : s.mod.ok ? esc(s.mod.version) : `<span class="badtxt" title="This server's DriveLink speaks protocol ${s.mod.protocol}, the hub ${s.hubProtocol}: travel is off there until both are the same build">${esc(s.mod.version)} - ${s.mod.protocol < s.hubProtocol ? "update the mod" : "update the hub"}</span>`}</td></tr>`;
     });
     h += `</table>`;
   }

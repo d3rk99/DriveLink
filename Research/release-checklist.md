@@ -33,7 +33,7 @@ D6 (test servers back to CF, Dabs, VPP, PersistentBodies, DriveLink).
 |---|---|---|
 | S1 | Hub web app needs no password from localhost | Fine on a PC; behind a reverse proxy every request looks local. Document, or add `requirePasswordAlways`. |
 | S2 | First-run admin password is written to hub.log | Show it once on the console only, or make the owner set one on first visit. |
-| S3 | Version handshake | Mod sends its version on /api/hello; hub refuses / warns on a mismatch with a clear message (servers on different mod builds would corrupt trips). |
+| S3 | ~~Version handshake~~ done 2026-10-21: protocol 1 (mod DL_Const.PROTOCOL, hub api::PROTOCOL) on every call; a mismatch turns travel off on that server with a message saying which side to update, and the Servers page shows each server's DriveLink version | Raise PROTOCOL on both sides with every change the other side would misread. |
 | S4 | Hub database backups | drivelink.db holds characters in transit: a nightly copy + "Export" on the Setup page. |
 | S5 | HTTPS with a self-signed cert from DayZ's RestApi | Verify a remote server can talk to the hub over HTTPS, or document HTTP + firewall. |
 | S6 | Defaults for a fresh server | No zones = nothing happens (good). Pick the default travel preset (Medium?) and starting server "off". |
