@@ -86,6 +86,7 @@ pub fn routes(h: Shared) -> Router {
         .route("/api/depart", post(depart))
         .route("/api/arrive", post(arrive))
         .route("/api/confirm", post(confirm))
+        .route("/api/died", post(died))
         .route("/api/payload", post(payload))
         .route("/api/fail", post(fail))
         .route("/api/layout", post(layout))
@@ -531,6 +532,41 @@ async fn arrive(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
     }
     crate::logf!("arrive {} on {here}: normal login, owner set", r.steam_id);
     reply(StatusCode::OK, json!({"ok": true, "action": "normal"}))
+}
+
+// POST /api/died  {steamId}  he died on this server. With a starting server set (Servers page) and this being
+// another one, his next life starts there: he is handed to it (the respawn here, or his next login anywhere, is
+// sent there; it has no living character for him, so the game spawns him fresh on the coast).
+async fn died(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body: Bytes) -> Response {
+    let here = match check(&h, "/api/died", &a, &q, &body) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let r: SteamReq = match parse("/api/died", &body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if r.steam_id.is_empty() {
+        return refuse(StatusCode::BAD_REQUEST, "need steamId");
+    }
+    let home = h.cfg().home_server.clone();
+    if home.is_empty() || home == here || h.cfg().server(&home).is_none() {
+        crate::logf!("died {} on {here}: respawns there", r.steam_id);
+        return reply(StatusCode::OK, json!({"ok": true}));
+    }
+    let mut db = h.db.lock().unwrap();
+    let tx = match db.transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
+    if let Err(e) = set_owner(&tx, &r.steam_id, Some(&home)) {
+        return db_error(e);
+    }
+    if let Err(e) = tx.commit() {
+        return db_error(e);
+    }
+    crate::logf!("died {} on {here}: next life on the starting server {home}", r.steam_id);
+    reply(StatusCode::OK, json!({"ok": true, "home": server_out(&h, &home)}))
 }
 
 // POST /api/confirm  the target built him from this trip: claim it, it owns him now

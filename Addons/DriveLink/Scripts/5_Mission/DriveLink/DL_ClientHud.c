@@ -18,6 +18,9 @@ modded class MissionGameplay
 	protected float m_DL_WaitAge;      // seconds since the last update from the server
 	protected bool m_DL_StartEngine;
 	protected ref DL_FilmPlayer m_DL_Film = new DL_FilmPlayer(); // the road film (RPC_FILM); F9 = demo film
+	protected int m_DL_FilmId;                                   // the film being received in parts (RPC_FILM)
+	protected ref array<string> m_DL_FilmParts = new array<string>;
+	protected int m_DL_FilmGot;
 	protected bool m_DL_F9WasDown;
 	protected TextWidget m_DL_Title;
 	protected bool m_DL_TextLow;        // the black screen's texts moved under the film
@@ -43,8 +46,31 @@ modded class MissionGameplay
 	{
 		if (rpc_type == DL_Const.RPC_FILM)
 		{
-			string fj;
-			if (ctx.Read(fj) && m_DL_Film)
+			int fid;
+			int part;
+			int parts;
+			string chunk;
+			if (!ctx.Read(fid) || !ctx.Read(part) || !ctx.Read(parts) || !ctx.Read(chunk) || parts < 1 || part < 0 || part >= parts)
+				return;
+			if (fid != m_DL_FilmId || m_DL_FilmParts.Count() != parts)
+			{
+				m_DL_FilmId = fid;
+				m_DL_FilmParts.Clear();
+				for (int fp = 0; fp < parts; fp++)
+					m_DL_FilmParts.Insert("");
+				m_DL_FilmGot = 0;
+			}
+			if (m_DL_FilmParts[part] == "")
+				m_DL_FilmGot++;
+			m_DL_FilmParts[part] = chunk;
+			if (m_DL_FilmGot < parts)
+				return;
+			string fj = "";
+			foreach (string pc : m_DL_FilmParts)
+				fj += pc;
+			m_DL_FilmParts.Clear();
+			m_DL_FilmId = 0;
+			if (m_DL_Film)
 				m_DL_Film.PlayJson(fj);
 			return;
 		}

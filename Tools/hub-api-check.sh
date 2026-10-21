@@ -112,6 +112,19 @@ has "players: detail admin log" '"action":"send"'
 expect "players: drop" "$(apost /admin/api/players/$P2/action '{"action":"drop"}')" 200
 expect "players: unknown steam id" "$(apost /admin/api/players/1/action '{"action":"release"}')" 404
 
+# Starting server: a death elsewhere hands the character to it
+expect "died: no starting server" "$(post /api/died "$(req livonia ",\"steamId\":\"76561190000000077\"")")" 200
+has "died: respawns there" '"ok":true'
+expect "home: unknown server refused" "$(apost /admin/api/settings '{"homeServer":"nowhere"}')" 400
+expect "home: set chernarus" "$(apost /admin/api/settings '{"homeServer":"chernarus"}')" 200
+expect "died on livonia" "$(post /api/died "$(req livonia ",\"steamId\":\"76561190000000077\"")")" 200
+has "died: next life on chernarus" '"home":{'
+expect "died: next login on livonia" "$(post /api/arrive "$(req livonia ",\"steamId\":\"76561190000000077\"")")" 200
+has "died: redirected to the starting server" '"action":"redirect"'
+expect "died on the starting server" "$(post /api/died "$(req chernarus ",\"steamId\":\"76561190000000077\"")")" 200
+has "died at home: no home in the answer" '{"ok":true}'
+expect "home: off" "$(apost /admin/api/settings '{"homeServer":""}')" 200
+
 # Travel rules + zone distance
 curl -s -m 5 "$U/admin/api/state" > "$T/body"; has "travel: defaults in state" '"mode":"refuse"'
 expect "travel: layout with a 60 km zone" "$(apost /admin/api/layout/chernarus '{"zones":[{"name":"To Livonia","center":[100,0,100],"radius":40,"to":"livonia","arrival":"a","distanceKm":60}],"arrivals":[{"name":"a","pos":[1,0,1],"yaw":0}]}')" 200

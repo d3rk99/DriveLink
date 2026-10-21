@@ -147,7 +147,7 @@ async fn state(State(h): State<Shared>) -> Response {
     Json(json!({
         "servers": servers, "maps": maps, "tools": tools.map(|t| t.display().to_string()), "pending": pending,
         "hub": {
-            "serverKey": cfg.server_key, "lanIp": lan, "publicHost": cfg.public_host,
+            "serverKey": cfg.server_key, "lanIp": lan, "publicHost": cfg.public_host, "homeServer": cfg.home_server,
             "httpPort": hub_port(&cfg.listen), "httpsPort": hub_port(&cfg.listen_tls), "listen": cfg.listen, "listenTls": cfg.listen_tls,
             "dayzPath": cfg.dayz_path, "dayzToolsPath": cfg.dayz_tools_path, "hasPassword": !cfg.admin_password.is_empty(),
         },
@@ -340,6 +340,7 @@ struct SettingsForm {
     admin_password: Option<String>,
     dayz_path: Option<String>,
     dayz_tools_path: Option<String>,
+    home_server: Option<String>,
     new_server_key: bool,
 }
 
@@ -366,6 +367,13 @@ async fn save_settings(State(h): State<Shared>, body: Bytes) -> Response {
         if let Some(v) = &f.dayz_tools_path {
             c.dayz_tools_path = v.trim().to_string();
         }
+        if let Some(v) = &f.home_server {
+            let v = v.trim();
+            if !v.is_empty() && c.server(v).is_none() {
+                return Err(format!("unknown server {v:?}"));
+            }
+            c.home_server = v.to_string();
+        }
         if f.new_server_key {
             c.server_key = crate::config::random_key();
         }
@@ -373,6 +381,9 @@ async fn save_settings(State(h): State<Shared>, body: Bytes) -> Response {
     });
     match res {
         Ok(()) => {
+            if let Some(v) = &f.home_server {
+                crate::logf!("starting server: {}", if v.trim().is_empty() { "off (respawn where you die)" } else { v.trim() });
+            }
             crate::logf!("setup page: settings saved{}", if f.new_server_key { " (NEW server key: every DayZ server needs it now)" } else { "" });
             Json(json!({"ok": true})).into_response()
         }

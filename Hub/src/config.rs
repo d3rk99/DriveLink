@@ -222,6 +222,10 @@ pub struct Config {
     /// optional: this hub's internet address (name or IP), only used to show the DayZ servers what to put in hubUrl
     #[serde(default)]
     pub public_host: String,
+    /// the starting server: whoever dies on any other server starts his next life here (fresh spawn); "" = off,
+    /// everyone respawns where he died
+    #[serde(default)]
+    pub home_server: String,
 }
 
 /// Fills in an admin password when there is none; returns it when it was just made.
@@ -265,6 +269,7 @@ pub fn load_or_create(path: &Path) -> Result<(Config, bool), String> {
                 dayz_tools_path: String::new(),
                 map_pbos: HashMap::new(),
                 public_host: String::new(),
+                home_server: String::new(),
             };
             save(path, &c)?;
             return Ok((c, true));

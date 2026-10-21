@@ -531,7 +531,20 @@ function renderServers() {
     h += `</table>`;
   }
   h += `<div class="btns"><button id="sAdd">+ Add a server by hand</button></div></div>`;
+  if (S.servers.length) {
+    const home = S.hub.homeServer || "";
+    h += `<div class="box"><h2>Starting server</h2>
+      <div class="hint">Whoever dies on any other server (in the game, or on the road there) starts his next life here: his respawn is sent to this server and he spawns fresh on its coast. Off = everyone respawns on the server he died on.</div>
+      <div class="grid2" style="margin-top:6px"><div><select id="sHome"><option value="" ${home ? "" : "selected"}>Off: respawn where you die</option>${S.servers.map(s => `<option value="${esc(s.id)}" ${home === s.id ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select></div>
+      <div><button class="primary" id="sHomeSave">Save starting server</button></div></div><div class="status" id="sHomeMsg"></div></div>`;
+  }
   b.innerHTML = h;
+  const hs = $("sHomeSave");
+  if (hs) hs.onclick = async () => {
+    const m = $("sHomeMsg");
+    try { await post("/admin/api/settings", { homeServer: $("sHome").value }); await refresh(); m.textContent = "Saved."; m.className = "status ok"; }
+    catch (e) { m.textContent = e.message; m.className = "status badtxt"; }
+  };
   const gs = $("goSetup"); if (gs) gs.onclick = e => { e.preventDefault(); setView("setup"); };
   b.querySelectorAll("[data-pend]").forEach(x => x.onclick = () => {
     const p = S.pending[+x.dataset.pend];

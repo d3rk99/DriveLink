@@ -115,6 +115,7 @@ modded class MissionServer
 	static const int DL_GROUP_MAX = 8;
 	protected ref map<string, bool> m_DL_Leaving = new map<string, bool>;  // steamIds being sent away (zone check skips them)
 	protected ref map<string, bool> m_DL_MustLeaveZone = new map<string, bool>; // trip failed: no new countdown until he steps out
+	protected ref map<string, ref DL_ServerInfo> m_DL_GoHome = new map<string, ref DL_ServerInfo>; // died here, not the starting server: his respawn goes there
 	protected ref map<PlayerBase, bool> m_DL_Doomed = new map<PlayerBase, bool>; // characters that live elsewhere now: delete + CharacterKill on logout
 	protected float m_DL_Tick;
 	protected ref DL_Snapshot m_DL_Snap = new DL_Snapshot();
@@ -692,6 +693,22 @@ modded class MissionServer
 		string sid = identity.GetPlainId();
 		// M1 test 2026-10-13: a leaving-flag left from an earlier visit made the zone check skip him forever
 		m_DL_Leaving.Remove(sid);
+		DL_ServerInfo home;
+		if (m_DL_GoHome.Find(sid, home) && home)
+		{
+			// he died here and this is not the starting server: his new life starts there
+			m_DL_GoHome.Remove(sid);
+			m_DL_Pending.Remove(sid);
+			Print(DL_Const.LOG_TAG + sid + " respawns: sent to the starting server " + home.name);
+			NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 8, "DriveLink", "You died. Your next life starts on " + home.name + ". Taking you there...", "");
+			DL_SendRedirect(identity, home, "died");
+			if (player)
+			{
+				player.SetAllowDamage(false);
+				m_DL_Doomed.Set(player, true);
+			}
+			return;
+		}
 		if (p && (p.action == "" || p.action == "fetching"))
 		{
 			// the hub hasn't fully answered yet: keep the entry, DL_LateAnswer handles the answer when it comes
@@ -919,30 +936,90 @@ modded class MissionServer
 				GetHive().CharacterKill(oldChar);
 			oldChar.Delete();
 		}
-		StartingEquipSetup(player, true);
-		m_DL_Leaving.Remove(sid);
+		// he died on the way: a bare, hidden body for the black screen (story + film), then a real death (death
+		// screen, the game's own respawn); the hub sends that respawn to the starting server (DL_TakeDeaths)
+		player.SetAllowDamage(false);
+		m_DL_Leaving.Set(sid, true);              // no zone travel for the dead
 		DL_Confirm(sid, r.token);
-		Print(DL_Const.LOG_TAG + sid + " died on the road from " + r.from + ": fresh character at " + pos.ToString() + " (his gear is gone)");
-		DL_StoryScreen(sid, "You died on the road.\n" + d.journey, DL_SendFilmLater(sid, d));
+		Print(DL_Const.LOG_TAG + sid + " died on the road from " + r.from + ": dies here once the film / story is over");
+		int secs = DL_StoryScreen(sid, "You died on the road.\n" + d.journey, DL_SendFilmLater(sid, d), true);
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoadDeath, 2000 + 1000 * secs + 300, false, sid);
 		return player;
 	}
 
+	protected void DL_RoadDeath(string sid)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb || !pb.IsAlive())
+			return;
+		m_DL_Leaving.Remove(sid);
+		pb.SetAllowDamage(true);
+		pb.SetHealth("", "", 0);
+		Print(DL_Const.LOG_TAG + sid + " died on the road: killed");
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveBody, 60000, false, pb);
+	}
+
+	// the road death's bare body: nobody should find it at the arrival point
+	protected void DL_RemoveBody(PlayerBase pb)
+	{
+		if (pb && !pb.IsAlive())
+			pb.Delete();
+	}
+
+	// deaths on this server -> the hub; it answers with the starting server when that is another one
+	protected void DL_TakeDeaths()
+	{
+		array<string> q = DL_Deaths.Queue();
+		if (q.Count() == 0)
+			return;
+		foreach (string sid : q)
+		{
+			DL_TokenReq dr = DL_TokenRequest(sid, "");
+			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/died?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.TokenJson(dr), new DL_DiedWaiter(this, sid), "OnAnswer", "died " + sid);
+		}
+		q.Clear();
+	}
+
+	void DL_OnDied(string sid, bool ok, string body)
+	{
+		if (!ok)
+		{
+			Print(DL_Const.LOG_TAG + "WARNING hub did not take the death of " + sid);
+			return;
+		}
+		DL_DiedResp resp;
+		string err;
+		JsonSerializer js = new JsonSerializer();
+		if (!js.ReadFromString(resp, body, err) || !resp)
+			return;
+		if (resp.home && resp.home.id != "")
+		{
+			m_DL_GoHome.Set(sid, resp.home);
+			Print(DL_Const.LOG_TAG + sid + " died here: his next life starts on " + resp.home.name);
+		}
+		else
+			Print(DL_Const.LOG_TAG + sid + " died here: respawns here");
+	}
+
 	// the black screen with the road's story (and film) for a while (arrivals that don't go through a waiting room)
-	protected void DL_StoryScreen(string sid, string story, float filmSeconds)
+	// returns how long it shows, s (0 = nothing to show); staysHidden: the body is never shown again (a road death)
+	protected int DL_StoryScreen(string sid, string story, float filmSeconds, bool staysHidden = false)
 	{
 		if (story == "" && filmSeconds <= 0)
-			return;
+			return 0;
 		int secs = Math.Max(9, Math.Ceil(filmSeconds) + 4);
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (pb)
 		{
 			pb.DL_SetHidden(true);
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(pb.DL_SetHidden, 2000 + 1000 * secs, false, false);
+			if (!staysHidden)
+				g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(pb.DL_SetHidden, 2000 + 1000 * secs, false, false);
 		}
 		m_DL_StoryCut.Remove(sid);
 		for (int i = 0; i < secs; i++)
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_StoryShow, 2000 + 1000 * i, false, sid, story);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 2000 + 1000 * secs, false, sid, DL_Const.WAIT_DONE, "", false, "");
+		return secs;
 	}
 
 	protected void DL_StoryShow(string sid, string story)
@@ -1124,14 +1201,31 @@ modded class MissionServer
 		return d.film.Duration();
 	}
 
+	// the film's JSON in FILM_CHUNK pieces, one RPC each (guaranteed, in order); the client puts them together
 	protected void DL_SendFilm(string sid, string json)
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !pb.GetIdentity())
 			return;
-		ScriptRPC rpc = new ScriptRPC();
-		rpc.Write(json);
-		rpc.Send(null, DL_Const.RPC_FILM, true, pb.GetIdentity());
+		int len = json.Length();
+		int parts = (len + DL_Const.FILM_CHUNK - 1) / DL_Const.FILM_CHUNK;
+		if (parts < 1)
+			parts = 1;
+		int id = json.Hash();
+		for (int i = 0; i < parts; i++)
+		{
+			int at = i * DL_Const.FILM_CHUNK;
+			int n = len - at;
+			if (n > DL_Const.FILM_CHUNK)
+				n = DL_Const.FILM_CHUNK;
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write(id);
+			rpc.Write(i);
+			rpc.Write(parts);
+			rpc.Write(json.Substring(at, n));
+			rpc.Send(null, DL_Const.RPC_FILM, true, pb.GetIdentity());
+		}
+		Print(DL_Const.LOG_TAG + sid + "'s road film sent: " + len.ToString() + " chars in " + parts.ToString() + " parts");
 	}
 
 	// ---------------- M3 waiting room ----------------
@@ -1949,6 +2043,7 @@ modded class MissionServer
 		DL_CheckZones();
 		DL_DebugTick();
 		DL_TakeFilmVotes();
+		DL_TakeDeaths();
 	}
 
 	protected void DL_CheckZones()
@@ -2867,6 +2962,20 @@ class DL_HelloWaiter : Managed
 	protected MissionServer m_M;
 	void DL_HelloWaiter(MissionServer m) { m_M = m; }
 	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_OnHello(ok, body); }
+}
+
+class DL_DiedResp
+{
+	bool ok;
+	ref DL_ServerInfo home;   // the starting server, when he must start his next life there (not this server)
+}
+
+class DL_DiedWaiter : Managed
+{
+	protected MissionServer m_M;
+	protected string m_Sid;
+	void DL_DiedWaiter(MissionServer m, string sid) { m_M = m; m_Sid = sid; }
+	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_OnDied(m_Sid, ok, body); }
 }
 
 class DL_ConfirmWaiter : Managed
