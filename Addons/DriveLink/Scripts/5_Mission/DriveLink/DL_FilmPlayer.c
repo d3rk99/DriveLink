@@ -469,6 +469,7 @@ class DL_FilmCar
 	string kind = "car";      // "car" | "bike" (2 wheels on the middle line) | "boat" (on the water: nobody gets out)
 	ref DL_Sprite over;       // open vehicles: drawn over the riders (a bike's bars + front, a boat's motor)
 	ref DL_Sprite wake;       // a boat's wake, under it
+	ref DL_Sprite shadow;     // a plane's shadow, far below it on the ground
 	string look;              // the sprite: "bike" (dirt bike) | "moped" | "boat" | ...
 	float drawX;              // where it is drawn this frame (with its bob), film px
 	float w;                  // shown size, film px (with its shadow)
@@ -557,6 +558,17 @@ class DL_FilmPlayer
 	protected float m_Bottom;          // the window's bottom edge, fraction of the screen height (text goes below)
 	protected bool m_Leaving;          // walking round the car they leave behind
 	protected bool m_Water;            // a boat trip: open water instead of the road (until the boats are left)
+	protected bool m_Sky;              // a plane trip: high above the ground and the clouds (until it comes down)
+	protected ref DL_Strip m_GroundSea; // the sky: open water far below, faded in for a crossing
+	protected float m_SeaA;
+	protected float m_SeaNext;         // seconds of flight to the next crossing
+	protected float m_SeaLeft;         // seconds left of this one
+	protected ref array<ref DL_FilmThing> m_Clouds = new array<ref DL_FilmThing>;     // under the plane
+	protected ref array<ref DL_FilmThing> m_HighClouds = new array<ref DL_FilmThing>; // over it, thin
+	protected float m_NextCloud;
+	static const float SKY_GROUND_K = 0.28; // parallax: the ground far below moves slowly ...
+	static const float CLOUD_K = 0.8;       // ... the clouds under the plane faster ...
+	static const float HIGH_CLOUD_K = 1.6;  // ... and the ones over it fastest
 	protected ref DL_Strip m_GroundLand; // a boat trip: the land they walk on when the boats are left
 	protected float m_WalkY;           // the walkers' first row
 	protected float m_FindResume;      // the speed before a find scene stopped them
@@ -679,6 +691,14 @@ class DL_FilmPlayer
 
 	// ---------------- build ----------------
 
+	// the ground seen from a plane (Tools/anim_sky.py): soft, hazed, 256 x 512
+	protected static string SkyGround(string biome)
+	{
+		if (biome == "field" || biome == "desert" || biome == "snow")
+			return DIR + "sky_" + biome + "_ca.paa";
+		return DIR + "sky_forest_ca.paa";
+	}
+
 	protected static string Ground(string biome)
 	{
 		if (biome == "field" || biome == "desert" || biome == "snow")
@@ -725,13 +745,24 @@ class DL_FilmPlayer
 		m_Scroll = 0;
 		m_Km = 0;
 		m_Water = false;
+		m_Sky = false;
 		foreach (string wl : looks)
 		{
 			if (wl.IndexOf("boat") == 0)
 				m_Water = true;
+			if (wl.IndexOf("plane") == 0)
+				m_Sky = true;
 		}
 		m_GroundLand = null;
-		if (m_Water)
+		m_GroundSea = null;
+		if (m_Sky)
+		{
+			// high up: the ground far below (the road is ready underneath for an emergency landing)
+			m_GroundLand = new DL_Strip(m_Root, Ground(m_Film.biomeTo), 1, m_Ox, m_Oy, gw, gh, 256, 256, true);
+			m_GroundLand.SetAlpha(0);
+			m_GroundA = new DL_Strip(m_Root, SkyGround(m_Film.biomeFrom), 1, m_Ox, m_Oy, gw, gh, 256, 512, true);
+		}
+		else if (m_Water)
 		{
 			// open water; the biome's land is ready underneath for when the boats are left
 			m_GroundLand = new DL_Strip(m_Root, Ground(m_Film.biomeTo), 1, m_Ox, m_Oy, gw, gh, 256, 256, true);
@@ -744,13 +775,41 @@ class DL_FilmPlayer
 		m_GroundV = null;
 		if (!m_Water && m_Film.biomeVia != "" && m_Film.biomeVia != m_Film.biomeFrom && m_Film.biomeVia != m_Film.biomeTo)
 		{
-			m_GroundV = new DL_Strip(m_Root, Ground(m_Film.biomeVia), 2, m_Ox, m_Oy, gw, gh, 256, 256, true);
+			if (m_Sky)
+				m_GroundV = new DL_Strip(m_Root, SkyGround(m_Film.biomeVia), 2, m_Ox, m_Oy, gw, gh, 256, 512, true);
+			else
+				m_GroundV = new DL_Strip(m_Root, Ground(m_Film.biomeVia), 2, m_Ox, m_Oy, gw, gh, 256, 256, true);
 			m_GroundV.SetAlpha(0);
 		}
 		if (!m_Water && m_Film.biomeTo != m_Film.biomeFrom && m_Film.biomeTo != "")
 		{
-			m_GroundB = new DL_Strip(m_Root, Ground(m_Film.biomeTo), 2, m_Ox, m_Oy, gw, gh, 256, 256, true);
+			if (m_Sky)
+				m_GroundB = new DL_Strip(m_Root, SkyGround(m_Film.biomeTo), 2, m_Ox, m_Oy, gw, gh, 256, 512, true);
+			else
+				m_GroundB = new DL_Strip(m_Root, Ground(m_Film.biomeTo), 2, m_Ox, m_Oy, gw, gh, 256, 256, true);
 			m_GroundB.SetAlpha(0);
+		}
+		if (m_Sky)
+		{
+			// a sea crossing now and then; clouds under the plane and a few thin ones over it
+			m_GroundSea = new DL_Strip(m_Root, DIR + "sky_sea_ca.paa", 2, m_Ox, m_Oy, gw, gh, 256, 512, true);
+			m_SeaA = 0;
+			m_GroundSea.SetAlpha(0);
+			m_SeaNext = Math.RandomFloat(6, 14);
+			m_SeaLeft = 0;
+			m_Clouds.Clear();
+			m_HighClouds.Clear();
+			for (int ci = 0; ci < 9; ci++)
+				m_Clouds.Insert(new DL_FilmThing(m_Root, 5, DIR + "clouds_ca.paa", m_Px, 128, 128, 256, 256, 1));
+			for (int hi = 0; hi < 3; hi++)
+			{
+				DL_FilmThing hc = new DL_FilmThing(m_Root, SORT_TOP - 2000, DIR + "clouds_ca.paa", m_Px, 128, 128, 256, 256, 1.5);
+				hc.sprite.SetAlpha(0.45);
+				m_HighClouds.Insert(hc);
+			}
+			for (int pc = 0; pc < 5; pc++)
+				SpawnCloud(m_Clouds, Math.RandomFloat(-40, m_ViewH));
+			m_NextCloud = Math.RandomFloat(40, 90);
 		}
 		// roadside props and wrecks: a pool that is recycled as they scroll off the top
 		for (int i = 0; i < 16; i++)
@@ -835,7 +894,7 @@ class DL_FilmPlayer
 		m_NextWreck = 1.5;
 		for (int k = 0; k < 8; k++)
 		{
-			if (!m_Water)
+			if (!m_Water && !m_Sky)
 				SpawnProp(Math.RandomFloat(0, m_ViewH));
 		}
 		m_Speed = 0;
@@ -885,6 +944,17 @@ class DL_FilmPlayer
 			SetCar(c, CarTex("moped", colour, "red"), 32, 64, 30, 58, 1, 1);
 			SetOver(c, OverTex("moped", "front", colour, "red"), 32, 64, 30, 58);
 		}
+		else if (look == "plane")         // LM's Planes (optional mod): a stand-in until the real art
+		{
+			c.kind = "plane";
+			c.look = "plane";
+			string ptex = CarTex("plane", colour, "cessna");
+			c.shadow = new DL_Sprite(m_Root, ptex, 4, 64 * m_Px, 56 * m_Px, 64, 64);
+			c.shadow.Cell(0, 0, 64, 56);
+			c.shadow.SetColor(ARGB(255, 0, 0, 0));
+			c.shadow.SetAlpha(0.22);
+			SetCar(c, ptex, 64, 64, 64, 56, 1, 1);
+		}
 		else if (look == "boat")          // Boat_01 (placeholder art)
 		{
 			c.kind = "boat";
@@ -910,6 +980,7 @@ class DL_FilmPlayer
 	static const string PAINTS_BIKE = ",red,green,blue,yellow,grey,";
 	static const string PAINTS_MOPED = ",red,yellow,blue,grey,";
 	static const string PAINTS_BOAT = ",blue,black,orange,camo,grey,";
+	static const string PAINTS_PLANE = ",cessna,tiger,spitfire,";
 	static const string PAINTS_HUMVEE = ",camo,beige,grey,";
 	static const float HUMVEE_W = 62;     // the M1025 sprite with its shadow (Tools/build-anim-assets.py prints it)
 	static const float HUMVEE_H = 85;
@@ -931,6 +1002,8 @@ class DL_FilmPlayer
 			have = PAINTS_MOPED;
 		else if (base == "boat")
 			have = PAINTS_BOAT;
+		else if (base == "plane")
+			have = PAINTS_PLANE;
 		else if (base == "humvee")
 			have = PAINTS_HUMVEE;
 		if (c == "" || !have.Contains("," + c + ","))
@@ -1411,7 +1484,7 @@ class DL_FilmPlayer
 				Formation(false);
 			}
 		}
-		else if (e.kind == "walk" && m_Water)
+		else if (e.kind == "walk" && (m_Water || m_Sky))
 		{
 			ToLand();
 			m_Target = WALK;
@@ -1435,6 +1508,29 @@ class DL_FilmPlayer
 	protected void ToLand()
 	{
 		m_Water = false;
+		if (m_Sky)
+		{
+			// the plane came down: the road, no more clouds or sea, the plane stays where it landed
+			m_Sky = false;
+			if (m_GroundSea)
+				m_GroundSea.SetAlpha(0);
+			if (m_GroundV)
+				m_GroundV.SetAlpha(0);
+			if (m_GroundB)
+				m_GroundB.SetAlpha(0);
+			m_GroundV = null;
+			m_GroundB = null;
+			foreach (DL_FilmThing ct : m_Clouds)
+			{
+				ct.used = false;
+				ct.sprite.Show(false);
+			}
+			foreach (DL_FilmThing ht : m_HighClouds)
+			{
+				ht.used = false;
+				ht.sprite.Show(false);
+			}
+		}
 		if (m_GroundLand)
 			m_GroundLand.SetAlpha(1);
 		if (m_GroundA)
@@ -1808,6 +1904,10 @@ class DL_FilmPlayer
 		{
 			if (m_Convoy)
 				return "The convoy rolls on: " + km;
+			if (m_Sky && m_Convoy)
+				return "The formation flies on: " + km;
+			if (m_Sky)
+				return "In the air: " + km;
 			return "On the road: " + km;
 		}
 		if (e.kind == "swim")
@@ -1834,6 +1934,8 @@ class DL_FilmPlayer
 			return "Out of gas. " + who + " found some fuel!";
 		if (e.kind == "fuel" && e.detail == "shared")
 			return "Running dry. " + who + " brings a jerry can.";
+		if (e.kind == "fuel" && e.detail == "landed")
+			return "Out of fuel: an emergency landing.";
 		if (e.kind == "fuel" && m_V && m_V.kind == "boat")
 		{
 			if (m_Convoy)
@@ -1925,6 +2027,9 @@ class DL_FilmPlayer
 			m_Km += e.km / len * dt;
 		else if (e.kind == "find")
 			SceneFind(e);
+		else if (m_V && m_V.kind == "plane" && !m_V.inWorld && (e.kind == "fuel" || e.kind == "move" || e.kind == "flat"))
+		{
+		}
 		else if (m_V && m_V.kind == "boat" && (e.kind == "flat" || e.kind == "fuel" || e.kind == "move"))
 			SceneBoat(e);
 		else if (e.kind == "flat")
@@ -2557,21 +2662,28 @@ class DL_FilmPlayer
 			m_Speed = Math.Max(m_Target, m_Speed - a * 1.4);
 		float dy = m_Speed * dt;
 		m_Scroll += dy;
-		m_GroundA.Scroll(m_Scroll * m_Px);
+		float gk = 1;
+		if (m_Sky)
+			gk = SKY_GROUND_K;             // far below: it moves slowly
+		m_GroundA.Scroll(m_Scroll * gk * m_Px);
 		if (m_GroundLand)
 			m_GroundLand.Scroll(m_Scroll * m_Px);
+		if (m_GroundSea)
+			m_GroundSea.Scroll(m_Scroll * gk * m_Px);
 		if (m_GroundV)
 		{
-			m_GroundV.Scroll(m_Scroll * m_Px);
+			m_GroundV.Scroll(m_Scroll * gk * m_Px);
 			m_GroundV.SetAlpha(ViaAlpha());
 		}
 		if (m_GroundB)
 		{
-			m_GroundB.Scroll(m_Scroll * m_Px);
+			m_GroundB.Scroll(m_Scroll * gk * m_Px);
 			m_GroundB.SetAlpha(ToAlpha());
 		}
 		// props and wrecks come up from the bottom
-		if (m_Speed > 1 && !m_Water)
+		if (m_Sky)
+			SkyStep(dt, dy);
+		if (m_Speed > 1 && !m_Water && !m_Sky)
 		{
 			m_NextProp -= dy;
 			if (m_NextProp <= 0)
@@ -2608,7 +2720,22 @@ class DL_FilmPlayer
 			float bob = 0;
 			if ((m_Speed > 20 || c.driveOff) && !c.inWorld)
 				bob = Math.Sin(m_T * 18 + c.idx * 1.7) * 0.5;
+			if (c.kind == "plane" && !c.inWorld)
+				bob = Math.Sin(m_T * 1.3 + c.idx * 2.1) * 2.5;      // a slow sway in the air
 			c.drawX = c.x + bob;
+			if (c.shadow)
+			{
+				// in the air its shadow is far down-right on the ground; down on the road, right under it
+				float sdx = 34;
+				float sdy = 58;
+				if (c.inWorld || !m_Sky)
+				{
+					sdx = 4;
+					sdy = 3;
+				}
+				c.shadow.MoveTo(m_Ox + (c.x - c.w / 2 + sdx + bob * 0.4) * m_Px, m_Oy + (c.y - c.h / 2 + sdy) * m_Px);
+				c.shadow.SetSort(4);
+			}
 			c.sprite.MoveTo(m_Ox + (c.x - c.w / 2 + bob) * m_Px, m_Oy + (c.y - c.h / 2) * m_Px);
 			float front = c.y + c.h / 2 - 4;
 			if (c.over)
@@ -2697,6 +2824,64 @@ class DL_FilmPlayer
 		{
 			m_Puff.y -= dt * 3;
 			m_Puff.Place(m_Px, m_Ox, m_Oy);
+		}
+	}
+
+	// the sky per frame: clouds come up from the bottom (under the plane, and a few thin ones over it), a sea
+	// crossing fades in and out now and then
+	protected void SkyStep(float dt, float dy)
+	{
+		foreach (DL_FilmThing c : m_Clouds)
+			ScrollThing(c, dy * CLOUD_K);
+		foreach (DL_FilmThing h : m_HighClouds)
+			ScrollThing(h, dy * HIGH_CLOUD_K);
+		if (m_Speed > 1)
+		{
+			m_NextCloud -= dy * CLOUD_K;
+			if (m_NextCloud <= 0)
+			{
+				if (Math.RandomFloat01() < 0.22)
+					SpawnCloud(m_HighClouds, m_ViewH + 100);
+				else
+					SpawnCloud(m_Clouds, m_ViewH + 70);
+				m_NextCloud = Math.RandomFloat(45, 110);
+			}
+			float flying = dt * (m_Speed / DRIVE);
+			if (m_SeaLeft > 0)
+			{
+				m_SeaLeft -= flying;
+				m_SeaA = Math.Min(1, m_SeaA + dt * 0.35);
+			}
+			else
+			{
+				m_SeaA = Math.Max(0, m_SeaA - dt * 0.35);
+				m_SeaNext -= flying;
+				if (m_SeaNext <= 0)
+				{
+					m_SeaLeft = Math.RandomFloat(4, 8);
+					m_SeaNext = Math.RandomFloat(14, 30);
+				}
+			}
+		}
+		if (m_GroundSea)
+			m_GroundSea.SetAlpha(m_SeaA);
+	}
+
+	protected void SpawnCloud(array<ref DL_FilmThing> pool, float y)
+	{
+		foreach (DL_FilmThing t : pool)
+		{
+			if (t.used)
+				continue;
+			int cell = Math.RandomInt(0, 4);
+			int col = cell % 2;
+			int row = cell / 2;
+			t.sprite.Cell(col * 128, row * 128, 128, 128);
+			t.x = Math.RandomFloat(-30, 286);
+			t.y = y;
+			t.used = true;
+			t.sprite.Show(true);
+			return;
 		}
 	}
 
@@ -2889,7 +3074,7 @@ class DL_FilmPlayer
 		DL_Film f = new DL_Film();
 		f.car = "4x4@green";
 		f.biomeFrom = "forest";
-		int pick = s_DemoN % 8;
+		int pick = s_DemoN % 9;
 		if (pick == 5)
 		{
 			f.car = "";
@@ -2908,6 +3093,21 @@ class DL_FilmPlayer
 			f.Add("drive", 20);
 			f.Add("flat", 40, "OrionKaelin", "kit", 1);
 			f.Add("drive", 20);
+			return f;
+		}
+		if (pick == 8)
+		{
+			// a plane trip over fields, forest and a sea crossing (LM's Planes; stand-in art)
+			f.car = "plane@cessna";
+			f.km = 180;
+			f.biomeFrom = "field";
+			f.biomeVia = "forest";
+			f.biomeTo = "snow";
+			f.crew.Insert(DemoActor("Derk", "veteran", "orelpants,oreljacket,razgruz,helmetarmy", "akmrifle", "", 0));
+			f.crew.Insert(DemoActor("Britney", "kate", "sportpants@black,raincoatblue,warmhat@lightblue", "", "", 0));
+			f.Add("drive", 120);
+			f.Add("fuel", 120, "", "landed", 0);
+			f.Add("walk", 20);
 			return f;
 		}
 		if (pick == 7)

@@ -3,12 +3,43 @@
 // Transport (crew, seats, inventory), but engine and fluid calls are on each kind (car.c, motorbike.c, boat.c in
 // 3_game/vehicles; the fluids are the same ETransportFluid list everywhere: FUEL, OIL, BRAKE, COOLANT, USER1-4).
 // Helicopters are not travel vehicles.
+// Planes (optional: LM's Planes, workshop 3639695989, by Llama): known by class name only, so DriveLink builds and
+// runs the same without that mod; they travel through plane zones (DL_Zone.air) only, in flight.
 
 class DL_Veh
 {
-	// "car" | "bike" | "boat" | "" (not a travel vehicle)
+	// the aircraft of LM's Planes: its vehicles are all CarScripts named LM_... (Cessna180, Tigermoth (MK2, MK3),
+	// Spitfire, Catalina, DC_3, Patty_Wagon, StuntPlane, Z37_Bumblebee and their variants); its other LM_ things
+	// (tracers, the hangar) are not CarScripts
+	static bool IsPlaneType(string type)
+	{
+		string t = type;
+		t.ToLower();
+		return t.IndexOf("lm_") == 0 && g_Game.IsKindOf(type, "CarScript");
+	}
+
+	static bool IsPlane(EntityAI t)
+	{
+		return t && Transport.Cast(t) && IsPlaneType(t.GetType());
+	}
+
+	// a plane in the air: more than 15 m above the ground (or the sea)
+	static bool Flying(EntityAI t)
+	{
+		if (!IsPlane(t))
+			return false;
+		vector p = t.GetPosition();
+		float below = g_Game.SurfaceY(p[0], p[2]);
+		if (g_Game.SurfaceIsSea(p[0], p[2]))
+			below = Math.Max(below, g_Game.SurfaceGetSeaLevel());
+		return p[1] - below > 15;
+	}
+
+	// "car" | "bike" | "boat" | "plane" | "" (not a travel vehicle)
 	static string Kind(EntityAI t)
 	{
+		if (IsPlane(t))
+			return "plane";
 		if (Boat.Cast(t))
 			return "boat";
 		if (Motorbike.Cast(t))
@@ -26,6 +57,8 @@ class DL_Veh
 	// a class name's kind (snapshots: DL_CarData.type)
 	static string KindOf(string type)
 	{
+		if (IsPlaneType(type))
+			return "plane";
 		if (g_Game.IsKindOf(type, "Boat"))
 			return "boat";
 		if (g_Game.IsKindOf(type, "Motorbike"))

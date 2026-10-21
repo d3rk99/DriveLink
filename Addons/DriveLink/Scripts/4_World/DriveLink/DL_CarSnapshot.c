@@ -17,6 +17,7 @@ class DL_CarSnapshot
 		d.pos = car.GetPosition();
 		d.ori = car.GetOrientation();
 		d.health = car.GetHealth("", "Health");
+		d.vel = GetVelocity(car);
 		for (int f = 0; f < FLUIDS; f++)
 		{
 			d.fluids.Insert(DL_Veh.Fraction(car, f));

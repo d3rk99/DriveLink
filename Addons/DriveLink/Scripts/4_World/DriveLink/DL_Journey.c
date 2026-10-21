@@ -53,6 +53,7 @@ class DL_Journey
 	float walkedKm;
 	float swumKm;             // a boat party with no boat (seat) left swims; the walk legs of the water
 	bool water;               // a party of boats (parties are by kind: boats only travel with boats)
+	bool air;                 // a party of planes: no flats, nothing to find up there, no fuel but what they carry
 	// swimming: the chance to drown on a 10 km leg grows with every 10 km already swum (drownPct, x2, x3 ...);
 	// beside a boat of the party (holding on) half that, hurt (health under 50) half as much again
 	static const float SWIM_SPEED_X = 0.5;    // at half the walking speed
@@ -230,6 +231,8 @@ class DL_Journey
 		{
 			if (DL_Veh.IsBoat(bv.live))
 				j.water = true;
+			if (DL_Veh.IsPlane(bv.live))
+				j.air = true;
 		}
 		j.film.km = z.distanceKm;
 		foreach (DL_Traveller ft : j.crew)
@@ -246,8 +249,8 @@ class DL_Journey
 			float f = leg / 10.0;
 			float at = done + leg;
 			// the road gives: a gas station, food, water (weakened mode; not when everyone is dead)
-			if (weakened && j.Alive() > 0)
-				j.Finds(t, f, done);
+			if (weakened && j.Alive() > 0 && !(j.air && j.Driving() > 0 && j.In(-1).Count() == 0))
+				j.Finds(t, f, done);         // not while flying
 			// each car: a driver, fuel, wear, a flat
 			foreach (DL_JVehicle cv : j.vehicles)
 			{
@@ -678,6 +681,13 @@ class DL_Journey
 			else
 			{
 				DL_Traveller finder = AnyIn(v.idx);
+				if (DL_Veh.IsPlane(v.live))
+				{
+					// nowhere to find fuel up there: an emergency landing, on foot from where it came down
+					film.Add("fuel", done, "", "landed", v.idx);
+					Abandon(v, at, "Ran out of fuel " + Math.Round(at).ToString() + " km in: an emergency landing, and " + CarOf(v) + " stayed where it came down.");
+					return;
+				}
 				if (weakened && finder && Roll(t.luckGasPct))
 				{
 					v.luckyFuel = true;
@@ -898,6 +908,8 @@ class DL_Journey
 	// (one that fits this car) or the kit may come from any car or anyone in it.
 	protected void FlatTyre(DL_TravelRules t, float f, DL_JVehicle v, float at)
 	{
+		if (DL_Veh.IsPlane(v.live))
+			return;                      // in the air
 		DL_CarData car = v.car;
 		array<string> types = DL_TravelCost.WheelTypes(v.live);
 		// the wheels it runs on (mounted, not in a spare slot), and how worn they are

@@ -8,6 +8,7 @@
 import os, shutil, subprocess, sys, random
 import anim_boat   # Tools/anim_boat.py: the inflatable Boat_01
 import anim_humvee # Tools/anim_humvee.py: the M1025 (Offroad_02)
+import anim_sky      # Tools/anim_sky.py: plane trips - the ground far below, the sea, clouds, a stand-in plane
 import anim_station  # Tools/anim_station.py: the gas station lot + canopy roof (MiniDayZ buildings)
 import anim_bikes  # Tools/anim_bikes.py: the dirt bike (Motorbike_02), the moped (Motorbike_01), the boat wake
 from PIL import Image, ImageDraw
@@ -455,6 +456,7 @@ CAR_PAINTS = {
     'bike': {'red': (0, 0, 0), 'green': (0, 0, 0), 'blue': (0, 0, 0), 'yellow': (0, 0, 0), 'grey': (0, 0, 0)},      # anim_bikes.DIRT
     'moped': {'red': (0, 0, 0), 'yellow': (0, 0, 0), 'blue': (0, 0, 0), 'grey': (0, 0, 0)},                         # anim_bikes.MOPED
     'humvee': {'camo': (0, 0, 0), 'beige': (0, 0, 0), 'grey': (0, 0, 0)},                                         # anim_humvee
+    'plane': {'cessna': (0, 0, 0), 'tiger': (0, 0, 0), 'spitfire': (0, 0, 0)},                                     # anim_sky stand-in
     'boat': {'blue': (52, 86, 150), 'black': (52, 52, 58), 'orange': (210, 112, 40), 'camo': (96, 104, 70), 'grey': (138, 138, 138)},
 }
 
@@ -523,7 +525,7 @@ def car_sprites(tmp):
     volga = clean_paint(volga, (4, 4, 56, 66))
     uaz = Image.open(os.path.join(PACK, MINIDAYZ['uaz_ca'])).convert('RGBA').crop((176, 80, 244, 154))
     drawn = {'truck': top_truck, 'bike': top_bike}
-    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None), ('humvee', None), ('bike', None), ('moped', None), ('boat', None)):
+    for base, im in (('sedan', volga), ('4x4', uaz), ('truck', None), ('humvee', None), ('plane', None), ('bike', None), ('moped', None), ('boat', None)):
         for name, rgb in CAR_PAINTS[base].items():
             if base in ('boat', 'bike', 'moped'):
                 # drawn per variant with its own colours; the second picture is drawn over the crew (the boat's motor,
@@ -546,7 +548,9 @@ def car_sprites(tmp):
                 if name == next(iter(CAR_PAINTS[base])):
                     print('car', base, car.size)
                 continue
-            if base == 'humvee':
+            if base == 'plane':
+                car = anim_sky.draw_plane(name)          # no shadow on it: the film puts one far below
+            elif base == 'humvee':
                 car = reshadow(anim_humvee.draw(name))
             elif base in drawn:
                 car = reshadow(drawn[base](rgb))
@@ -574,6 +578,7 @@ def main():
     os.makedirs(OWN_SRC, exist_ok=True)
     pngs = []
     own = [('ground_%s_ca' % b, (lambda b=b: ground_tile(b))) for b in BIOMES] + [('props_ca', props_atlas), ('ground_water_ca', water_tile)]
+    own += [('sky_%s_ca' % b, (lambda b=b: anim_sky.ground(b))) for b in BIOMES] + [('sky_sea_ca', anim_sky.sea), ('clouds_ca', anim_sky.clouds)]
     for name, fn in own:
         p = os.path.join(OWN_SRC, name + '.png')
         fn().save(p)

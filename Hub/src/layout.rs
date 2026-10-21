@@ -75,6 +75,13 @@ pub fn clean_zones(v: &Value) -> Value {
                     "name": z.get("name").and_then(Value::as_str).unwrap_or("Zone"),
                     "center": [num(z, "center", 0), 0.0, num(z, "center", 2)],
                     "radius": z.get("radius").and_then(Value::as_f64).unwrap_or(30.0).max(1.0),
+                    // "circle" (centre + radius) | "rect" (centre + width along x + depth along z, axis-aligned:
+                    // a whole map border can be one zone)
+                    "shape": if z.get("shape").and_then(Value::as_str) == Some("rect") { "rect" } else { "circle" },
+                    "width": z.get("width").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 100000.0),
+                    "depth": z.get("depth").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 100000.0),
+                    // a plane zone: only aircraft in flight travel through it (and they through no other zone)
+                    "air": z.get("air").and_then(Value::as_bool).unwrap_or(false),
                     "to": z.get("to").and_then(Value::as_str).unwrap_or(""),
                     "arrival": z.get("arrival").and_then(Value::as_str).unwrap_or(""),
                     // travel cost/time scale with this (0 = free, instant)
@@ -101,6 +108,9 @@ pub fn clean_arrivals(v: &Value) -> Value {
                     // a boat that comes along goes on the water here; 0 0 = the nearest free water (the server looks)
                     "boatPos": [num(a, "boatPos", 0), 0.0, num(a, "boatPos", 2)],
                     "boatYaw": a.get("boatYaw").and_then(Value::as_f64).unwrap_or(0.0).rem_euclid(360.0),
+                    // a plane arrives here in flight: x, height above the terrain (m), z; 0 0 = above the point
+                    "airPos": [num(a, "airPos", 0), num(a, "airPos", 1), num(a, "airPos", 2)],
+                    "airYaw": a.get("airYaw").and_then(Value::as_f64).unwrap_or(0.0).rem_euclid(360.0),
                 })
             })
             .collect(),

@@ -77,6 +77,7 @@ class DL_Room
 	int convoyCars;
 	bool convoyReady;                               // built and seated, waiting for the rest of the convoy
 	bool boat;                                      // a boat: the crew waits on land, the boat goes on the water
+	bool air;                                       // a plane: the crew waits on land, the plane is built in the air
 	vector landPos;                                 // a boat's crew: where they wait (the arrival point)
 	float landYaw;
 	int seatedAt;                                   // g_Game.GetTime() when everyone is seated (0 = not yet going)
@@ -115,6 +116,8 @@ modded class MissionServer
 	static const int DL_GROUP_MAX = 8;
 	protected ref map<string, bool> m_DL_Leaving = new map<string, bool>;  // steamIds being sent away (zone check skips them)
 	protected ref map<string, bool> m_DL_MustLeaveZone = new map<string, bool>; // trip failed: no new countdown until he steps out
+	static const float DL_AIR_HEIGHT = 300;      // a plane comes in this high above the ground (plane entry not set)
+	static const float DL_AIR_MIN_SPEED = 45;    // m/s (162 km/h): at least this, so it doesn't stall
 	protected ref map<string, ref DL_ServerInfo> m_DL_GoHome = new map<string, ref DL_ServerInfo>; // died here, not the starting server: his respawn goes there
 	protected ref map<PlayerBase, bool> m_DL_Doomed = new map<PlayerBase, bool>; // characters that live elsewhere now: delete + CharacterKill on logout
 	protected float m_DL_Tick;
@@ -1259,6 +1262,15 @@ modded class MissionServer
 			room.boat = d.vehKind == "boat" || (d.car && d.car.type != "" && DL_Veh.KindOf(d.car.type) == "boat");
 			room.landPos = ap.pos;
 			room.landYaw = ap.yaw;
+			room.air = d.vehKind == "plane" || (d.car && d.car.type != "" && DL_Veh.KindOf(d.car.type) == "plane");
+			if (room.air)
+			{
+				room.landPos = DL_LandNear(ap.pos, group);
+				room.carPos = DL_AirSpot(ap, d.convoyIdx);
+				room.carYaw = ap.airYaw;
+				if (ap.airPos[0] == 0 && ap.airPos[2] == 0)
+					room.carYaw = ap.yaw;
+			}
 			if (room.boat)
 			{
 				// the crew waits on dry land: an arrival point set out on the water would build them on the sea floor
@@ -1268,7 +1280,7 @@ modded class MissionServer
 				room.carYaw = byaw;
 			}
 		}
-		if (newRoom && d.car && d.car.type != "" && !room.boat)
+		if (newRoom && d.car && d.car.type != "" && !room.boat && !room.air)
 			room.carPos = DL_FreeCarSpot(room.carPos, room.carYaw, d.car.type, group);
 		if (d.crewCount > room.expected)
 			room.expected = d.crewCount;
@@ -1286,10 +1298,10 @@ modded class MissionServer
 		vector fwd = Vector(room.carYaw, 0, 0).AnglesToVector();
 		vector right = Vector(room.carYaw + 90, 0, 0).AnglesToVector();
 		vector pos;
-		if (room.boat)
+		if (room.boat || room.air)
 		{
-			// a boat's crew waits on dry land at the arrival point (side by side) and is seated into the boat from
-			// there: nobody goes into the water
+			// a boat's (or plane's) crew waits on dry land at the arrival point (side by side) and is seated from
+			// there: nobody goes into the water, or falls
 			vector landRight = Vector(room.landYaw + 90, 0, 0).AnglesToVector();
 			pos = room.landPos + landRight * (1.5 * room.here.Count());
 			if (DL_Veh.WaterY(pos[0], pos[2], 0.05) >= 0)
@@ -1300,7 +1312,7 @@ modded class MissionServer
 		else
 			pos = room.carPos + right * 3 + fwd * (1.5 - 1.5 * room.here.Count());   // passengers in a row on the right
 		pos[1] = g_Game.SurfaceY(pos[0], pos[2]);
-		if (room.boat)
+		if (room.boat || room.air)
 			pos[1] = Math.Max(pos[1], room.landPos[1]);   // never under the water surface
 		PlayerBase player = CreateCharacter(identity, pos, null, d.charType);
 		if (!player)
@@ -1440,7 +1452,10 @@ modded class MissionServer
 		if (!room)
 			return;
 		room.going = true;
-		if (room.boat)
+		if (room.air)
+		{
+		}
+		else if (room.boat)
 		{
 			if (!DL_WaterFree(room.carPos, room.carYaw))
 				room.carPos = DL_WaterNear(room.carPos, room.carYaw, group);
@@ -1462,6 +1477,14 @@ modded class MissionServer
 		{
 			car.SetAllowDamage(false);
 			DL_Veh.SetHidden(car, true);
+			if (room.air)
+			{
+				// up in the air: held where it is (no falling) while hidden; let go with its speed at the reveal
+				car.SetPosition(room.carPos);
+				car.SetOrientation(Vector(room.carYaw, 0, 0));
+				dBodyActive(car, ActiveState.INACTIVE);
+				car.DisableSimulation(true);
+			}
 			m_DL_GroupCar.Set(group, car);
 			// passengers who come after this get seated in it (old path) for a while, then the tag is forgotten
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ForgetGroupCar, m_DL_Cfg.crewWaitSeconds * 2000, false, group, car);
@@ -1910,6 +1933,8 @@ modded class MissionServer
 		}
 		if (serverStarts && car.CrewDriver())
 			DL_Veh.EngineStart(car);
+		if (car && room.air)
+			DL_LetFly(group, car, room);
 		string how = "driver's client";
 		if (serverStarts)
 			how = "server";
@@ -1919,6 +1944,57 @@ modded class MissionServer
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndCarProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, car);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoomEngineCheck, 4000, false, group, car);
 		}
+	}
+
+	// a plane is let go in the air: engine on, flying the way it faces at the speed it left with (at least a safe
+	// cruise), set here and on the pilot's client (cars are simulated by the driver's client)
+	protected void DL_LetFly(string group, Transport car, DL_Room room)
+	{
+		car.DisableSimulation(false);
+		dBodyActive(car, ActiveState.ACTIVE);
+		float speed = 0;
+		if (room.car)
+			speed = room.car.vel.Length();
+		if (speed < DL_AIR_MIN_SPEED)
+			speed = DL_AIR_MIN_SPEED;
+		vector vel = car.GetDirection() * speed;
+		DL_Veh.EngineStart(car);
+		Car pc = Car.Cast(car);
+		if (pc)
+			pc.ShiftTo(CarGear.FIRST);           // flying forward (planes only change gear standing still)
+		SetVelocity(car, vel);
+		PlayerBase pilot = PlayerBase.Cast(car.CrewDriver());
+		if (pilot && pilot.GetIdentity())
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write(vel);
+			rpc.Send(null, DL_Const.RPC_FLY, true, pilot.GetIdentity());
+		}
+		Print(DL_Const.LOG_TAG + "waiting room of " + group + ": " + car.GetType() + " let go in the air at " + car.GetPosition().ToString() + ", " + Math.Round(speed * 3.6).ToString() + " km/h, engine " + DL_Veh.EngineIsOn(car).ToString());
+	}
+
+	// where the k-th plane of a formation comes in: the plane entry (or above the arrival point), at its height
+	// above the ground (or the sea), each one further back and off to the right
+	protected vector DL_AirSpot(DL_ArrivalPoint ap, int k)
+	{
+		vector p = ap.airPos;
+		float yaw = ap.airYaw;
+		if (p[0] == 0 && p[2] == 0)
+		{
+			p = ap.pos;
+			yaw = ap.yaw;
+		}
+		float height = ap.airPos[1];
+		if (height < 50)
+			height = DL_AIR_HEIGHT;
+		vector fwd = Vector(yaw, 0, 0).AnglesToVector();
+		vector right = Vector(yaw + 90, 0, 0).AnglesToVector();
+		p = p - fwd * (60 * k) + right * (30 * k);
+		float below = g_Game.SurfaceY(p[0], p[2]);
+		if (g_Game.SurfaceIsSea(p[0], p[2]))
+			below = Math.Max(below, g_Game.SurfaceGetSeaLevel());
+		p[1] = below + height + 10 * k;
+		return p;
 	}
 
 	protected void DL_RoomEngineCheck(string group, Transport car)
@@ -2059,7 +2135,7 @@ modded class MissionServer
 			string sid = pb.GetIdentity().GetPlainId();
 			if (m_DL_Leaving.Contains(sid))
 				continue;
-			DL_Zone z = DL_ZoneAt(pb.GetPosition());
+			DL_Zone z = DL_ZoneFor(pb);
 			DL_Party party = DL_PartyOf(sid);
 			if (!z || !pb.IsAlive())
 			{
@@ -2190,6 +2266,8 @@ modded class MissionServer
 			return "foot";
 		if (DL_Veh.IsBoat(t))
 			return "water";
+		if (DL_Veh.IsPlane(t))
+			return "air";                // planes fly together, nothing else with them
 		return "land";
 	}
 
@@ -2208,6 +2286,8 @@ modded class MissionServer
 		{
 			if (party.kind == "water")
 				zoneName += " - convoy of " + party.leaders.Count().ToString() + " boats";
+			else if (party.kind == "air")
+				zoneName += " - formation of " + party.leaders.Count().ToString() + " planes";
 			else if (party.convoy)
 				zoneName += " - convoy of " + party.leaders.Count().ToString() + " vehicles";
 			else
@@ -2239,7 +2319,7 @@ modded class MissionServer
 				string nowKind = "";
 				if (pb)
 					nowKind = DL_PartyKind(pb);
-				bool stays = pb && pb.IsAlive() && !m_DL_Leaving.Contains(l) && !m_DL_MustLeaveZone.Contains(l) && DL_ZoneAt(pb.GetPosition()) == party.zone && !DL_IsCrewPassenger(pb) && nowKind == party.kind;
+				bool stays = pb && pb.IsAlive() && !m_DL_Leaving.Contains(l) && !m_DL_MustLeaveZone.Contains(l) && DL_ZoneFor(pb) == party.zone && !DL_IsCrewPassenger(pb) && nowKind == party.kind;
 				if (stays)
 					continue;
 				party.leaders.RemoveOrdered(k);
@@ -2512,7 +2592,7 @@ modded class MissionServer
 			return "";
 		Transport car = DL_Veh.VehicleOf(pb);
 		if (!car)
-			return "Only cars, trucks, motorbikes and boats can travel. Get out to travel on foot.";
+			return "Only cars, trucks, motorbikes, boats and planes can travel. Get out to travel on foot.";
 		if (car.CrewDriver() != pb)
 			return "Only a car with a player at the wheel can travel. Get out to travel on foot.";
 		for (int c = 0; c < car.CrewSize(); c++)
@@ -2527,18 +2607,37 @@ modded class MissionServer
 		return "";
 	}
 
-	protected DL_Zone DL_ZoneAt(vector pos)
+	// the zone at pos for this kind of traveller: a plane in flight only plane zones, everyone else only the others
+	protected DL_Zone DL_ZoneAt(vector pos, bool flying = false)
 	{
 		foreach (DL_Zone z : m_DL_Cfg.zones)
 		{
-			if (!z)
+			if (!z || z.air != flying)
 				continue;
 			float dx = pos[0] - z.center[0];
 			float dz = pos[2] - z.center[2];
-			if (dx * dx + dz * dz <= z.radius * z.radius)
+			if (z.shape == "rect")
+			{
+				if (Math.AbsFloat(dx) <= z.width / 2 && Math.AbsFloat(dz) <= z.depth / 2)
+					return z;
+			}
+			else if (dx * dx + dz * dz <= z.radius * z.radius)
 				return z;
 		}
 		return null;
+	}
+
+	// the zone he is in: flying a plane = plane zones only; a plane on the ground travels nowhere
+	protected DL_Zone DL_ZoneFor(PlayerBase pb)
+	{
+		Transport t = DL_Veh.VehicleOf(pb);
+		if (DL_Veh.IsPlane(t))
+		{
+			if (!DL_Veh.Flying(t))
+				return null;
+			return DL_ZoneAt(pb.GetPosition(), true);
+		}
+		return DL_ZoneAt(pb.GetPosition(), false);
 	}
 
 	protected void DL_Countdown(PlayerIdentity id, int seconds, string zoneName, string priceText)

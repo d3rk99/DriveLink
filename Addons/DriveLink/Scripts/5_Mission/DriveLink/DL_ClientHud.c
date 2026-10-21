@@ -17,6 +17,8 @@ modded class MissionGameplay
 	protected string m_DL_WaitMsg;
 	protected float m_DL_WaitAge;      // seconds since the last update from the server
 	protected bool m_DL_StartEngine;
+	protected vector m_DL_FlyVel;        // arriving in a plane: keep giving it this speed for a moment (RPC_FLY)
+	protected float m_DL_FlyT;
 	protected ref DL_FilmPlayer m_DL_Film = new DL_FilmPlayer(); // the road film (RPC_FILM); F9 = demo film
 	protected int m_DL_FilmId;                                   // the film being received in parts (RPC_FILM)
 	protected ref array<string> m_DL_FilmParts = new array<string>;
@@ -44,6 +46,18 @@ modded class MissionGameplay
 
 	protected void DL_OnRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
 	{
+		if (rpc_type == DL_Const.RPC_FLY)
+		{
+			vector fv;
+			if (ctx.Read(fv))
+			{
+				m_DL_FlyVel = fv;
+				m_DL_FlyT = 1.5;
+				m_DL_StartEngine = true;
+				Print(DL_Const.LOG_TAG + "arriving in the air: flying on at " + Math.Round(fv.Length() * 3.6).ToString() + " km/h");
+			}
+			return;
+		}
 		if (rpc_type == DL_Const.RPC_FILM)
 		{
 			int fid;
@@ -175,6 +189,20 @@ modded class MissionGameplay
 			DL_WaitHide();
 		if (m_DL_StartEngine && !m_DL_WaitWanted && !filmOn)
 			DL_TryStartEngine();
+		if (m_DL_FlyT > 0)
+		{
+			// the pilot's client simulates the plane: hold its speed until its own flight model has it
+			m_DL_FlyT -= timeslice;
+			PlayerBase me = PlayerBase.Cast(g_Game.GetPlayer());
+			if (me && me.GetCommand_Vehicle() && me.GetCommand_Vehicle().GetTransport())
+			{
+				Transport fly = me.GetCommand_Vehicle().GetTransport();
+				SetVelocity(fly, m_DL_FlyVel);
+				Car fc = Car.Cast(fly);
+				if (fc && fc.GetGear() != CarGear.FIRST)
+					fc.ShiftTo(CarGear.FIRST);
+			}
+		}
 	}
 
 	protected void DL_WaitShow(string msg)

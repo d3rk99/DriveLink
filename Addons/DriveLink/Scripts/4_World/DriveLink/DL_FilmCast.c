@@ -161,6 +161,16 @@ class DL_FilmCast
 			look = "boat";                     // Boat_01
 			colour = "blue";
 		}
+		else if (DL_Veh.IsPlaneType(t))
+		{
+			look = "plane";                    // LM's Planes (optional mod)
+			colour = "cessna";
+			if (t.Contains("spitfire"))
+				colour = "spitfire";
+			else if (t.Contains("tigermoth"))
+				colour = "tiger";
+			return look + "@" + colour;
+		}
 		else if (t.Contains("offroadhatchback"))
 			colour = "green";                  // Ada 4x4
 		else if (t.Contains("civiliansedan"))

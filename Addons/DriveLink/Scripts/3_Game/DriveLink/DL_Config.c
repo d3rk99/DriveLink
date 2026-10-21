@@ -10,6 +10,7 @@ class DL_Const
 	static const string DEBUG_FILE = "$profile:DriveLink/debug.json";
 	static const int RPC_REDIRECT = 4810001;   // server -> client: go to this server
 	static const int RPC_COUNTDOWN = 4810002;  // server -> client: leaving in N s (0 = cancelled)
+	static const int RPC_FLY = 4810008;        // server -> a plane's pilot: vector velocity, keep it flying (arrival)
 	static const int RPC_KICK = 4810003;       // server -> client: show this message (caption, text) and leave the server
 	static const int RPC_FILM = 4810005;       // server -> client: the road film of his trip (DL_Film as JSON), in
 	                                           // parts: int id, int part, int parts, string chunk (a long film's JSON
@@ -31,6 +32,10 @@ class DL_Zone
 	string name;              // shown to players
 	vector center;            // x y z (y ignored)
 	float radius = 30;        // metres
+	string shape = "circle";  // "circle" (centre + radius) | "rect" (centre + width along x, depth along z)
+	float width;
+	float depth;
+	bool air;                 // a plane zone: only aircraft in flight travel through it, and they through no other
 	string to;                // target server id (from the hub)
 	string arrival;           // arrival point name on the target
 	float distanceKm;         // trip length: travel cost/time scale with it (0 = free, instant)
@@ -92,6 +97,8 @@ class DL_ArrivalPoint
 	float carYaw;
 	vector boatPos;           // where a boat that comes along is put on the water; "0 0 0" = the nearest free water
 	float boatYaw;
+	vector airPos;            // a plane arrives here in flight: x, height above the ground, z; "0 0 0" = above pos
+	float airYaw;
 }
 
 class DL_Config
@@ -260,6 +267,7 @@ class DL_CarData
 	ref array<float> fluidCaps = new array<float>; // capacity per CarFluid on the source (a brand-new car may read 0 at first)
 	ref array<ref DL_Zone_Health> zones = new array<ref DL_Zone_Health>;
 	ref array<ref DL_ItemData> items = new array<ref DL_ItemData>;
+	vector vel;               // its velocity when it left, m/s (a plane goes on flying with it)
 }
 
 // $profile:DriveLink/debug.json - test switches, only read when the file exists. Never ship it on a live server.
