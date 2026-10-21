@@ -1,5 +1,7 @@
 # DriveLink
 
+![DriveLink](Art/workshop-cover-v2.png)
+
 Walk, drive, ride or sail from one DayZ server to another - with your character, everything you carry, your car
 and your crew. DriveLink links DayZ servers (and maps) into one world: players leave through a zone at the edge of
 a map and arrive on the next server. The road between costs food, water and fuel, takes time if you want it to,
