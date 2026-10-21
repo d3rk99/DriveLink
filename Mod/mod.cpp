@@ -1,0 +1,9 @@
+name = "DriveLink";
+picture = "DriveLink/gui/anim/logo_ca.paa";
+logo = "DriveLink/gui/anim/logo_ca.paa";
+logoSmall = "DriveLink/gui/anim/logo_ca.paa";
+logoOver = "DriveLink/gui/anim/logo_ca.paa";
+tooltip = "Walk, drive, ride or sail from one DayZ server to another - with your character, your gear, your car and your crew.";
+overview = "DriveLink links DayZ servers (and maps) into one world. Leave through a zone at a map's edge and arrive on the next server with everything you carry; the road between costs food, water and fuel and may cost more. Needs the DriveLink Hub (see the Workshop page). Road film art from MiniDayZ (c) Bohemia Interactive, used with permission.";
+author = "Derk";
+version = "0.4.0";

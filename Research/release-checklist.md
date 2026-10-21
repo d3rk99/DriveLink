@@ -7,10 +7,10 @@ Planes (LM's Planes) are on hold: the code stays, dormant, until that mod is sta
 | # | What | Where | Notes |
 |---|---|---|---|
 | B1 | ~~MiniDayZ art~~ **resolved 2026-10-21: Bohemia gave the OK** to use it | `Tools/build-anim-assets.py` MINIDAYZ list, `build-anim-characters.py`; built locally | Keep Bohemia's written OK on file; credit "MiniDayZ art (c) Bohemia Interactive, used with permission" on the Workshop page and in the README. The textures are still built from the local archive (gitignored); the release PBO packs them. |
-| B2 | **Release signing key** | `@DriveLink` is signed with `DriveLinkLocalTest` | Make a release key pair; ship `keys/DriveLink.bikey` inside `@DriveLink` (it has no keys folder now). Keep the .biprivatekey out of every repo / zip. |
+| B2 | ~~Release signing key~~ done 2026-10-21: `DriveLink` key in C:\DayZMods\DriveLink-signing (copy in KeyBackups - also keep one OFF this PC); build-mod.ps1 signs every build and puts keys\DriveLink.bikey in @DriveLink | | |
 | B3 | **Hub distribution** | `Hub/` (Rust, Windows exe) | A release zip/installer (exe + README), maybe a Linux build. `DriveLinkHub.exe install` (Windows service) exists - document it. |
-| B4 | **Server-owner docs** | `README.md` is one line | Install (mod on every server + every client, hub on one machine), `config.json` (hubUrl, hubKey), approving servers, firewall, drawing zones/arrivals, travel settings + presets, starting server, troubleshooting. |
-| B5 | **Workshop page** | `WorkshopArt/` has a preview | Title, description, `mod.cpp` (name, picture, logo, tooltip, author, version), changelog, required mods (CF? none?), "needs the DriveLink Hub" link. |
+| B4 | ~~Server-owner docs~~ README.md written 2026-10-21 (install, settings, config.json, updating, troubleshooting, credits) | | Describes a "DriveLinkHub" zip that B3 still has to make. |
+| B5 | **Workshop page** - mod.cpp done 2026-10-21 (Mod/mod.cpp, logo Tools/make-logo.py, own art) | `WorkshopArt/` is PersistentBodies' | Still to do: a DriveLink preview image (1024 x 1024), the Workshop description, the upload. |
 
 ## 2. Debug / test-only code to remove or gate
 

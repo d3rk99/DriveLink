@@ -597,6 +597,9 @@ def main():
         pow2(im).save(dst)  # palette PNGs make ImageToPAA fail; pad to 2^n
         pngs.append(dst)
     pngs += car_sprites(tmp)
+    logo = os.path.join(REPO, 'Art', 'logo_ca.png')   # Tools/make-logo.py (mod.cpp's picture / logo)
+    if os.path.exists(logo):
+        pngs.append(logo)
     for name, im in (('gaslot_ca', anim_station.draw_lot('field')), ('gaslot_snow_ca', anim_station.draw_lot('snow')),
                      ('gasroof_ca', anim_station.draw_roof())):
         dst = os.path.join(tmp, name + '.png')     # MiniDayZ-derived: built locally, not committed

@@ -42,5 +42,22 @@ if ($LASTEXITCODE -ne 0 -or $log -match "\[ERROR\]") {
 }
 if (!(Test-Path $pbo) -or (Get-Item $pbo).LastWriteTime -lt $started.AddSeconds(-2)) { throw "No new PBO at $pbo" }
 Write-Host "Built $pbo ($((Get-Item $pbo).Length) bytes)"
-$link = "E:\Steam\steamapps\common\DayZServer\@DriveLink"
+# signed with the release key (kept OUTSIDE the repo; a copy in C:\DayZMods\KeyBackups), its public key in keys\,
+# mod.cpp (name, logo, description) at the mod's root
+$signDir = "C:\DayZMods\DriveLink-signing"
+$privKey = Join-Path $signDir "DriveLink.biprivatekey"
+$pubKey  = Join-Path $signDir "DriveLink.bikey"
+$signer  = "E:\Steam\steamapps\common\DayZ Tools\Bin\DsUtils\DSSignFile.exe"
+Get-ChildItem -LiteralPath $out -Filter "*.bisign" | Remove-Item -Force
+if (Test-Path -LiteralPath $privKey) {
+  & $signer $privKey $pbo
+  if ($LASTEXITCODE -ne 0) { throw "DSSignFile failed" }
+  $keys = Join-Path $modRoot "keys"
+  New-Item -ItemType Directory -Force -Path $keys | Out-Null
+  Get-ChildItem -LiteralPath $keys -Filter "*.bikey" | Remove-Item -Force
+  Copy-Item -LiteralPath $pubKey -Destination $keys -Force
+  Write-Host "Signed with DriveLink.biprivatekey, keys\DriveLink.bikey"
+} else { Write-Host "WARNING: no $privKey - the PBO is NOT signed" }
+Copy-Item -LiteralPath (Join-Path $repo "Mod\mod.cpp") -Destination $modRoot -Force
+$link ="E:\Steam\steamapps\common\DayZServer\@DriveLink"
 if (!(Test-Path -LiteralPath $link)) { New-Item -ItemType Junction -Path $link -Target $modRoot | Out-Null; Write-Host "Linked $link" }
