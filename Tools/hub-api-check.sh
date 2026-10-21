@@ -118,6 +118,10 @@ expect "travel: layout with a 60 km zone" "$(apost /admin/api/layout/chernarus '
 expect "travel: save rules" "$(apost /admin/api/servers/chernarus/travel '{"mode":"weakened","foodFootPct":20,"timeEnabled":true,"speedCarKmh":9999,"fuelLiters":-3}')" 200
 has "travel: speed clamped" '"speedCarKmh":1000'
 has "travel: fuel clamped" '"fuelLiters":0'
+has "travel: old % food becomes kcal" '"foodFootKcal":1000'
+expect "travel: kcal/ml rules" "$(apost /admin/api/servers/chernarus/travel '{"mode":"weakened","foodFootKcal":950,"waterFootMl":1500}')" 200
+has "travel: kcal saved" '"foodFootKcal":950'
+has "travel: ml saved" '"waterFootMl":1500'
 post /api/layout "$(req chernarus ",\"rev\":0")" >/dev/null; has "travel: layout carries rules" '"mode":"weakened"'
 has "travel: layout carries the distance" '"distanceKm":60'
 REV=$(grep -o '"rev":[0-9]*' "$T/body" | head -1 | cut -d: -f2)

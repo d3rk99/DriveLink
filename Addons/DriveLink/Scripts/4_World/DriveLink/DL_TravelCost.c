@@ -9,8 +9,8 @@ class DL_TravelPrice
 {
 	float km;
 	bool byCar;
-	float foodPct;            // per person, % of a full bar
-	float waterPct;
+	float foodKcal;           // per person (DayZ energy units = kcal)
+	float waterMl;
 	float fuelL;              // whole car
 	float engineWearPct;      // % of the engine's max health
 	float wheelWearPct;       // % of each wheel's max health
@@ -19,7 +19,7 @@ class DL_TravelPrice
 
 	string Text()
 	{
-		string s = Math.Round(km).ToString() + " km: " + Math.Round(foodPct).ToString() + "% food, " + Math.Round(waterPct).ToString() + "% water";
+		string s = Math.Round(km).ToString() + " km: " + DL_TravelCost.Kcal(foodKcal) + " food, " + DL_TravelCost.Ml(waterMl) + " water";
 		if (byCar)
 			s += " each, " + Math.Round(fuelL).ToString() + " L fuel";
 		if (seconds > 0)
@@ -69,16 +69,16 @@ class DL_TravelCost
 		float k = z.distanceKm / 10.0;
 		if (byCar)
 		{
-			p.foodPct = t.foodCarPct * k;
-			p.waterPct = t.waterCarPct * k;
+			p.foodKcal = t.foodCarKcal * k;
+			p.waterMl = t.waterCarMl * k;
 			p.fuelL = FuelFor(t, veh, z.distanceKm);
 			p.engineWearPct = t.wearEnginePct * k;
 			p.wheelWearPct = t.wearWheelsPct * k;
 		}
 		else
 		{
-			p.foodPct = t.foodFootPct * k;
-			p.waterPct = t.waterFootPct * k;
+			p.foodKcal = t.foodFootKcal * k;
+			p.waterMl = t.waterFootMl * k;
 		}
 		if (byCar && t.spareNeededKm > 0 && z.distanceKm > t.spareNeededKm && !DL_Veh.IsBoat(veh))
 			p.spareKm = t.spareNeededKm;
@@ -100,6 +100,21 @@ class DL_TravelCost
 			return m.ToString() + " min";
 		int mm = m % 60;
 		return (m / 60).ToString() + " h " + mm.ToString() + " min";
+	}
+
+	// "3000 kcal"
+	static string Kcal(float v)
+	{
+		return Math.Round(v).ToString() + " kcal";
+	}
+
+	// "750 ml" / "3.5 L"
+	static string Ml(float v)
+	{
+		if (v < 1000)
+			return Math.Round(v).ToString() + " ml";
+		float l = Math.Round(v / 100.0) / 10.0;
+		return l.ToString() + " L";
 	}
 
 	static float FoodPctOf(PlayerBase pb)
@@ -126,8 +141,8 @@ class DL_TravelCost
 		DL_CarData cd;
 		if (car && p.byCar)
 			cd = carSnap.Capture(car);
-		float needFood = p.foodPct / 100.0 * PlayerConstants.SL_ENERGY_MAX;
-		float needWater = p.waterPct / 100.0 * PlayerConstants.SL_WATER_MAX;
+		float needFood = p.foodKcal;
+		float needWater = p.waterMl;
 		float canisters = 0;
 		array<string> miss = new array<string>;
 		array<ref DL_PlayerData> snaps = new array<ref DL_PlayerData>;
@@ -151,12 +166,12 @@ class DL_TravelCost
 				who = pb.GetIdentity().GetName();
 			string m = "";
 			if (food < needFood)
-				m += "food " + Math.Floor(food / PlayerConstants.SL_ENERGY_MAX * 100).ToString() + "% of " + Math.Ceil(p.foodPct).ToString() + "%";
+				m += "food " + Math.Floor(food).ToString() + " of " + Kcal(Math.Ceil(needFood));
 			if (water < needWater)
 			{
 				if (m != "")
 					m += ", ";
-				m += "water " + Math.Floor(water / PlayerConstants.SL_WATER_MAX * 100).ToString() + "% of " + Math.Ceil(p.waterPct).ToString() + "%";
+				m += "water " + Ml(Math.Floor(water)) + " of " + Ml(Math.Ceil(needWater));
 			}
 			if (m != "")
 				miss.Insert(who + ": " + m);
@@ -434,7 +449,7 @@ class DL_TravelCost
 	{
 		if (!p || !d)
 			return "";
-		return Eat(d, trunk, p.foodPct / 100.0 * PlayerConstants.SL_ENERGY_MAX, p.waterPct / 100.0 * PlayerConstants.SL_WATER_MAX);
+		return Eat(d, trunk, p.foodKcal, p.waterMl);
 	}
 
 	// fuel + engine/wheel wear off the car's snapshot; the live car only gives the max health of its parts.

@@ -39,10 +39,11 @@ class DL_Zone
 class DL_TravelRules
 {
 	string mode = "refuse";   // "refuse" = short of supplies, no trip; "weakened" = the trip goes, the road decides
-	float foodFootPct = 15;   // % of a full stomach (PlayerConstants.SL_ENERGY_MAX) per 10 km on foot
-	float waterFootPct = 15;
-	float foodCarPct = 4;     // per person in a car
-	float waterCarPct = 5;
+	// food (DayZ energy = kcal) and water (ml) per 10 km, per person; a full bar is 5000 of each
+	float foodFootKcal = 750;
+	float waterFootMl = 750;
+	float foodCarKcal = 200;  // in a vehicle
+	float waterCarMl = 250;
 	float fuelLiters = 5;
 	// fuel by the vehicle's own in-game consumption (CfgVehicles fuelConsumption, read as litres per 100 km - the
 	// vanilla values match the real cars' figures) instead of fuelLiters; x fuelScale, boats x fuelBoatScale too

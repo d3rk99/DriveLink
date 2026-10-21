@@ -400,7 +400,8 @@ function tripCost(z) {
   if (!t) return "";
   const k = km / 10, r = v => Math.round(v * k);
   const time = mins => mins >= 60 ? `${Math.floor(mins / 60)} h ${Math.round(mins % 60)} min` : `${Math.round(mins)} min`;
-  return `On foot: ${r(t.foodFootPct)}% food, ${r(t.waterFootPct)}% water${t.timeEnabled ? `, ${time(km / t.speedFootKmh * 60)}` : ""}.<br>By car: ${r(t.foodCarPct)}% food, ${r(t.waterCarPct)}% water each, ${t.fuelPerVehicle ? `its own in-game fuel use x${t.fuelScale ?? 1}${(t.fuelBoatScale ?? 1) !== 1 ? ` (boats x${t.fuelBoatScale} more)` : ""}` : `${r(t.fuelLiters)} L fuel`}, wear engine ${r(t.wearEnginePct)}% / wheels ${r(t.wearWheelsPct)}%${t.timeEnabled ? `, ${time(km / t.speedCarKmh * 60)}` : ""}.<br><span class="hint">Rules: ${esc(srv().name)}'s Travel settings (Servers page), ${t.mode === "weakened" ? "arrive weakened" : "refuse when short"}.</span>`;
+  const food = v => `${fmtKcal((v || 0) * k)} (${foodEq((v || 0) * k)})`, water = v => `${fmtMl((v || 0) * k)} water (${waterEq((v || 0) * k)})`;
+  return `On foot: ${food(t.foodFootKcal)} + ${water(t.waterFootMl)}${t.timeEnabled ? `, ${time(km / t.speedFootKmh * 60)}` : ""}.<br>By vehicle: ${food(t.foodCarKcal)} + ${water(t.waterCarMl)} each, ${t.fuelPerVehicle ? `its own in-game fuel use x${t.fuelScale ?? 1}${(t.fuelBoatScale ?? 1) !== 1 ? ` (boats x${t.fuelBoatScale} more)` : ""}` : `${r(t.fuelLiters)} L fuel`}, wear engine ${r(t.wearEnginePct)}% / wheels ${r(t.wearWheelsPct)}%${t.timeEnabled ? `, ${time(km / t.speedCarKmh * 60)}` : ""}.<br><span class="hint">Rules: ${esc(srv().name)}'s Travel settings (Servers page), ${t.mode === "weakened" ? "arrive weakened" : "refuse when short"}.</span>`;
 }
 
 // renaming an arrival point also fixes the zones on other servers that send players to it
@@ -568,8 +569,8 @@ function renderServers() {
 
 // ---------- Travel rules (per server, for trips that START there) ----------
 const TRAVEL_FIELDS = [
-  ["foodFootPct", "Food on foot", "% per 10 km"], ["waterFootPct", "Water on foot", "% per 10 km"],
-  ["foodCarPct", "Food by car", "% per 10 km, each person"], ["waterCarPct", "Water by car", "% per 10 km, each person"],
+  ["foodFootKcal", "Food on foot", "kcal per 10 km"], ["waterFootMl", "Water on foot", "ml per 10 km"],
+  ["foodCarKcal", "Food in a vehicle", "kcal per 10 km, each person"], ["waterCarMl", "Water in a vehicle", "ml per 10 km, each person"],
   ["fuelLiters", "Fuel (flat)", "litres per 10 km, every vehicle"], ["fuelScale", "Fuel x in-game use", "per-vehicle fuel: 1 = the game's own consumption"],
   ["fuelBoatScale", "Boats: fuel x", "per-vehicle fuel, boats only, on top"], ["wearEnginePct", "Engine wear", "% health per 10 km"], ["wearWheelsPct", "Wheel wear", "% health per 10 km, every wheel"],
   ["speedFootKmh", "Speed on foot", "km/h (travel time)"], ["speedCarKmh", "Speed by car", "km/h (travel time)"],
@@ -578,26 +579,35 @@ const TRAVEL_FIELDS = [
   ["spareNeededKm", "Spare wheel needed above", "km, 0 = off (refuse mode: spare wheel or tyre repair kit aboard)"], ["flatPct", "Flat tyre", "% per 10 km (weakened)"],
   ["swimFoodX", "Swimming: food + water x", "of the foot rates (boat lost at sea)"], ["drownPct", "Drowning", "% per 10 km swum, grows the longer the swim (weakened)"],
 ];
-// difficulty presets (Research/travel-presets.md): they fill the form, Save applies them. Food/water are % of a
-// full DayZ bar (5000 kcal / 5000 ml) per 10 km; per-vehicle fuel uses each vehicle's in-game consumption (L/100 km)
+// difficulty presets (Research/travel-presets.md): they fill the form, Save applies them. Food in kcal, water in ml
+// per 10 km (a full DayZ bar is 5000 of each); per-vehicle fuel uses each vehicle's in-game consumption (L/100 km)
 const TRAVEL_PRESETS = {
   easy: { label: "Easy", hint: "Free and instant: no food, water, fuel, wear, time or risk.",
-    mode: "refuse", timeEnabled: false, fuelPerVehicle: false, foodFootPct: 0, waterFootPct: 0, foodCarPct: 0, waterCarPct: 0,
+    mode: "refuse", timeEnabled: false, fuelPerVehicle: false, foodFootKcal: 0, waterFootMl: 0, foodCarKcal: 0, waterCarMl: 0,
     fuelLiters: 0, fuelScale: 1, fuelBoatScale: 1, wearEnginePct: 0, wearWheelsPct: 0, speedFootKmh: 5, speedCarKmh: 40,
     luckGasPct: 100, biteDeathPct: 0, bitePct: 0, starveDeathPct: 0, spareNeededKm: 0, flatPct: 0, swimFoodX: 1, drownPct: 0 },
   medium: { label: "Medium", hint: "Arcade: a small bill (half the game's fuel use, a third of real food/water), pay or don't go, no deaths, no waiting.",
-    mode: "refuse", timeEnabled: false, fuelPerVehicle: true, foodFootPct: 6, waterFootPct: 6, foodCarPct: 0.5, waterCarPct: 0.5,
+    mode: "refuse", timeEnabled: false, fuelPerVehicle: true, foodFootKcal: 300, waterFootMl: 300, foodCarKcal: 25, waterCarMl: 25,
     fuelLiters: 5, fuelScale: 0.5, fuelBoatScale: 1, wearEnginePct: 1, wearWheelsPct: 1, speedFootKmh: 8, speedCarKmh: 60,
     luckGasPct: 50, biteDeathPct: 0, bitePct: 3, starveDeathPct: 0, spareNeededKm: 0, flatPct: 1, swimFoodX: 1.5, drownPct: 2 },
   hard: { label: "Hard", hint: "DayZ's own rates: the game's fuel use, food/water as if you jogged it, travel time, the road can hurt or kill.",
-    mode: "weakened", timeEnabled: true, fuelPerVehicle: true, foodFootPct: 13, waterFootPct: 13, foodCarPct: 1, waterCarPct: 1,
+    mode: "weakened", timeEnabled: true, fuelPerVehicle: true, foodFootKcal: 650, waterFootMl: 650, foodCarKcal: 50, waterCarMl: 50,
     fuelLiters: 5, fuelScale: 1, fuelBoatScale: 2, wearEnginePct: 2, wearWheelsPct: 3, speedFootKmh: 10, speedCarKmh: 50,
     luckGasPct: 25, biteDeathPct: 10, bitePct: 5, starveDeathPct: 25, spareNeededKm: 0, flatPct: 3, swimFoodX: 2, drownPct: 6 },
   realism: { label: "Realism", hint: "Real numbers: real L/100 km (boats like a real outboard), a hiker's food and water, walking pace, real road risks.",
-    mode: "weakened", timeEnabled: true, fuelPerVehicle: true, foodFootPct: 19, waterFootPct: 30, foodCarPct: 0.4, waterCarPct: 0.4,
+    mode: "weakened", timeEnabled: true, fuelPerVehicle: true, foodFootKcal: 950, waterFootMl: 1500, foodCarKcal: 20, waterCarMl: 20,
     fuelLiters: 5, fuelScale: 1, fuelBoatScale: 5, wearEnginePct: 3, wearWheelsPct: 4, speedFootKmh: 5, speedCarKmh: 50,
     luckGasPct: 10, biteDeathPct: 15, bitePct: 8, starveDeathPct: 40, spareNeededKm: 0, flatPct: 4, swimFoodX: 2, drownPct: 10 },
 };
+// what an amount of food / water is in things players carry (DayZ nutrition is per 100 g: a 400 g can of baked
+// beans = 800 kcal, a water bottle = 1000 ml)
+const BEANS_KCAL = 800, BOTTLE_ML = 1000;
+const fmtKcal = v => `${Math.round(v).toLocaleString("en-US")} kcal`;
+const fmtMl = v => v >= 1000 ? `${(Math.round(v / 100) / 10).toLocaleString("en-US")} L` : `${Math.round(v)} ml`;
+const half = n => { const h = Math.round(n * 2) / 2; return h < 0.5 && n > 0 ? "<½" : String(h).replace(".5", "½"); };
+const plural = (n, one, many) => n <= 1 ? one : many;
+function foodEq(kcal) { const n = kcal / BEANS_KCAL; return kcal > 0 ? `≈ ${half(n)} ${plural(n, "can", "cans")} of beans` : "nothing"; }
+function waterEq(ml) { const n = ml / BOTTLE_ML; return ml > 0 ? `≈ ${half(n)} water ${plural(n, "bottle", "bottles")}` : "nothing"; }
 function presetOf(t) {
   return Object.keys(TRAVEL_PRESETS).find(k => {
     const p = TRAVEL_PRESETS[k];
@@ -607,7 +617,7 @@ function presetOf(t) {
 function travelBox(f) {
   const t = f.travel || {};
   return `<div class="box"><h2>Travel from ${esc(f.name)}</h2>
-    <div class="hint">Costs for trips that START on this server, per 10 km of the zone's distance (set on the Map page; 0 km = free + instant). Food and water are % of a full bar.</div>
+    <div class="hint">Costs for trips that START on this server, per 10 km of the zone's distance (set on the Map page; 0 km = free + instant). Food in kcal, water in ml (a full DayZ bar is 5000 of each; a can of beans is 800 kcal, a water bottle 1 L).</div>
     <label style="margin-top:8px">Difficulty preset <span class="hint">(fills the form below; Save applies it)</span></label>
     <div class="btns" style="margin-top:2px">${Object.entries(TRAVEL_PRESETS).map(([k, p]) => `<button class="tPreset${presetOf(t) === k ? " primary" : ""}" data-p="${k}" title="${esc(p.hint)}">${p.label}</button>`).join("")}
       <span class="hint" id="tPresetNow">${presetOf(t) ? "Now: " + TRAVEL_PRESETS[presetOf(t)].label + ". " + esc(TRAVEL_PRESETS[presetOf(t)].hint) : "Now: custom"}</span></div>
@@ -617,7 +627,7 @@ function travelBox(f) {
       <div><label>Fuel</label><select id="tFuelMode"><option value="0" ${!t.fuelPerVehicle ? "selected" : ""}>Flat: the litres per 10 km below, every vehicle (motorbikes 40 %)</option><option value="1" ${t.fuelPerVehicle ? "selected" : ""}>Per vehicle: its in-game consumption x the factor below</option></select></div>
       <div><label>Travel time</label><select id="tTime"><option value="0" ${!t.timeEnabled ? "selected" : ""}>Off: arrive at once</option><option value="1" ${t.timeEnabled ? "selected" : ""}>On: on the road for distance / speed, no login anywhere meanwhile</option></select></div>
     </div>
-    <div class="grid3">${TRAVEL_FIELDS.map(([k, label, unit]) => `<div><label>${label} <span class="hint">(${unit})</span></label><input id="t_${k}" type="number" step="any" min="0" value="${t[k] ?? 0}"></div>`).join("")}</div>
+    <div class="grid3">${TRAVEL_FIELDS.map(([k, label, unit]) => `<div><label>${label} <span class="hint">(${unit})</span></label><input id="t_${k}" type="number" step="any" min="0" value="${t[k] ?? 0}">${/Kcal$|Ml$/.test(k) ? `<div class="hint" id="eq_${k}"></div>` : ""}</div>`).join("")}</div>
     <h2 style="margin-top:14px">Travelling together</h2>
     <div class="hint">Players who come into the same zone while its countdown runs leave together - every newcomer starts the countdown again. One road for all of them, they arrive together. A convoy shares jerry cans, spare wheels that fit, repair kits and the food in its trunks.</div>
     <div class="grid3" style="margin-top:6px">
@@ -636,13 +646,22 @@ function travelBox(f) {
     </div>
     <div class="btns"><button class="primary" id="tSave">Save travel rules</button></div><div class="status" id="tMsg"></div></div>`;
 }
+function travelEq() {
+  TRAVEL_FIELDS.forEach(([k]) => {
+    const e = $("eq_" + k), v = +$("t_" + k).value || 0;
+    if (e) e.textContent = /Kcal$/.test(k) ? `${foodEq(v)}, ${Math.round(v / 50 * 10) / 10}% of a full bar` : `${waterEq(v)}, ${Math.round(v / 50 * 10) / 10}% of a full bar`;
+  });
+}
 function wireTravel(f) {
   const b = $("tSave");
   if (!b) return;
+  travelEq();
+  TRAVEL_FIELDS.forEach(([k]) => { if (/Kcal$|Ml$/.test(k)) $("t_" + k).oninput = travelEq; });
   document.querySelectorAll(".tPreset").forEach(btn => btn.onclick = () => {
     const p = TRAVEL_PRESETS[btn.dataset.p];
     $("tMode").value = p.mode; $("tTime").value = p.timeEnabled ? "1" : "0"; $("tFuelMode").value = p.fuelPerVehicle ? "1" : "0";
     TRAVEL_FIELDS.forEach(([k]) => { if (k in p) $("t_" + k).value = p[k]; });
+    travelEq();
     document.querySelectorAll(".tPreset").forEach(x => x.classList.toggle("primary", x === btn));
     $("tPresetNow").textContent = `${p.label} loaded: ${p.hint} Press Save travel rules to apply.`;
   });

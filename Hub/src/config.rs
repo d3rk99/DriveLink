@@ -38,10 +38,20 @@ pub struct ServerEntry {
 pub struct TravelRules {
     /// "refuse" = not enough supplies, no trip; "weakened" = the trip goes and the road decides
     pub mode: String,
-    pub food_foot_pct: f64,  // % of a full stomach (DayZ max 5000) per 10 km on foot
-    pub water_foot_pct: f64,
-    pub food_car_pct: f64,   // per person in a car
-    pub water_car_pct: f64,
+    /// food (DayZ energy units = kcal) and water (ml) per 10 km, per person; a full DayZ bar is 5000 of each
+    pub food_foot_kcal: f64,
+    pub water_foot_ml: f64,
+    pub food_car_kcal: f64,  // in a vehicle
+    pub water_car_ml: f64,
+    /// before kcal/ml: % of a full bar (x 50 = kcal or ml). Read from old hub.json / old clients, never written.
+    #[serde(skip_serializing)]
+    pub food_foot_pct: Option<f64>,
+    #[serde(skip_serializing)]
+    pub water_foot_pct: Option<f64>,
+    #[serde(skip_serializing)]
+    pub food_car_pct: Option<f64>,
+    #[serde(skip_serializing)]
+    pub water_car_pct: Option<f64>,
     pub fuel_liters: f64,    // from the car's tank
     /// fuel by each vehicle's in-game consumption (CfgVehicles fuelConsumption, as L/100 km) instead of fuel_liters
     pub fuel_per_vehicle: bool,
@@ -82,10 +92,14 @@ impl Default for TravelRules {
     fn default() -> Self {
         TravelRules {
             mode: "refuse".into(),
-            food_foot_pct: 15.0,
-            water_foot_pct: 15.0,
-            food_car_pct: 4.0,
-            water_car_pct: 5.0,
+            food_foot_kcal: 750.0,
+            water_foot_ml: 750.0,
+            food_car_kcal: 200.0,
+            water_car_ml: 250.0,
+            food_foot_pct: None,
+            water_foot_pct: None,
+            food_car_pct: None,
+            water_car_pct: None,
             fuel_liters: 5.0,
             fuel_per_vehicle: false,
             fuel_scale: 1.0,
@@ -115,9 +129,26 @@ impl Default for TravelRules {
     }
 }
 
+/// a full DayZ energy / water bar (PlayerConstants.SL_ENERGY_MAX / SL_WATER_MAX): 1 % = 50 kcal or 50 ml
+pub const BAR: f64 = 5000.0;
+
 impl TravelRules {
+    /// old % settings (hub.json from before kcal/ml) into kcal / ml; true if anything was converted
+    pub fn migrate(&mut self) -> bool {
+        let mut any = false;
+        for (old, new) in [(&mut self.food_foot_pct, &mut self.food_foot_kcal), (&mut self.water_foot_pct, &mut self.water_foot_ml),
+                           (&mut self.food_car_pct, &mut self.food_car_kcal), (&mut self.water_car_pct, &mut self.water_car_ml)] {
+            if let Some(p) = old.take() {
+                *new = p * BAR / 100.0;
+                any = true;
+            }
+        }
+        any
+    }
+
     /// keep what the browser sent inside sane limits
     pub fn clamped(mut self) -> Self {
+        self.migrate();
         if self.mode != "weakened" {
             self.mode = "refuse".into();
         }
@@ -125,7 +156,11 @@ impl TravelRules {
             self.biome = String::new();
         }
         let pct = |v: f64| if v.is_finite() { v.clamp(0.0, 100.0) } else { 0.0 };
-        for v in [&mut self.food_foot_pct, &mut self.water_foot_pct, &mut self.food_car_pct, &mut self.water_car_pct, &mut self.wear_engine_pct, &mut self.wear_wheels_pct,
+        let amount = |v: f64| if v.is_finite() { v.clamp(0.0, BAR * 4.0) } else { 0.0 };
+        for v in [&mut self.food_foot_kcal, &mut self.water_foot_ml, &mut self.food_car_kcal, &mut self.water_car_ml] {
+            *v = amount(*v);
+        }
+        for v in [&mut self.wear_engine_pct, &mut self.wear_wheels_pct,
                   &mut self.luck_gas_pct, &mut self.bite_pct, &mut self.bite_death_pct, &mut self.starve_death_pct, &mut self.flat_pct, &mut self.drown_pct] {
             *v = pct(*v);
         }
@@ -237,6 +272,14 @@ pub fn load_or_create(path: &Path) -> Result<(Config, bool), String> {
         Err(e) => return Err(format!("read {}: {e}", path.display())),
     };
     let mut c: Config = serde_json::from_str(&data).map_err(|e| format!("{} is not valid JSON: {e}", path.display()))?;
+    // hub.json from before kcal / ml: travel food and water were % of a full bar
+    let mut migrated = false;
+    for s in &mut c.servers {
+        migrated |= s.travel.migrate();
+    }
+    if migrated {
+        save(path, &c)?;
+    }
     // hub.json from before the SQLite switch (PostgreSQL URL, it held a password)
     if c.database.is_empty() || c.database.starts_with("postgres://") || c.database.starts_with("postgresql://") {
         c.database = DEFAULT_DATABASE.into();

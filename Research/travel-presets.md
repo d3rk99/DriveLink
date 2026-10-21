@@ -51,6 +51,10 @@ Swimming (real): ~500-700 kcal/h at 2-3 km/h, so 10 km is ~4 h and ~2400 kcal, a
 less in water than walking, so food and water together are taken as ~2x (`swimFoodX`). Open-water swims of 10+ km
 are marathon-swimmer territory: drowning risk grows with every 10 km (`drownPct`, x1, x2, x3 ...).
 
+Settings are in kcal and ml per 10 km (since 2026-10-20; older % settings were converted at x50). In items: DayZ
+nutrition is per 100 g, so a 400 g can of baked beans = 800 kcal (+100 ml water), tactical bacon 1200 kcal, sardines
+~250 kcal; a water bottle or canteen = 1000 ml. 40 km on foot under Realism = 3800 kcal (~5 cans) + 6 L (6 bottles).
+
 ## 3. The presets
 
 | Setting | Easy | Medium | Hard | Realism |
@@ -58,8 +62,8 @@ are marathon-swimmer territory: drowning risk grows with every 10 km (`drownPct`
 | When short | refuse | refuse | arrive weakened | arrive weakened |
 | Travel time | off | off | on | on |
 | Speed foot / vehicle (km/h) | - | - | 10 / 50 | 5 / 50 |
-| Food / water on foot (%/10 km) | 0 / 0 | 6 / 6 | 13 / 13 (game, jogging) | 19 / 30 (real hiker) |
-| Food / water in a vehicle | 0 / 0 | 0.5 / 0.5 | 1 / 1 | 0.4 / 0.4 (real) |
+| Food / water on foot (per 10 km) | 0 / 0 | 300 kcal / 300 ml | 650 kcal / 650 ml (game, jogging) | 950 kcal / 1500 ml (real hiker) |
+| Food / water in a vehicle | 0 / 0 | 25 kcal / 25 ml | 50 kcal / 50 ml | 20 kcal / 20 ml (real) |
 | Fuel | none | per vehicle x0.5 | per vehicle x1, boats x2 | per vehicle x1, boats x5 (real) |
 | Engine / wheel wear (%/10 km) | 0 / 0 | 1 / 1 | 2 / 3 | 3 / 4 |
 | Find fuel when out | 100 % | 50 % | 25 % | 10 % |

@@ -261,20 +261,20 @@ class DL_Journey
 				if (tv.dead)
 					continue;
 				bool seated = tv.veh >= 0;
-				float foodPct = t.foodFootPct;
-				float waterPct = t.waterFootPct;
+				float foodK = t.foodFootKcal;
+				float waterM = t.waterFootMl;
 				if (seated)
 				{
-					foodPct = t.foodCarPct;
-					waterPct = t.waterCarPct;
+					foodK = t.foodCarKcal;
+					waterM = t.waterCarMl;
 				}
 				if (!seated && j.water)
 				{
-					foodPct = foodPct * t.swimFoodX;
-					waterPct = waterPct * t.swimFoodX;
+					foodK = foodK * t.swimFoodX;
+					waterM = waterM * t.swimFoodX;
 				}
-				float nf = foodPct * f / 100.0 * PlayerConstants.SL_ENERGY_MAX;
-				float nw = waterPct * f / 100.0 * PlayerConstants.SL_WATER_MAX;
+				float nf = foodK * f;
+				float nw = waterM * f;
 				tv.needFood += nf;
 				tv.needWater += nw;
 				float uf;
