@@ -421,7 +421,7 @@ class DL_Journey
 			if (cans > 0)
 				what += " and " + cans.ToString() + " jerry can(s)";
 			story.Insert(Cap(place) + " " + Math.Round(at).ToString() + " km in: " + what + " filled up.");
-			film.Add("find", at, name, "gas");
+			film.Add("find", at, name, "gas", -1, Driving());   // donor = how many cars are filled (film length)
 		}
 		if (Roll(t.findWaterPct * f))
 		{

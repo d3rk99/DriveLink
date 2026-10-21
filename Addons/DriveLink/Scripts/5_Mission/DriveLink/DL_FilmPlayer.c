@@ -571,7 +571,10 @@ class DL_FilmPlayer
 	protected ref DL_FilmThing m_Station; // MiniDayZ gas station building + its fuelling canopy (a gas station find)
 	protected ref DL_FilmThing m_Canopy;
 	protected ref DL_FilmThing m_Pump;    // MiniDayZ water pump (a well find on land)
+	protected ref DL_FilmThing m_Lot;     // the gas station's asphalt (off the road, under canopy + building)
 	protected DL_FilmThing m_FindAt;      // the thing of this find scene they stop at
+	protected ref array<DL_FilmCar> m_FillCars = new array<DL_FilmCar>; // gas station: the cars still to fill
+	protected DL_FilmCar m_FillHome;      // ... and the car the filler came out of
 	protected ImageWidget m_Flash;        // muzzle flash
 	protected TextWidget m_Caption;
 	protected float m_Px;         // screen pixels per film pixel
@@ -758,9 +761,12 @@ class DL_FilmPlayer
 		m_Fuel = new DL_FilmThing(m_Root, 9, DIR + "fueltank_ca.paa", m_Px, 12, 12, 16, 16, 1.4);
 		m_Fuel.sprite.Cell(0, 0, 12, 12);
 		// the road's finds (MiniDayZ buildings, front-on like its houses): drawn on the ground layer, by the verge
-		m_Canopy = new DL_FilmThing(m_Root, 3, DIR + "gascanopy_ca.paa", m_Px, 284, 130, 512, 256, 0.42);
+		m_Lot = new DL_FilmThing(m_Root, 3, DL_FilmSpike.PLAIN, m_Px, 8, 8, 8, 8, 1);
+		m_Lot.sprite.Cell(0, 0, 8, 8);
+		m_Lot.sprite.SetColor(ARGB(255, 64, 64, 68));
+		m_Canopy = new DL_FilmThing(m_Root, 4, DIR + "gascanopy_ca.paa", m_Px, 284, 130, 512, 256, 0.42);
 		m_Canopy.sprite.Cell(0, 0, 284, 130);
-		m_Station = new DL_FilmThing(m_Root, 3, DIR + "gasstation_ca.paa", m_Px, 107, 107, 128, 128, 0.5);
+		m_Station = new DL_FilmThing(m_Root, 4, DIR + "gasstation_ca.paa", m_Px, 107, 107, 128, 128, 0.5);
 		m_Station.sprite.Cell(0, 0, 107, 107);
 		m_Pump = new DL_FilmThing(m_Root, 3, DIR + "waterpump_ca.paa", m_Px, 20, 28, 32, 32, 1);
 		m_Pump.sprite.Cell(0, 0, 20, 28);
@@ -1445,14 +1451,25 @@ class DL_FilmPlayer
 			float below = m_ViewH + 40;
 			if (e.detail == "gas")
 			{
-				m_Canopy.x = 208;
+				m_Canopy.x = 256;                      // half off the screen, its left edge clear of the road
 				m_Canopy.y = below + m_Canopy.h / 2;
 				m_Canopy.used = true;
 				m_Canopy.sprite.Show(true);
-				m_Station.x = 232;
-				m_Station.y = m_Canopy.y + m_Canopy.h / 2 + m_Station.h / 2 - 6;
+				m_Station.x = 196 + m_Station.w / 2 + 6;
+				m_Station.y = m_Canopy.y + m_Canopy.h / 2 + m_Station.h / 2 + 2;
 				m_Station.used = true;
 				m_Station.sprite.Show(true);
+				float lotTop = m_Canopy.y - m_Canopy.h / 2 - 8;
+				float lotBottom = m_Station.y + m_Station.h / 2 + 6;
+				m_Lot.w = 64;
+				m_Lot.h = lotBottom - lotTop;
+				m_Lot.sprite = new DL_Sprite(m_Root, DL_FilmSpike.PLAIN, 3, m_Lot.w * m_Px, m_Lot.h * m_Px, 8, 8);
+				m_Lot.sprite.Cell(0, 0, 8, 8);
+				m_Lot.sprite.SetColor(ARGB(255, 64, 64, 68));
+				m_Lot.x = 192 + 32;
+				m_Lot.y = (lotTop + lotBottom) / 2;
+				m_Lot.used = true;
+				m_Lot.sprite.Show(true);
 				m_FindAt = m_Canopy;
 			}
 			else
@@ -1486,16 +1503,107 @@ class DL_FilmPlayer
 			}
 			return;
 		}
-		if (m_Step == 11)
+		if (m_Step == 11 && e.detail == "gas" && FirstCar() && Halted() && m_StepT > 0.5)
 		{
-			// standing at the pumps: a can by the car while the tank fills
-			DL_FilmCar fc = FirstCar();
-			if (e.detail == "gas" && fc && m_StepT > 0.6 && !m_Fuel.sprite.IsShown())
+			// the driver gets out with a jerry can and goes under the canopy to the pumps
+			m_FillHome = FirstCar();
+			m_Actor = DriverOf(m_FillHome);
+			m_FillCars.Clear();
+			foreach (DL_FilmCar fcar : m_Cars)
 			{
-				m_Fuel.x = fc.x + fc.HalfW() + 8;
-				m_Fuel.y = fc.y;
-				m_Fuel.sprite.Show(true);
+				if (!fcar.inWorld && fcar.kind != "boat")
+					m_FillCars.Insert(fcar);
 			}
+			if (m_Actor)
+			{
+				GetOutOne(m_Actor, m_FillHome, 1);
+				m_Actor.Go(m_Actor.x, m_Canopy.y);
+				m_Actor.Go(212, m_Canopy.y);
+				m_Carrying = true;
+			}
+			m_Step = 20;
+			m_StepT = 0;
+			return;
+		}
+		if (m_Step == 20)
+		{
+			if (!m_Actor || !m_Actor.Busy())
+			{
+				if (m_Actor)
+				{
+					m_Actor.dir = 2;
+					m_Actor.pose = DL_FilmPerson.USE;   // at the pump, filling the can
+				}
+				m_Step = 21;
+				m_StepT = 0;
+			}
+			FuelInHand();
+			return;
+		}
+		if (m_Step == 21)
+		{
+			if (m_StepT > 1.3)
+			{
+				if (m_Actor)
+					m_Actor.pose = DL_FilmPerson.NORMAL;
+				m_Step = 22;
+				FillNext();
+			}
+			FuelInHand();
+			return;
+		}
+		if (m_Step == 22)
+		{
+			// at a car's filler cap (right side): pour, then the next car, then back in
+			if (!m_Actor || !m_Actor.Busy())
+			{
+				if (m_Actor)
+				{
+					m_Actor.dir = 3;
+					m_Actor.pose = DL_FilmPerson.USE;
+				}
+				m_Step = 23;
+				m_StepT = 0;
+			}
+			FuelInHand();
+			return;
+		}
+		if (m_Step == 23)
+		{
+			if (m_StepT > 1.2)
+			{
+				if (m_Actor)
+					m_Actor.pose = DL_FilmPerson.NORMAL;
+				if (m_FillCars.Count() > 0)
+				{
+					m_Step = 22;
+					FillNext();
+				}
+				else
+				{
+					m_Carrying = false;
+					m_Fuel.sprite.Show(false);
+					if (m_FillHome)
+						Board(m_FillHome);
+					m_Step = 24;
+				}
+			}
+			FuelInHand();
+			return;
+		}
+		if (m_Step == 24)
+		{
+			if (!m_FillHome || Boarded(m_FillHome))
+			{
+				m_Target = m_FindResume;
+				if (m_Target < 1)
+					m_Target = DRIVE;
+				m_Step = 30;
+			}
+			return;
+		}
+		if (m_Step == 11 && !(e.detail == "gas" && FirstCar()))
+		{
 			if (m_StepT > 3.2)
 			{
 				m_Fuel.sprite.Show(false);
@@ -1529,6 +1637,26 @@ class DL_FilmPlayer
 			}
 			NextStep();
 		}
+	}
+
+	// the gas station filler walks to the next car's filler cap (right side), round the cars in the way
+	protected void FillNext()
+	{
+		if (m_FillCars.Count() == 0 || !m_Actor)
+			return;
+		DL_FilmCar c = m_FillCars[0];
+		m_FillCars.RemoveOrdered(0);
+		RouteAround(m_Actor, c, 1, c.y - 6);
+	}
+
+	// the jerry can in the filler's hand
+	protected void FuelInHand()
+	{
+		if (!m_Carrying || !m_Actor)
+			return;
+		m_Fuel.sprite.Show(true);
+		m_Fuel.x = m_Actor.x - 8;
+		m_Fuel.y = m_Actor.y + 6;
 	}
 
 	// a boat's event (fuel, a seat in another boat): the boats stop for a moment, nobody gets out on the water
@@ -2462,6 +2590,7 @@ class DL_FilmPlayer
 			ScrollThing(t, dy);
 		foreach (DL_FilmThing w : m_Wrecks)
 			ScrollThing(w, dy);
+		ScrollThing(m_Lot, dy);
 		ScrollThing(m_Canopy, dy);
 		ScrollThing(m_Station, dy);
 		ScrollThing(m_Pump, dy);
@@ -2869,7 +2998,7 @@ class DL_FilmPlayer
 			f.Add("drive", 15);
 			f.Add("flat", 35, "Derk", "kit");
 			f.Add("drive", 10);
-			f.Add("find", 45, "Derk", "gas");          // a working gas station
+			f.Add("find", 45, "Derk", "gas", -1, 1);   // a working gas station
 			f.Add("drive", 10);
 			f.Add("find", 55, "OrionKaelin", "water"); // a well
 			f.Add("drive", 15);

@@ -73,8 +73,14 @@ class DL_Film
 			return 8;
 		if (e.kind == "move")
 			return 4;
-		if (e.kind == "find" && (e.detail == "gas" || e.detail == "water"))
-			return 9;                             // it comes up the road, they stop beside it
+		if (e.kind == "find" && e.detail == "gas")
+		{
+			// it comes up the road, a can from the pumps into every car (donor = how many cars), back in
+			int fillN = Math.Max(1, e.donor);
+			return 13 + 3.5 * (fillN - 1);
+		}
+		if (e.kind == "find" && e.detail == "water")
+			return 9;                             // the pump comes up the road, they stop beside it
 		if (e.kind == "find")
 			return 5;
 		return 3;                                 // ration, died
