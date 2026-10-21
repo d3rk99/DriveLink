@@ -44,6 +44,13 @@ class DL_TravelRules
 	float foodCarPct = 4;     // per person in a car
 	float waterCarPct = 5;
 	float fuelLiters = 5;
+	// fuel by the vehicle's own in-game consumption (CfgVehicles fuelConsumption, read as litres per 100 km - the
+	// vanilla values match the real cars' figures) instead of fuelLiters; x fuelScale, boats x fuelBoatScale too
+	bool fuelPerVehicle;
+	float fuelScale = 1;
+	float fuelBoatScale = 1;
+	float swimFoodX = 1.5;    // swimming (a boat party with no boat): food and water x this of the foot rates
+	float drownPct = 6;       // weakened: chance to drown per 10 km swum, x2 the 2nd 10 km, x3 the 3rd ...
 	float wearEnginePct = 2;
 	float wearWheelsPct = 3;
 	bool timeEnabled;         // on the road for distance / speed, no login anywhere meanwhile

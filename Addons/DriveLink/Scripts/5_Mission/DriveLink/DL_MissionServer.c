@@ -457,7 +457,7 @@ modded class MissionServer
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_CheckCarSpots, 5000, false);
 		DL_TravelRules t = m_DL_Cfg.travel;
 		if (t)
-			Print(DL_Const.LOG_TAG + "  travel rules: " + t.mode + ", per 10 km foot " + t.foodFootPct.ToString() + "/" + t.waterFootPct.ToString() + "% food/water, car " + t.foodCarPct.ToString() + "/" + t.waterCarPct.ToString() + "% + " + t.fuelLiters.ToString() + " L, wear " + t.wearEnginePct.ToString() + "/" + t.wearWheelsPct.ToString() + "%, time " + t.timeEnabled.ToString() + " (" + t.speedFootKmh.ToString() + "/" + t.speedCarKmh.ToString() + " km/h)");
+			Print(DL_Const.LOG_TAG + "  travel rules: " + t.mode + ", per 10 km foot " + t.foodFootPct.ToString() + "/" + t.waterFootPct.ToString() + "% food/water, car " + t.foodCarPct.ToString() + "/" + t.waterCarPct.ToString() + "% + " + t.fuelLiters.ToString() + " L (per vehicle " + t.fuelPerVehicle.ToString() + " x" + t.fuelScale.ToString() + ", boats x" + t.fuelBoatScale.ToString() + "), wear " + t.wearEnginePct.ToString() + "/" + t.wearWheelsPct.ToString() + "%, time " + t.timeEnabled.ToString() + " (" + t.speedFootKmh.ToString() + "/" + t.speedCarKmh.ToString() + " km/h)");
 	}
 
 	protected bool DL_On()

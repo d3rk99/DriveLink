@@ -53,10 +53,8 @@ class DL_Journey
 	float walkedKm;
 	float swumKm;             // a boat party with no boat (seat) left swims; the walk legs of the water
 	bool water;               // a party of boats (parties are by kind: boats only travel with boats)
-	// swimming: the chance to drown on a 10 km leg grows with every 10 km already swum (6 %, 12 %, 18 %, ...);
+	// swimming: the chance to drown on a 10 km leg grows with every 10 km already swum (drownPct, x2, x3 ...);
 	// beside a boat of the party (holding on) half that, hurt (health under 50) half as much again
-	static const float DROWN_PCT = 6;
-	static const float SWIM_FOOD_X = 1.5;     // swimming eats and drinks 1.5x the foot rates
 	static const float SWIM_SPEED_X = 0.5;    // at half the walking speed
 	int seconds;              // on the road (travel time on), else 0
 	ref DL_Film film = new DL_Film(); // the same road as scenes, for the arrival film
@@ -95,9 +93,9 @@ class DL_Journey
 	}
 
 	// the chance (percent) that swimmer tv drowns on this leg (f = its share of 10 km)
-	protected float DrownPct(DL_Traveller tv, float f)
+	protected float DrownPct(DL_TravelRules t, DL_Traveller tv, float f)
 	{
-		float pct = DROWN_PCT * f * (1 + swumKm / 10.0);
+		float pct = t.drownPct * f * (1 + swumKm / 10.0);
 		if (!carLost)
 			pct *= 0.5;                       // a boat of the party is there to hold on to
 		if (tv.d && tv.d.health < 50)
@@ -272,8 +270,8 @@ class DL_Journey
 				}
 				if (!seated && j.water)
 				{
-					foodPct = foodPct * SWIM_FOOD_X;
-					waterPct = waterPct * SWIM_FOOD_X;
+					foodPct = foodPct * t.swimFoodX;
+					waterPct = waterPct * t.swimFoodX;
 				}
 				float nf = foodPct * f / 100.0 * PlayerConstants.SL_ENERGY_MAX;
 				float nw = waterPct * f / 100.0 * PlayerConstants.SL_WATER_MAX;
@@ -287,7 +285,7 @@ class DL_Journey
 				// in the water: drowning (the longer the swim, the likelier), no infected out here
 				if (!seated && j.water)
 				{
-					if (weakened && Roll(j.DrownPct(tv, f)))
+					if (weakened && Roll(j.DrownPct(t, tv, f)))
 					{
 						tv.dead = true;
 						j.story.Insert(j.Who(tv) + " drowned " + Math.Round(at).ToString() + " km in.");
@@ -449,7 +447,7 @@ class DL_Journey
 	{
 		DL_TravelPrice cp = new DL_TravelPrice();
 		cp.byCar = true;
-		cp.fuelL = t.fuelLiters * f * DL_TravelCost.FuelScale(v.live);
+		cp.fuelL = DL_TravelCost.FuelFor(t, v.live, 10.0 * f);
 		cp.engineWearPct = t.wearEnginePct * f;
 		cp.wheelWearPct = t.wearWheelsPct * f;
 		if (v.luckyFuel)

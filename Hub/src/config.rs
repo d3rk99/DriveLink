@@ -43,6 +43,12 @@ pub struct TravelRules {
     pub food_car_pct: f64,   // per person in a car
     pub water_car_pct: f64,
     pub fuel_liters: f64,    // from the car's tank
+    /// fuel by each vehicle's in-game consumption (CfgVehicles fuelConsumption, as L/100 km) instead of fuel_liters
+    pub fuel_per_vehicle: bool,
+    pub fuel_scale: f64,      // x the in-game consumption
+    pub fuel_boat_scale: f64, // boats: x this too (the game's boat burns far less than a real outboard)
+    pub swim_food_x: f64,     // a boat party with no boat swims: food + water x this of the foot rates
+    pub drown_pct: f64,       // weakened: drown chance per 10 km swum (x2 the 2nd 10 km, x3 the 3rd ...)
     pub wear_engine_pct: f64, // engine health taken
     pub wear_wheels_pct: f64, // every wheel
     /// on = the character is "on the road" for distance / speed and can't log in anywhere until it arrives
@@ -81,6 +87,11 @@ impl Default for TravelRules {
             food_car_pct: 4.0,
             water_car_pct: 5.0,
             fuel_liters: 5.0,
+            fuel_per_vehicle: false,
+            fuel_scale: 1.0,
+            fuel_boat_scale: 1.0,
+            swim_food_x: 1.5,
+            drown_pct: 6.0,
             wear_engine_pct: 2.0,
             wear_wheels_pct: 3.0,
             time_enabled: false,
@@ -115,10 +126,14 @@ impl TravelRules {
         }
         let pct = |v: f64| if v.is_finite() { v.clamp(0.0, 100.0) } else { 0.0 };
         for v in [&mut self.food_foot_pct, &mut self.water_foot_pct, &mut self.food_car_pct, &mut self.water_car_pct, &mut self.wear_engine_pct, &mut self.wear_wheels_pct,
-                  &mut self.luck_gas_pct, &mut self.bite_pct, &mut self.bite_death_pct, &mut self.starve_death_pct, &mut self.flat_pct] {
+                  &mut self.luck_gas_pct, &mut self.bite_pct, &mut self.bite_death_pct, &mut self.starve_death_pct, &mut self.flat_pct, &mut self.drown_pct] {
             *v = pct(*v);
         }
         self.spare_needed_km = if self.spare_needed_km.is_finite() { self.spare_needed_km.clamp(0.0, 100000.0) } else { 0.0 };
+        let mult = |v: f64, d: f64| if v.is_finite() { v.clamp(0.0, 20.0) } else { d };
+        self.fuel_scale = mult(self.fuel_scale, 1.0);
+        self.fuel_boat_scale = mult(self.fuel_boat_scale, 1.0);
+        self.swim_food_x = mult(self.swim_food_x, 1.5);
         self.fuel_liters = if self.fuel_liters.is_finite() { self.fuel_liters.clamp(0.0, 1000.0) } else { 0.0 };
         self.speed_foot_kmh = if self.speed_foot_kmh.is_finite() { self.speed_foot_kmh.clamp(0.5, 1000.0) } else { 5.0 };
         self.speed_car_kmh = if self.speed_car_kmh.is_finite() { self.speed_car_kmh.clamp(0.5, 1000.0) } else { 40.0 };

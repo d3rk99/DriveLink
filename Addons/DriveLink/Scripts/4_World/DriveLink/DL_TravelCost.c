@@ -41,6 +41,23 @@ class DL_TravelCost
 		return 1.0;
 	}
 
+	// litres for km kilometres in veh: its in-game consumption (fuelPerVehicle) or the flat fuelLiters per 10 km
+	static float FuelFor(DL_TravelRules t, EntityAI veh, float km)
+	{
+		if (t.fuelPerVehicle && veh)
+		{
+			float per100 = g_Game.ConfigGetFloat("CfgVehicles " + veh.GetType() + " fuelConsumption");
+			if (per100 > 0)
+			{
+				float l = per100 / 100.0 * km * t.fuelScale;
+				if (DL_Veh.IsBoat(veh))
+					l *= t.fuelBoatScale;
+				return l;
+			}
+		}
+		return t.fuelLiters * km / 10.0 * FuelScale(veh);
+	}
+
 	// veh = the vehicle (its kind scales the fuel, a boat needs no spare wheel); null = a car (or on foot)
 	static DL_TravelPrice Price(DL_TravelRules t, DL_Zone z, bool byCar, Transport veh = null)
 	{
@@ -54,7 +71,7 @@ class DL_TravelCost
 		{
 			p.foodPct = t.foodCarPct * k;
 			p.waterPct = t.waterCarPct * k;
-			p.fuelL = t.fuelLiters * k * FuelScale(veh);
+			p.fuelL = FuelFor(t, veh, z.distanceKm);
 			p.engineWearPct = t.wearEnginePct * k;
 			p.wheelWearPct = t.wearWheelsPct * k;
 		}
