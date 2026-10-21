@@ -568,6 +568,10 @@ class DL_FilmPlayer
 	protected ref DL_FilmThing m_Tool;    // wheel or repair kit in a scene
 	protected ref DL_FilmThing m_Puff;
 	protected ref DL_FilmThing m_Fuel;    // MiniDayZ fuel tank, carried back in the fuel scene
+	protected ref DL_FilmThing m_Station; // MiniDayZ gas station building + its fuelling canopy (a gas station find)
+	protected ref DL_FilmThing m_Canopy;
+	protected ref DL_FilmThing m_Pump;    // MiniDayZ water pump (a well find on land)
+	protected DL_FilmThing m_FindAt;      // the thing of this find scene they stop at
 	protected ImageWidget m_Flash;        // muzzle flash
 	protected TextWidget m_Caption;
 	protected float m_Px;         // screen pixels per film pixel
@@ -753,6 +757,13 @@ class DL_FilmPlayer
 		m_Puff.sprite.Cell(0, 0, 14, 14);
 		m_Fuel = new DL_FilmThing(m_Root, 9, DIR + "fueltank_ca.paa", m_Px, 12, 12, 16, 16, 1.4);
 		m_Fuel.sprite.Cell(0, 0, 12, 12);
+		// the road's finds (MiniDayZ buildings, front-on like its houses): drawn on the ground layer, by the verge
+		m_Canopy = new DL_FilmThing(m_Root, 3, DIR + "gascanopy_ca.paa", m_Px, 284, 130, 512, 256, 0.42);
+		m_Canopy.sprite.Cell(0, 0, 284, 130);
+		m_Station = new DL_FilmThing(m_Root, 3, DIR + "gasstation_ca.paa", m_Px, 107, 107, 128, 128, 0.5);
+		m_Station.sprite.Cell(0, 0, 107, 107);
+		m_Pump = new DL_FilmThing(m_Root, 3, DIR + "waterpump_ca.paa", m_Px, 20, 28, 32, 32, 1);
+		m_Pump.sprite.Cell(0, 0, 20, 28);
 		m_Flash = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 255, 235, 130), 9, 0, 0, 3 * m_Px, 3 * m_Px);
 		m_Flash.Show(false);
 		m_Puff.SetSort(SORT_TOP);
@@ -1427,6 +1438,79 @@ class DL_FilmPlayer
 	// the road gives (gas station, food, water): they stop a moment, then go on at the speed they had
 	protected void SceneFind(DL_FilmEvent e)
 	{
+		if (m_Step == 0 && !m_Water && (e.detail == "gas" || e.detail == "water") && m_Speed > 5)
+		{
+			// on land: the gas station (or the well's pump) comes up the road; they slow down and stop beside it
+			m_FindResume = m_Target;
+			float below = m_ViewH + 40;
+			if (e.detail == "gas")
+			{
+				m_Canopy.x = 208;
+				m_Canopy.y = below + m_Canopy.h / 2;
+				m_Canopy.used = true;
+				m_Canopy.sprite.Show(true);
+				m_Station.x = 232;
+				m_Station.y = m_Canopy.y + m_Canopy.h / 2 + m_Station.h / 2 - 6;
+				m_Station.used = true;
+				m_Station.sprite.Show(true);
+				m_FindAt = m_Canopy;
+			}
+			else
+			{
+				m_Pump.x = 52;
+				m_Pump.y = below;
+				m_Pump.used = true;
+				m_Pump.sprite.Show(true);
+				m_FindAt = m_Pump;
+			}
+			m_Target = Math.Min(m_Target, DRIVE * 0.6);
+			m_Step = 10;
+			m_StepT = 0;
+			return;
+		}
+		if (m_Step == 10)
+		{
+			// brake so they stand still with it beside them (the ease takes 168 px/s per s off the speed)
+			float refY = m_WalkY;
+			DL_FilmCar lead = FirstCar();
+			if (lead)
+				refY = lead.y;
+			float stopIn = m_Speed * m_Speed / 336.0 + 2;
+			if (!m_FindAt || !m_FindAt.used || m_FindAt.y - refY <= stopIn || m_StepT > 6)
+			{
+				m_Target = 0;
+				foreach (DL_FilmPerson sp : m_Crew)
+					sp.marching = false;
+				m_Step = 11;
+				m_StepT = 0;
+			}
+			return;
+		}
+		if (m_Step == 11)
+		{
+			// standing at the pumps: a can by the car while the tank fills
+			DL_FilmCar fc = FirstCar();
+			if (e.detail == "gas" && fc && m_StepT > 0.6 && !m_Fuel.sprite.IsShown())
+			{
+				m_Fuel.x = fc.x + fc.HalfW() + 8;
+				m_Fuel.y = fc.y;
+				m_Fuel.sprite.Show(true);
+			}
+			if (m_StepT > 3.2)
+			{
+				m_Fuel.sprite.Show(false);
+				m_Target = m_FindResume;
+				foreach (DL_FilmPerson gp : m_Crew)
+				{
+					if (!gp.down && gp.shown && gp.car < 0)
+						gp.marching = true;
+				}
+				m_Step = 12;
+			}
+			return;
+		}
+		if (m_Step >= 12)
+			return;
 		if (m_Step == 0)
 		{
 			m_FindResume = m_Target;
@@ -2378,6 +2462,9 @@ class DL_FilmPlayer
 			ScrollThing(t, dy);
 		foreach (DL_FilmThing w : m_Wrecks)
 			ScrollThing(w, dy);
+		ScrollThing(m_Canopy, dy);
+		ScrollThing(m_Station, dy);
+		ScrollThing(m_Pump, dy);
 		// the cars: left behind (scroll away), driving off, or in the line (closing up)
 		foreach (DL_FilmCar c : m_Cars)
 		{
@@ -2781,7 +2868,11 @@ class DL_FilmPlayer
 			f.Add("flat", 20, "OrionKaelin", "spare");
 			f.Add("drive", 15);
 			f.Add("flat", 35, "Derk", "kit");
-			f.Add("drive", 35);
+			f.Add("drive", 10);
+			f.Add("find", 45, "Derk", "gas");          // a working gas station
+			f.Add("drive", 10);
+			f.Add("find", 55, "OrionKaelin", "water"); // a well
+			f.Add("drive", 15);
 			return f;
 		}
 		if (pick == 1)

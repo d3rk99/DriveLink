@@ -73,6 +73,11 @@ class DL_Sprite
 		m_Clip.Show(on);
 	}
 
+	bool IsShown()
+	{
+		return m_Clip.IsVisible();
+	}
+
 	void SetAlpha(float a)
 	{
 		m_Sheet.SetAlpha(a);
