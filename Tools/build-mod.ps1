@@ -1,8 +1,28 @@
 # Packs Addons\DriveLink into @DriveLink\Addons\DriveLink.pbo (scripts + config, -packonly) and links it into
-# BOTH test servers. Usage: powershell -ExecutionPolicy Bypass -File Tools\build-mod.ps1
+# BOTH test servers. Usage: powershell -ExecutionPolicy Bypass -File Tools\build-mod.ps1 [-Dev]
+#   (none) = the release build: no test switches
+#   -Dev   = adds the DL_DEV define: F9 demo film, debug.json test switches (test car on login, car rebuild zone),
+#            clients log every detail
+param([switch]$Dev)
 $ErrorActionPreference = "Stop"
 $repo    = Split-Path -Parent $PSScriptRoot
 $source  = Join-Path $repo "Addons\DriveLink"
+if ($Dev) {
+  # a copy whose CfgMods declares DL_DEV (the scripts' #ifdef DL_DEV parts); the film's build leftovers stay out
+  $stage = Join-Path $env:TEMP "DriveLinkDevBuild\DriveLink"
+  if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+  New-Item -ItemType Directory -Force -Path $stage | Out-Null
+  Get-ChildItem -LiteralPath $source -Force | Where-Object { $_.Name -ne "gui" } | Copy-Item -Destination $stage -Recurse -Force
+  New-Item -ItemType Directory -Force -Path (Join-Path $stage "gui\anim") | Out-Null
+  Get-ChildItem -LiteralPath (Join-Path $source "gui\anim") -Force | Where-Object { $_.Name -ne "_minidayz_src" } | Copy-Item -Destination (Join-Path $stage "gui\anim") -Recurse -Force
+  $cfg = Join-Path $stage "config.cpp"
+  $text = Get-Content -LiteralPath $cfg -Raw
+  if ($text -notmatch 'type = "mod";') { throw "config.cpp: no type = mod line to put the DL_DEV define after" }
+  $text = $text -replace 'type = "mod";', ('type = "mod";' + "`r`n`t`tdefines[] = {`"DL_DEV`"};")
+  Set-Content -LiteralPath $cfg -Value $text -Encoding ASCII
+  $source = $stage
+  Write-Host "DEV build (DL_DEV)"
+}
 $modRoot = "C:\DayZMods\Mods\@DriveLink"
 $out     = Join-Path $modRoot "Addons"
 $builder = "E:\Steam\steamapps\common\DayZ Tools\Bin\AddonBuilder\AddonBuilder.exe"

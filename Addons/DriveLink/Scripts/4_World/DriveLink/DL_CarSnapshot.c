@@ -76,7 +76,7 @@ class DL_CarSnapshot
 	void LogFluids(Transport car)
 	{
 		if (car)
-			Print(DL_Const.LOG_TAG + "car fluids of the rebuilt " + car.GetType() + " 1 s later: " + FluidText(FluidsOf(car)));
+			DL_Log.Detail("car fluids of the rebuilt " + car.GetType() + " 1 s later: " + FluidText(FluidsOf(car)));
 	}
 
 	// "fuel 0.80 oil 1.00 brake 1.00 coolant 0.50" for the log

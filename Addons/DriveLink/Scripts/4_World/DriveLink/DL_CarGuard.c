@@ -45,7 +45,7 @@ class DL_CarGuard
 		string id = IdOf(car);
 		if (id == "")
 		{
-			Print(DL_Const.LOG_TAG + "car " + car.GetType() + " has no persistent id yet (never saved), nothing to remember");
+			DL_Log.Info("car " + car.GetType() + " has no persistent id yet (never saved), nothing to remember");
 			return;
 		}
 		DL_DepartedCars l = List();
@@ -56,7 +56,7 @@ class DL_CarGuard
 		string err;
 		MakeDirectory(DL_Const.DIR);
 		if (!JsonFileLoader<DL_DepartedCars>.SaveFile(FILE, l, err))
-			Print(DL_Const.LOG_TAG + "WARNING could not write " + FILE + ": " + err);
+			DL_Log.Warn("WARNING could not write " + FILE + ": " + err);
 	}
 
 	static bool HasLeft(EntityAI car)
@@ -73,7 +73,7 @@ modded class CarScript
 		super.AfterStoreLoad();
 		if (g_Game.IsServer() && DL_CarGuard.HasLeft(this))
 		{
-			Print(DL_Const.LOG_TAG + "car " + GetType() + " " + DL_CarGuard.IdOf(this) + " was driven to another server, removing the stale copy loaded from storage");
+			DL_Log.Info("car " + GetType() + " " + DL_CarGuard.IdOf(this) + " was driven to another server, removing the stale copy loaded from storage");
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_DeleteSelf, 1000, false); // a proto native (Delete) cannot go into the call queue
 		}
 	}
@@ -91,7 +91,7 @@ modded class MotorbikeScript
 		super.AfterStoreLoad();
 		if (g_Game.IsServer() && DL_CarGuard.HasLeft(this))
 		{
-			Print(DL_Const.LOG_TAG + "car " + GetType() + " " + DL_CarGuard.IdOf(this) + " was driven to another server, removing the stale copy loaded from storage");
+			DL_Log.Info("car " + GetType() + " " + DL_CarGuard.IdOf(this) + " was driven to another server, removing the stale copy loaded from storage");
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_DeleteSelf, 1000, false); // a proto native (Delete) cannot go into the call queue
 		}
 	}
@@ -109,7 +109,7 @@ modded class BoatScript
 		super.AfterStoreLoad();
 		if (g_Game.IsServer() && DL_CarGuard.HasLeft(this))
 		{
-			Print(DL_Const.LOG_TAG + "car " + GetType() + " " + DL_CarGuard.IdOf(this) + " was driven to another server, removing the stale copy loaded from storage");
+			DL_Log.Info("car " + GetType() + " " + DL_CarGuard.IdOf(this) + " was driven to another server, removing the stale copy loaded from storage");
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_DeleteSelf, 1000, false); // a proto native (Delete) cannot go into the call queue
 		}
 	}

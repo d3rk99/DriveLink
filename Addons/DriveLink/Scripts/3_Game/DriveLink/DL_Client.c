@@ -55,7 +55,7 @@ class DL_Net
 		Lan().hosts.Insert(host);
 		string err;
 		JsonFileLoader<DL_LanMemory>.SaveFile(LAN_FILE, Lan(), err);
-		Print(DL_Const.LOG_TAG + "remembered " + host + " as a LAN server address of this PC");
+		DL_Log.Detail("remembered " + host + " as a LAN server address of this PC");
 	}
 
 	// Which address of the target this client should use, decided by how it reached the current server.
@@ -107,7 +107,7 @@ modded class DayZGame
 			string text;
 			if (!ctx.Read(caption) || !ctx.Read(text))
 				return;
-			Print(DL_Const.LOG_TAG + "server sends us away: " + text);
+			DL_Log.Detail("server sends us away: " + text);
 			m_DL_NoticeCaption = caption;
 			m_DL_Notice = text;
 			GetCallQueue(CALL_CATEGORY_SYSTEM).Call(DisconnectSessionForce);
@@ -123,7 +123,7 @@ modded class DayZGame
 			JsonSerializer js = new JsonSerializer();
 			if (!js.ReadFromString(r, json, err) || !r || !r.target)
 			{
-				Print(DL_Const.LOG_TAG + "bad redirect: " + err);
+				DL_Log.Warn("bad redirect: " + err);
 				return;
 			}
 			string joinedVia;
@@ -131,7 +131,10 @@ modded class DayZGame
 			GetHostAddress(joinedVia, joinedPort);
 			DL_Net.RememberLan(joinedVia);
 			string host = DL_Net.PickHost(r.target, joinedVia);
-			Print(DL_Const.LOG_TAG + "redirect to " + r.target.name + " (" + r.reason + "): joined via " + joinedVia + " -> using " + host + ":" + r.target.port.ToString());
+			string dlMsg134 = "redirect to " + r.target.name + " (" + r.reason;
+			dlMsg134 += "): joined via " + joinedVia + " -> using " + host;
+			dlMsg134 += ":" + r.target.port.ToString();
+			DL_Log.Detail(dlMsg134);
 			if (host == "")
 				return;
 			m_DL_Next = r.target;
@@ -149,7 +152,7 @@ modded class DayZGame
 			return;
 		DL_ServerInfo t = m_DL_Next;
 		m_DL_Next = null;
-		Print(DL_Const.LOG_TAG + "connecting to " + t.name + " " + t.lanHost + ":" + t.port.ToString());
+		DL_Log.Detail("connecting to " + t.name + " " + t.lanHost + ":" + t.port.ToString());
 		Connect(parent, t.lanHost, t.port, t.password);
 	}
 }

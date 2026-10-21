@@ -146,13 +146,13 @@ modded class MissionServer
 			if (JsonFileLoader<DL_Config>.LoadFile(DL_Const.CONFIG, loaded, err) && loaded)
 				m_DL_Cfg = loaded;
 			else
-				Print(DL_Const.LOG_TAG + "config.json unreadable (" + err + "), DriveLink is OFF");
+				DL_Log.Warn("config.json unreadable (" + err + "), DriveLink is OFF");
 		}
 		else
 		{
 			// zones + arrival points are drawn in the hub's web app; only the hub's address + key go here
 			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
-			Print(DL_Const.LOG_TAG + "wrote " + DL_Const.CONFIG + " - put in hubUrl + hubKey (the hub's web app, Setup page shows both), restart, then approve this server on the hub's Servers page");
+			DL_Log.Info("wrote " + DL_Const.CONFIG + " - put in hubUrl + hubKey (the hub's web app, Setup page shows both), restart, then approve this server on the hub's Servers page");
 		}
 		// a config.json from before a setting existed loads it as 0
 		if (m_DL_Cfg.crewWaitSeconds <= 0)
@@ -167,8 +167,24 @@ modded class MissionServer
 		}
 		if (m_DL_Cfg.hubKey != "")
 			DL_SendHello();
-		DL_LoadDebug();
-		Print(DL_Const.LOG_TAG + "v" + DL_Const.VERSION + " server '" + m_DL_Cfg.serverId + "', hub " + m_DL_Cfg.hubUrl + ", " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points, key set " + (m_DL_Cfg.hubKey != "").ToString());
+#ifdef DL_DEV
+		DL_LoadDebug();                 // debug.json test switches: dev builds only
+#endif
+		// log level: "quiet" (warnings only) | "normal" | "verbose"; a config.json from before it has none = normal
+		if (m_DL_Cfg.log == "")
+		{
+			m_DL_Cfg.log = "normal";
+			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
+		}
+		DL_Log.s_Level = 1;
+		if (m_DL_Cfg.log == "quiet")
+			DL_Log.s_Level = 0;
+		else if (m_DL_Cfg.log == "verbose")
+			DL_Log.s_Level = 2;
+		string dlMsg184 = "v" + DL_Const.VERSION + " server '" + m_DL_Cfg.serverId;
+		dlMsg184 += "', hub " + m_DL_Cfg.hubUrl + ", " + m_DL_Cfg.zones.Count().ToString();
+		dlMsg184 += " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points, key set " + (m_DL_Cfg.hubKey != "").ToString();
+		DL_Log.Info(dlMsg184);
 		// once the world is up: are the arrival points' car spots (and a convoy's line behind them) free?
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_CheckCarSpots, 20000, false);
 	}
@@ -182,14 +198,14 @@ modded class MissionServer
 		string err;
 		if (!JsonFileLoader<DL_Debug>.LoadFile(DL_Const.DEBUG_FILE, m_DL_Debug, err) || !m_DL_Debug)
 		{
-			Print(DL_Const.LOG_TAG + "DEBUG debug.json unreadable: " + err);
+			DL_Log.Warn("DEBUG debug.json unreadable: " + err);
 			m_DL_Debug = null;
 			return;
 		}
 		string zone = "off";
 		if (m_DL_Debug.carRebuildZone && m_DL_Debug.carRebuildZone.radius > 0)
 			zone = m_DL_Debug.carRebuildZone.center.ToString() + " r " + m_DL_Debug.carRebuildZone.radius.ToString();
-		Print(DL_Const.LOG_TAG + "DEBUG debug.json: carRebuildZone " + zone + ", seatTestCar '" + m_DL_Debug.seatTestCar + "'");
+		DL_Log.Detail("DEBUG debug.json: carRebuildZone " + zone + ", seatTestCar '" + m_DL_Debug.seatTestCar + "'");
 	}
 
 	// Spike 1: an empty car 5 s in the circle -> snapshot -> delete -> JSON text -> rebuilt on the same spot 3 s later.
@@ -256,7 +272,11 @@ modded class MissionServer
 		string err;
 		JsonFileLoader<DL_CarData>.MakeData(d, json, err, false);
 		JsonFileLoader<DL_CarData>.SaveFile(DL_Const.DIR + "/car-snapshot.json", d, err);
-		Print(DL_Const.LOG_TAG + "CAR SPIKE " + d.type + " at " + d.pos.ToString() + ": " + d.items.Count().ToString() + " parts/items, health " + d.health.ToString() + ", " + DL_CarSnapshot.FluidText(d.fluids) + ", " + d.zones.Count().ToString() + " zones, json " + json.Length().ToString() + " bytes (saved car-snapshot.json); deleting it, rebuild in 3 s");
+		string dlMsg272 = "CAR SPIKE " + d.type + " at " + d.pos.ToString();
+		dlMsg272 += ": " + d.items.Count().ToString() + " parts/items, health " + d.health.ToString();
+		dlMsg272 += ", " + DL_CarSnapshot.FluidText(d.fluids) + ", " + d.zones.Count().ToString();
+		dlMsg272 += " zones, json " + json.Length().ToString() + " bytes (saved car-snapshot.json); deleting it, rebuild in 3 s";
+		DL_Log.Detail(dlMsg272);
 		car.Delete();
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_CarSpikeBuild, 3000, false, json);
 	}
@@ -267,7 +287,7 @@ modded class MissionServer
 		string err;
 		if (!JsonFileLoader<DL_CarData>.LoadData(json, d, err) || !d)
 		{
-			Print(DL_Const.LOG_TAG + "CAR SPIKE FAILED: snapshot unreadable after the JSON round trip: " + err);
+			DL_Log.Warn("CAR SPIKE FAILED: snapshot unreadable after the JSON round trip: " + err);
 			return;
 		}
 		int made;
@@ -275,11 +295,14 @@ modded class MissionServer
 		Transport car = m_DL_CarSnap.Build(d, d.pos, d.ori, made, dropped);
 		if (!car)
 		{
-			Print(DL_Const.LOG_TAG + "CAR SPIKE FAILED: could not create " + d.type);
+			DL_Log.Warn("CAR SPIKE FAILED: could not create " + d.type);
 			return;
 		}
 		m_DL_CarDone.Set(car, true);
-		Print(DL_Const.LOG_TAG + "CAR SPIKE rebuilt " + d.type + ": " + made.ToString() + "/" + d.items.Count().ToString() + " parts/items (" + dropped.ToString() + " on the ground), health " + car.GetHealth("", "Health").ToString() + ", now " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car)));
+		string dlMsg295 = "CAR SPIKE rebuilt " + d.type + ": " + made.ToString();
+		dlMsg295 += "/" + d.items.Count().ToString() + " parts/items (" + dropped.ToString();
+		dlMsg295 += " on the ground), health " + car.GetHealth("", "Health").ToString() + ", now " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car));
+		DL_Log.Detail(dlMsg295);
 	}
 
 	// Spike 2: a fresh car next to a player who just logged in / arrived, then he is seated as driver.
@@ -298,12 +321,14 @@ modded class MissionServer
 		Transport car = Transport.Cast(g_Game.CreateObjectEx(m_DL_Debug.seatTestCar, pos, ECE_SETUP | ECE_UPDATEPATHGRAPH | ECE_CREATEPHYSICS | ECE_TRACE));
 		if (!car)
 		{
-			Print(DL_Const.LOG_TAG + "SEAT SPIKE FAILED: could not create '" + m_DL_Debug.seatTestCar + "' (not a Transport class?)");
+			DL_Log.Warn("SEAT SPIKE FAILED: could not create '" + m_DL_Debug.seatTestCar + "' (not a Transport class?)");
 			return;
 		}
 		car.SetOrientation(pb.GetOrientation());
 		car.OnDebugSpawn(); // vanilla kit: wheels, doors, battery, plugs, fluids (e.g. offroadhatchback.c:457-477)
-		Print(DL_Const.LOG_TAG + "SEAT SPIKE spawned " + car.GetType() + " at " + pos.ToString() + " for " + sid + ", seating him in 2 s");
+		string dlMsg319 = "SEAT SPIKE spawned " + car.GetType() + " at " + pos.ToString();
+		dlMsg319 += " for " + sid + ", seating him in 2 s";
+		DL_Log.Detail(dlMsg319);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SeatSpikeSeat, 2000, false, sid, car);
 	}
 
@@ -323,7 +348,10 @@ modded class MissionServer
 			return;
 		bool inCmd = pb.GetCommand_Vehicle() != null;
 		bool isDriver = car.CrewDriver() == pb;
-		Print(DL_Const.LOG_TAG + "SEAT SPIKE result for " + sid + ": vehicle command " + inCmd.ToString() + ", driver of " + car.GetType() + " " + isDriver.ToString() + ", crew index " + car.CrewMemberIndex(pb).ToString());
+		string dlMsg339 = "SEAT SPIKE result for " + sid + ": vehicle command " + inCmd.ToString();
+		dlMsg339 += ", driver of " + car.GetType() + " " + isDriver.ToString();
+		dlMsg339 += ", crew index " + car.CrewMemberIndex(pb).ToString();
+		DL_Log.Detail(dlMsg339);
 	}
 
 	// /api/hello: on boot, and again until the hub answers OK (hub down, or this server not approved yet). It carries
@@ -367,7 +395,7 @@ modded class MissionServer
 	{
 		if (!ok)
 		{
-			Print(DL_Const.LOG_TAG + "hub hello FAILED - check hubUrl/hubKey, that the hub runs, and the hub's log; trying again in 30 s");
+			DL_Log.Warn("hub hello FAILED - check hubUrl/hubKey, that the hub runs, and the hub's log; trying again in 30 s");
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendHello, 30000, false);
 			return;
 		}
@@ -376,22 +404,22 @@ modded class MissionServer
 		JsonSerializer js = new JsonSerializer();
 		if (!js.ReadFromString(r, body, err) || !r)
 		{
-			Print(DL_Const.LOG_TAG + "hub hello: unreadable answer (" + err + "), trying again in 30 s");
+			DL_Log.Warn("hub hello: unreadable answer (" + err + "), trying again in 30 s");
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendHello, 30000, false);
 			return;
 		}
 		if (r.pending)
 		{
 			if (!m_DL_SaidPending)
-				Print(DL_Const.LOG_TAG + "the hub knows the key but not this server yet: approve it on the hub's Servers page (asking again every 15 s)");
+				DL_Log.Info("the hub knows the key but not this server yet: approve it on the hub's Servers page (asking again every 15 s)");
 			m_DL_SaidPending = true;
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendHello, 15000, false);
 			return;
 		}
-		Print(DL_Const.LOG_TAG + "hub hello OK: " + body.Substring(0, Math.Min(160, body.Length())));
+		DL_Log.Info("hub hello OK: " + body.Substring(0, Math.Min(160, body.Length())));
 		if (r.serverId != "" && r.serverId != m_DL_Cfg.serverId)
 		{
-			Print(DL_Const.LOG_TAG + "the hub knows this server as '" + r.serverId + "' (was '" + m_DL_Cfg.serverId + "'), saved in config.json");
+			DL_Log.Info("the hub knows this server as '" + r.serverId + "' (was '" + m_DL_Cfg.serverId + "'), saved in config.json");
 			m_DL_Cfg.serverId = r.serverId;
 			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
 		}
@@ -446,22 +474,41 @@ modded class MissionServer
 		m_DL_Parties.Clear(); // countdowns of zones that may be gone now
 		string err;
 		JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
-		Print(DL_Const.LOG_TAG + "layout rev " + l.rev.ToString() + " from the hub (" + why + "): " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString() + " arrival points");
+		string dlMsg462 = "layout rev " + l.rev.ToString() + " from the hub (" + why;
+		dlMsg462 += "): " + m_DL_Cfg.zones.Count().ToString() + " zones, " + m_DL_Cfg.arrivals.Count().ToString();
+		dlMsg462 += " arrival points";
+		DL_Log.Info(dlMsg462);
 		foreach (DL_Zone z : m_DL_Cfg.zones)
 		{
 			if (z)
-				Print(DL_Const.LOG_TAG + "  zone '" + z.name + "' " + z.center.ToString() + " r " + z.radius.ToString() + " -> " + z.to + " / " + z.arrival + ", " + z.distanceKm.ToString() + " km");
+			{
+				string dlMsg466 = "  zone '" + z.name + "' " + z.center.ToString();
+				dlMsg466 += " r " + z.radius.ToString() + " -> " + z.to;
+				dlMsg466 += " / " + z.arrival + ", " + z.distanceKm.ToString();
+				dlMsg466 += " km";
+				DL_Log.Detail(dlMsg466);
+			}
 		}
 		foreach (DL_ArrivalPoint a : m_DL_Cfg.arrivals)
 		{
 			if (a)
-				Print(DL_Const.LOG_TAG + "  arrival '" + a.name + "' " + a.pos.ToString() + " yaw " + a.yaw.ToString());
+				DL_Log.Detail("  arrival '" + a.name + "' " + a.pos.ToString() + " yaw " + a.yaw.ToString());
 		}
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_CheckCarSpots);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_CheckCarSpots, 5000, false);
 		DL_TravelRules t = m_DL_Cfg.travel;
 		if (t)
-			Print(DL_Const.LOG_TAG + "  travel rules: " + t.mode + ", per 10 km foot " + t.foodFootKcal.ToString() + " kcal/" + t.waterFootMl.ToString() + " ml, vehicle " + t.foodCarKcal.ToString() + " kcal/" + t.waterCarMl.ToString() + " ml + " + t.fuelLiters.ToString() + " L (per vehicle " + t.fuelPerVehicle.ToString() + " x" + t.fuelScale.ToString() + ", boats x" + t.fuelBoatScale.ToString() + "), wear " + t.wearEnginePct.ToString() + "/" + t.wearWheelsPct.ToString() + "%, time " + t.timeEnabled.ToString() + " (" + t.speedFootKmh.ToString() + "/" + t.speedCarKmh.ToString() + " km/h)");
+		{
+			string dlMsg477 = "  travel rules: " + t.mode + ", per 10 km foot " + t.foodFootKcal.ToString();
+			dlMsg477 += " kcal/" + t.waterFootMl.ToString() + " ml, vehicle " + t.foodCarKcal.ToString();
+			dlMsg477 += " kcal/" + t.waterCarMl.ToString() + " ml + " + t.fuelLiters.ToString();
+			dlMsg477 += " L (per vehicle " + t.fuelPerVehicle.ToString() + " x" + t.fuelScale.ToString();
+			dlMsg477 += ", boats x" + t.fuelBoatScale.ToString() + "), wear " + t.wearEnginePct.ToString();
+			dlMsg477 += "/" + t.wearWheelsPct.ToString() + "%, time " + t.timeEnabled.ToString();
+			dlMsg477 += " (" + t.speedFootKmh.ToString() + "/" + t.speedCarKmh.ToString();
+			dlMsg477 += " km/h)";
+			DL_Log.Detail(dlMsg477);
+		}
 	}
 
 	protected bool DL_On()
@@ -502,16 +549,20 @@ modded class MissionServer
 		{
 			// hub down or confused: let the player play here rather than lock him out
 			if (!ok)
-				Print(DL_Const.LOG_TAG + "hub call failed for " + sid + " (refused or unreachable, see the hub window), normal login");
+				DL_Log.Warn("hub call failed for " + sid + " (refused or unreachable, see the hub window), normal login");
 			else
-				Print(DL_Const.LOG_TAG + "hub answer for " + sid + " unusable: " + err + " " + body.Substring(0, Math.Min(200, body.Length())) + ", normal login");
+			{
+				string dlMsg520 = "hub answer for " + sid + " unusable: " + err;
+				dlMsg520 += " " + body.Substring(0, Math.Min(200, body.Length())) + ", normal login";
+				DL_Log.Warn(dlMsg520);
+			}
 			p.action = "normal";
 			if (p.loggedIn)
 				DL_LateAnswer(sid, p);
 			return;
 		}
 		p.resp = r;
-		Print(DL_Const.LOG_TAG + "hub says " + r.action + " for " + sid);
+		DL_Log.Detail("hub says " + r.action + " for " + sid);
 		if (r.action == "transfer")
 		{
 			// second step: the snapshot itself, as the whole body of /api/payload (see DL_Hub.ParsePayload)
@@ -545,7 +596,9 @@ modded class MissionServer
 			else
 			{
 				p.action = "transfer";
-				Print(DL_Const.LOG_TAG + "transfer for " + sid + ": " + sizes + ", " + DL_Hub.CountItems(p.resp.payload.items).ToString() + " items in the snapshot");
+				string dlMsg561 = "transfer for " + sid + ": " + sizes;
+				dlMsg561 += ", " + DL_Hub.CountItems(p.resp.payload.items).ToString() + " items in the snapshot";
+				DL_Log.Info(dlMsg561);
 			}
 		}
 		if (p.loggedIn)
@@ -569,7 +622,7 @@ modded class MissionServer
 	{
 		p.action = "failed";
 		p.reason = reason;
-		Print(DL_Const.LOG_TAG + "ARRIVAL FAILED for " + sid + ": " + reason);
+		DL_Log.Warn("ARRIVAL FAILED for " + sid + ": " + reason);
 		DL_TokenReq q = DL_TokenRequest(sid, p.resp.token);
 		q.reason = reason;
 		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/fail?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.TokenJson(q), new DL_ConfirmWaiter(sid, "failure report"), "OnAnswer", "fail " + sid);
@@ -586,7 +639,7 @@ modded class MissionServer
 			m_DL_Pending.Remove(sid);
 			return;
 		}
-		Print(DL_Const.LOG_TAG + "late hub answer for " + sid + ": " + p.action);
+		DL_Log.Detail("late hub answer for " + sid + ": " + p.action);
 		if (p.action == "transfer")
 		{
 			// rebuilt on his next login (the hub still offers the trip; the ClientReady swap replaces this character)
@@ -615,7 +668,7 @@ modded class MissionServer
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !pb.GetIdentity())
 			return;
-		Print(DL_Const.LOG_TAG + "sending " + sid + " away: " + text);
+		DL_Log.Info("sending " + sid + " away: " + text);
 		ScriptRPC rpc = new ScriptRPC();
 		rpc.Write("DriveLink");
 		rpc.Write(text);
@@ -660,7 +713,7 @@ modded class MissionServer
 				if (p && p.action == "transfer" && p.resp && p.resp.payload)
 				{
 					PlayerBase old = PlayerBase.Cast(rp.param2);
-					Print(DL_Const.LOG_TAG + rp.param1.GetPlainId() + " arrives by transfer; this server had an old character for him, replacing it");
+					DL_Log.Info(rp.param1.GetPlainId() + " arrives by transfer; this server had an old character for him, replacing it");
 					PlayerBase built = DL_BuildArrival(rp.param1, p.resp, old);
 					if (built)
 					{
@@ -702,7 +755,7 @@ modded class MissionServer
 			// he died here and this is not the starting server: his new life starts there
 			m_DL_GoHome.Remove(sid);
 			m_DL_Pending.Remove(sid);
-			Print(DL_Const.LOG_TAG + sid + " respawns: sent to the starting server " + home.name);
+			DL_Log.Info(sid + " respawns: sent to the starting server " + home.name);
 			NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 8, "DriveLink", "You died. Your next life starts on " + home.name + ". Taking you there...", "");
 			DL_SendRedirect(identity, home, "died");
 			if (player)
@@ -717,7 +770,7 @@ modded class MissionServer
 			// the hub hasn't fully answered yet: keep the entry, DL_LateAnswer handles the answer when it comes
 			p.loggedIn = true;
 			m_DL_Leaving.Set(sid, true); // no zone travel until we know where his character really is
-			Print(DL_Const.LOG_TAG + "WARNING " + sid + " logged in before the hub answered (" + p.action + "), waiting for it");
+			DL_Log.Warn("WARNING " + sid + " logged in before the hub answered (" + p.action + "), waiting for it");
 			return;
 		}
 		m_DL_Pending.Remove(sid);
@@ -729,7 +782,7 @@ modded class MissionServer
 			int left = 0;
 			if (p.resp)
 				left = p.resp.seconds;
-			Print(DL_Const.LOG_TAG + identity.GetPlainId() + " is still on the road to " + where + " (" + left.ToString() + " s), sent back to the menu");
+			DL_Log.Info(identity.GetPlainId() + " is still on the road to " + where + " (" + left.ToString() + " s), sent back to the menu");
 			if (player)
 			{
 				player.SetAllowDamage(false);
@@ -746,7 +799,7 @@ modded class MissionServer
 		}
 		if (p && p.action == "redirect" && p.resp && p.resp.target)
 		{
-			Print(DL_Const.LOG_TAG + identity.GetPlainId() + " belongs on " + p.resp.target.name + ", redirecting");
+			DL_Log.Info(identity.GetPlainId() + " belongs on " + p.resp.target.name + ", redirecting");
 			NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 8, "DriveLink", "Your character is on " + p.resp.target.name + ". Taking you there...", "");
 			DL_SendRedirect(identity, p.resp.target, "owner");
 			if (player)
@@ -756,7 +809,9 @@ modded class MissionServer
 			}
 			return;
 		}
-		DL_SeatSpikeLater(sid); // debug.json only
+#ifdef DL_DEV
+		DL_SeatSpikeLater(sid); // debug.json only (dev builds)
+#endif
 	}
 
 	// Returns null (and says why in m_DL_BuildError) when he can't be built here; nothing is changed then.
@@ -770,7 +825,7 @@ modded class MissionServer
 		{
 			// "" = a trip the hub admin turned around ("DriveLinkHub.exe return"): first point is the normal answer
 			if (r.arrival != "")
-				Print(DL_Const.LOG_TAG + "arrival point '" + r.arrival + "' not in config.json, using the first one");
+				DL_Log.Warn("arrival point '" + r.arrival + "' not in config.json, using the first one");
 			ap = m_DL_Cfg.arrivals[0];
 		}
 		if (!ap)
@@ -822,7 +877,7 @@ modded class MissionServer
 			else
 			{
 				carText = ", WITHOUT his car: could not create " + d.car.type;
-				Print(DL_Const.LOG_TAG + "WARNING could not create the car " + d.car.type + " for " + identity.GetPlainId() + ", he arrives on foot");
+				DL_Log.Warn("WARNING could not create the car " + d.car.type + " for " + identity.GetPlainId() + ", he arrives on foot");
 			}
 		}
 		// M3: a passenger. His driver's car is here already -> next to it (right side) and seated; else he waits on
@@ -883,7 +938,13 @@ modded class MissionServer
 		}
 		m_DL_Leaving.Remove(identity.GetPlainId());
 		DL_Confirm(identity.GetPlainId(), r.token);
-		Print(DL_Const.LOG_TAG + identity.GetPlainId() + " arrived from " + r.from + " at " + ap.name + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString() + carText);
+		string dlMsg901 = identity.GetPlainId() + " arrived from " + r.from + " at ";
+		dlMsg901 += ap.name + " " + pos.ToString() + ", ";
+		dlMsg901 += made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (";
+		dlMsg901 += dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding ";
+		dlMsg901 += d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach ";
+		dlMsg901 += d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString() + carText;
+		DL_Log.Info(dlMsg901);
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
 		string sid = identity.GetPlainId();
 		float filmSec = DL_SendFilmLater(sid, d);
@@ -944,7 +1005,7 @@ modded class MissionServer
 		player.SetAllowDamage(false);
 		m_DL_Leaving.Set(sid, true);              // no zone travel for the dead
 		DL_Confirm(sid, r.token);
-		Print(DL_Const.LOG_TAG + sid + " died on the road from " + r.from + ": dies here once the film / story is over");
+		DL_Log.Info(sid + " died on the road from " + r.from + ": dies here once the film / story is over");
 		int secs = DL_StoryScreen(sid, "You died on the road.\n" + d.journey, DL_SendFilmLater(sid, d), true);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RoadDeath, 2000 + 1000 * secs + 300, false, sid);
 		return player;
@@ -958,7 +1019,7 @@ modded class MissionServer
 		m_DL_Leaving.Remove(sid);
 		pb.SetAllowDamage(true);
 		pb.SetHealth("", "", 0);
-		Print(DL_Const.LOG_TAG + sid + " died on the road: killed");
+		DL_Log.Info(sid + " died on the road: killed");
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveBody, 60000, false, pb);
 	}
 
@@ -987,7 +1048,7 @@ modded class MissionServer
 	{
 		if (!ok)
 		{
-			Print(DL_Const.LOG_TAG + "WARNING hub did not take the death of " + sid);
+			DL_Log.Warn("WARNING hub did not take the death of " + sid);
 			return;
 		}
 		DL_DiedResp resp;
@@ -998,10 +1059,10 @@ modded class MissionServer
 		if (resp.home && resp.home.id != "")
 		{
 			m_DL_GoHome.Set(sid, resp.home);
-			Print(DL_Const.LOG_TAG + sid + " died here: his next life starts on " + resp.home.name);
+			DL_Log.Info(sid + " died here: his next life starts on " + resp.home.name);
 		}
 		else
-			Print(DL_Const.LOG_TAG + sid + " died here: respawns here");
+			DL_Log.Info(sid + " died here: respawns here");
 	}
 
 	// the black screen with the road's story (and film) for a while (arrivals that don't go through a waiting room)
@@ -1091,7 +1152,7 @@ modded class MissionServer
 			DL_SendSkip(to, yes, watching.Count(), skip);
 		if (!skip)
 			return;
-		Print(DL_Const.LOG_TAG + "road film " + key + " skipped: all " + watching.Count().ToString() + " voted");
+		DL_Log.Detail("road film " + key + " skipped: all " + watching.Count().ToString() + " voted");
 		int now = g_Game.GetTime();
 		foreach (string ss : watching)
 		{
@@ -1200,7 +1261,10 @@ modded class MissionServer
 		JsonFileLoader<DL_Film>.MakeData(d.film, json, err, false);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendFilm, 2500, false, sid, json);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendFilm, 4500, false, sid, json);
-		Print(DL_Const.LOG_TAG + sid + "'s road film: " + d.film.events.Count().ToString() + " scenes, " + d.film.biomeFrom + " -> " + d.film.biomeTo + ", " + d.film.Duration().ToString() + " s");
+		string dlMsg1218 = sid + "'s road film: " + d.film.events.Count().ToString() + " scenes, ";
+		dlMsg1218 += d.film.biomeFrom + " -> " + d.film.biomeTo + ", ";
+		dlMsg1218 += d.film.Duration().ToString() + " s";
+		DL_Log.Detail(dlMsg1218);
 		return d.film.Duration();
 	}
 
@@ -1228,7 +1292,7 @@ modded class MissionServer
 			rpc.Write(json.Substring(at, n));
 			rpc.Send(null, DL_Const.RPC_FILM, true, pb.GetIdentity());
 		}
-		Print(DL_Const.LOG_TAG + sid + "'s road film sent: " + len.ToString() + " chars in " + parts.ToString() + " parts");
+		DL_Log.Detail(sid + "'s road film sent: " + len.ToString() + " chars in " + parts.ToString() + " parts");
 	}
 
 	// ---------------- M3 waiting room ----------------
@@ -1351,7 +1415,14 @@ modded class MissionServer
 			DL_Confirm(sid, r.token);
 			carText = ", passenger in seat " + d.carSeat.ToString() + " of " + group + "'s car";
 		}
-		Print(DL_Const.LOG_TAG + sid + " arrived from " + r.from + " at " + ap.name + " " + pos.ToString() + ", " + made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (" + dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding " + d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach " + d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString() + carText + ", waiting room " + room.here.Count().ToString() + "/" + room.expected.ToString());
+		string dlMsg1369 = sid + " arrived from " + r.from + " at ";
+		dlMsg1369 += ap.name + " " + pos.ToString() + ", ";
+		dlMsg1369 += made.ToString() + "/" + DL_Hub.CountItems(d.items).ToString() + " items restored (";
+		dlMsg1369 += dropped.ToString() + " on the ground, no room), health " + d.health.ToString() + ", bleeding ";
+		dlMsg1369 += d.bleeding.Count().ToString() + ", modifiers " + d.modifiers.Count().ToString() + ", stomach ";
+		dlMsg1369 += d.stomach.Count().ToString() + ", cuffed " + d.restrained.ToString() + carText;
+		dlMsg1369 += ", waiting room " + room.here.Count().ToString() + "/" + room.expected.ToString();
+		DL_Log.Info(dlMsg1369);
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
 		if (!room.going && room.car && room.here.Count() >= room.expected)
 		{
@@ -1419,7 +1490,9 @@ modded class MissionServer
 		foreach (string gs : startNow)
 		{
 			DL_Room rs = m_DL_Rooms.Get(gs);
-			Print(DL_Const.LOG_TAG + "waiting room of " + gs + ": waited " + m_DL_Cfg.crewWaitSeconds.ToString() + " s, going with " + rs.here.Count().ToString() + "/" + rs.expected.ToString());
+			string dlMsg1437 = "waiting room of " + gs + ": waited " + m_DL_Cfg.crewWaitSeconds.ToString();
+			dlMsg1437 += " s, going with " + rs.here.Count().ToString() + "/" + rs.expected.ToString();
+			DL_Log.Detail(dlMsg1437);
 			rs.going = true;
 			DL_RoomGo(gs);
 		}
@@ -1497,7 +1570,9 @@ modded class MissionServer
 			DL_Confirm(group, room.driverToken);
 			room.driverToken = "";
 		}
-		Print(DL_Const.LOG_TAG + "waiting room of " + group + ": " + room.here.Count().ToString() + "/" + room.expected.ToString() + " here, " + carText);
+		string dlMsg1515 = "waiting room of " + group + ": " + room.here.Count().ToString();
+		dlMsg1515 += "/" + room.expected.ToString() + " here, " + carText;
+		DL_Log.Detail(dlMsg1515);
 		int i = 0;
 		if (car)
 		{
@@ -1539,7 +1614,9 @@ modded class MissionServer
 			m_DL_Convoys.Set(ca.id, ca);
 		}
 		ca.ready.Set(group, car);
-		Print(DL_Const.LOG_TAG + "convoy " + ca.id + ": " + group + "'s car is ready, " + ca.ready.Count().ToString() + "/" + ca.expected.ToString());
+		string dlMsg1557 = "convoy " + ca.id + ": " + group;
+		dlMsg1557 += "'s car is ready, " + ca.ready.Count().ToString() + "/" + ca.expected.ToString();
+		DL_Log.Info(dlMsg1557);
 	}
 
 	// convoys whose cars are all seated (or waited long enough) and whose films are over (or skipped): their rooms
@@ -1561,7 +1638,9 @@ modded class MissionServer
 			}
 			if (now < at)
 				continue;
-			Print(DL_Const.LOG_TAG + "convoy " + id + ": " + ca.ready.Count().ToString() + "/" + ca.expected.ToString() + " cars ready, lifting all black screens");
+			string dlMsg1579 = "convoy " + id + ": " + ca.ready.Count().ToString();
+			dlMsg1579 += "/" + ca.expected.ToString() + " cars ready, lifting all black screens";
+			DL_Log.Detail(dlMsg1579);
 			foreach (string rg, Transport rc : ca.ready)
 				reveal.Insert(rg);
 			done.Insert(id);
@@ -1625,12 +1704,12 @@ modded class MissionServer
 				vector q = p + Vector(i * 360.0 / n, 0, 0).AnglesToVector() * r;
 				if (DL_WaterFree(q, yaw))
 				{
-					Print(DL_Const.LOG_TAG + who + "'s boat goes on the water " + Math.Round(r).ToString() + " m from its spot");
+					DL_Log.Detail(who + "'s boat goes on the water " + Math.Round(r).ToString() + " m from its spot");
 					return DL_OnWater(q);
 				}
 			}
 		}
-		Print(DL_Const.LOG_TAG + "WARNING " + who + "'s boat: no free water within 400 m of " + p.ToString() + ", putting it there anyway");
+		DL_Log.Warn("WARNING " + who + "'s boat: no free water within 400 m of " + p.ToString() + ", putting it there anyway");
 		return DL_OnWater(p);
 	}
 
@@ -1678,12 +1757,12 @@ modded class MissionServer
 				if (DL_Veh.WaterY(q[0], q[2], 0.05) < 0)
 				{
 					q[1] = g_Game.SurfaceY(q[0], q[2]);
-					Print(DL_Const.LOG_TAG + who + ": the arrival point is on the water, the boat crew waits on the shore " + r.ToString() + " m away " + q.ToString());
+					DL_Log.Info(who + ": the arrival point is on the water, the boat crew waits on the shore " + r.ToString() + " m away " + q.ToString());
 					return q;
 				}
 			}
 		}
-		Print(DL_Const.LOG_TAG + who + ": no dry land within 150 m of the arrival point, the boat crew waits on the water");
+		DL_Log.Warn(who + ": no dry land within 150 m of the arrival point, the boat crew waits on the water");
 		return DL_OnWater(p);
 	}
 
@@ -1769,7 +1848,7 @@ modded class MissionServer
 				else
 					rep.boat = "free water " + Math.Round(vector.Distance(Vector(bspot[0], 0, bspot[2]), Vector(ap.pos[0], 0, ap.pos[2]))).ToString() + " m from the point";
 			}
-			Print(DL_Const.LOG_TAG + "arrival '" + ap.name + "' car spots" + line + " | boat: " + rep.boat);
+			DL_Log.Detail("arrival '" + ap.name + "' car spots" + line + " | boat: " + rep.boat);
 			report.spots.Insert(rep);
 		}
 		// to the hub: its Map page shows the places in green / red
@@ -1822,12 +1901,18 @@ modded class MissionServer
 				if (DL_SpotFree(p, yaw, wid, len))
 				{
 					if (side != 0 || back != 0)
-						Print(DL_Const.LOG_TAG + who + "'s " + type + ": its spot was taken, standing " + back.ToString() + " m back, " + side.ToString() + " m to the side");
+					{
+						string dlMsg1840 = who + "'s " + type + ": its spot was taken, standing ";
+						dlMsg1840 += back.ToString() + " m back, " + side.ToString() + " m to the side";
+						DL_Log.Detail(dlMsg1840);
+					}
 					return p;
 				}
 			}
 		}
-		Print(DL_Const.LOG_TAG + "WARNING " + who + "'s " + type + ": no free spot near " + want.ToString() + ", using it anyway (damage is off for a while)");
+		string dlMsg1845 = "WARNING " + who + "'s " + type;
+		dlMsg1845 += ": no free spot near " + want.ToString() + ", using it anyway (damage is off for a while)";
+		DL_Log.Warn(dlMsg1845);
 		return want;
 	}
 
@@ -1938,7 +2023,9 @@ modded class MissionServer
 		string how = "driver's client";
 		if (serverStarts)
 			how = "server";
-		Print(DL_Const.LOG_TAG + "waiting room of " + group + ": " + seated.ToString() + "/" + room.here.Count().ToString() + " seated, black screen lifted, engine start by the " + how);
+		string dlMsg1956 = "waiting room of " + group + ": " + seated.ToString();
+		dlMsg1956 += "/" + room.here.Count().ToString() + " seated, black screen lifted, engine start by the " + how;
+		DL_Log.Detail(dlMsg1956);
 		if (car)
 		{
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndCarProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, car);
@@ -1970,7 +2057,10 @@ modded class MissionServer
 			rpc.Write(vel);
 			rpc.Send(null, DL_Const.RPC_FLY, true, pilot.GetIdentity());
 		}
-		Print(DL_Const.LOG_TAG + "waiting room of " + group + ": " + car.GetType() + " let go in the air at " + car.GetPosition().ToString() + ", " + Math.Round(speed * 3.6).ToString() + " km/h, engine " + DL_Veh.EngineIsOn(car).ToString());
+		string dlMsg1988 = "waiting room of " + group + ": " + car.GetType();
+		dlMsg1988 += " let go in the air at " + car.GetPosition().ToString() + ", " + Math.Round(speed * 3.6).ToString();
+		dlMsg1988 += " km/h, engine " + DL_Veh.EngineIsOn(car).ToString();
+		DL_Log.Detail(dlMsg1988);
 	}
 
 	// where the k-th plane of a formation comes in: the plane entry (or above the arrival point), at its height
@@ -2000,7 +2090,11 @@ modded class MissionServer
 	protected void DL_RoomEngineCheck(string group, Transport car)
 	{
 		if (car)
-			Print(DL_Const.LOG_TAG + "waiting room of " + group + ": engine of the " + car.GetType() + " running " + DL_Veh.EngineIsOn(car).ToString() + ", " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car)));
+		{
+			string dlMsg2018 = "waiting room of " + group + ": engine of the " + car.GetType();
+			dlMsg2018 += " running " + DL_Veh.EngineIsOn(car).ToString() + ", " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car));
+			DL_Log.Detail(dlMsg2018);
+		}
 	}
 
 	// no car is coming: the passengers go on on foot
@@ -2010,7 +2104,10 @@ modded class MissionServer
 		if (!room)
 			return;
 		m_DL_Rooms.Remove(group);
-		Print(DL_Const.LOG_TAG + "waiting room of " + group + " closed: " + why + " (" + room.here.Count().ToString() + "/" + room.expected.ToString() + " here, on foot)");
+		string dlMsg2028 = "waiting room of " + group + " closed: " + why;
+		dlMsg2028 += " (" + room.here.Count().ToString() + "/" + room.expected.ToString();
+		dlMsg2028 += " here, on foot)";
+		DL_Log.Detail(dlMsg2028);
 		foreach (string m : room.here)
 		{
 			PlayerBase pb = DL_FindPlayer(m);
@@ -2051,7 +2148,7 @@ modded class MissionServer
 			k++;
 		}
 		if (mine.Count() > 0)
-			Print(DL_Const.LOG_TAG + driverSid + "'s car is here, bringing in " + k.ToString() + " waiting passenger(s)");
+			DL_Log.Info(driverSid + "'s car is here, bringing in " + k.ToString() + " waiting passenger(s)");
 	}
 
 	protected void DL_BringToCar(string psid, Transport car, int seat)
@@ -2069,7 +2166,7 @@ modded class MissionServer
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !car)
 		{
-			Print(DL_Const.LOG_TAG + "could not seat " + sid + ": player or car gone");
+			DL_Log.Warn("could not seat " + sid + ": player or car gone");
 			return;
 		}
 		if (seat < 0)
@@ -2082,7 +2179,12 @@ modded class MissionServer
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (pb && car)
-			Print(DL_Const.LOG_TAG + sid + " seated in his " + car.GetType() + ": " + (car.CrewMemberIndex(pb) >= 0).ToString() + " (seat " + car.CrewMemberIndex(pb).ToString() + "), " + DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car)));
+		{
+			string dlMsg2100 = sid + " seated in his " + car.GetType() + ": ";
+			dlMsg2100 += (car.CrewMemberIndex(pb) >= 0).ToString() + " (seat " + car.CrewMemberIndex(pb).ToString() + "), ";
+			dlMsg2100 += DL_CarSnapshot.FluidText(DL_CarSnapshot.FluidsOf(car));
+			DL_Log.Detail(dlMsg2100);
+		}
 	}
 
 	protected void DL_EndCarProtection(Transport car)
@@ -2117,7 +2219,9 @@ modded class MissionServer
 			return;
 		m_DL_Tick = 0;
 		DL_CheckZones();
+#ifdef DL_DEV
 		DL_DebugTick();
+#endif
 		DL_TakeFilmVotes();
 		DL_TakeDeaths();
 	}
@@ -2164,7 +2268,9 @@ modded class MissionServer
 			if (missing != "" && DL_RefusesShortTrips())
 			{
 				m_DL_MustLeaveZone.Set(sid, true);
-				Print(DL_Const.LOG_TAG + sid + " can't pay the trip to " + z.to + " (" + price.Text() + "): " + missing);
+				string dlMsg2184 = sid + " can't pay the trip to " + z.to + " (";
+				dlMsg2184 += price.Text() + "): " + missing;
+				DL_Log.Info(dlMsg2184);
 				DL_CrewNotify(pb, 12, "Not enough for " + z.name, price.Text() + ". Missing: " + missing + ". Step out of the zone and come back when you have it.");
 				continue;
 			}
@@ -2254,7 +2360,12 @@ modded class MissionServer
 		party.prices.Set(sid, priceText);
 		party.since = now;
 		if (party.leaders.Count() > 1)
-			Print(DL_Const.LOG_TAG + sid + " joins the " + DL_PartyWord(party) + " " + party.id.ToString() + " in " + z.name + ": " + party.leaders.Count().ToString() + " now, countdown again");
+		{
+			string dlMsg2274 = sid + " joins the " + DL_PartyWord(party) + " ";
+			dlMsg2274 += party.id.ToString() + " in " + z.name + ": ";
+			dlMsg2274 += party.leaders.Count().ToString() + " now, countdown again";
+			DL_Log.Info(dlMsg2274);
+		}
 		DL_PartyCountdown(party, m_DL_Cfg.countdownSeconds);
 	}
 
@@ -2386,7 +2497,10 @@ modded class MissionServer
 			{
 				string gsid = gu.leader.GetIdentity().GetPlainId();
 				m_DL_MustLeaveZone.Set(gsid, true);
-				Print(DL_Const.LOG_TAG + gsid + " can't pay the trip to " + z.to + " any more (" + price.Text() + "): " + missing + " - the " + DL_PartyWord(party) + " goes without him");
+				string dlMsg2406 = gsid + " can't pay the trip to " + z.to + " any more (";
+				dlMsg2406 += price.Text() + "): " + missing + " - the ";
+				dlMsg2406 += DL_PartyWord(party) + " goes without him";
+				DL_Log.Info(dlMsg2406);
 				DL_CrewNotify(gu.leader, 12, "Not enough for " + z.name, price.Text() + ". Missing: " + missing + ". The others went on.");
 				continue;
 			}
@@ -2409,7 +2523,12 @@ modded class MissionServer
 			if (jtext == "")
 				jtext = "(an uneventful trip)";
 			jtext.Replace("\n", " | ");
-			Print(DL_Const.LOG_TAG + DL_PartyWord(party) + " " + party.id.ToString() + "'s road to " + z.to + ": driven " + Math.Round(journey.drivenKm).ToString() + " km, walked " + Math.Round(journey.walkedKm).ToString() + " km, " + journey.Alive().ToString() + "/" + journey.crew.Count().ToString() + " alive, all cars lost " + journey.carLost.ToString() + ", " + journey.seconds.ToString() + " s: " + jtext);
+			string dlMsg2429 = DL_PartyWord(party) + " " + party.id.ToString() + "'s road to ";
+			dlMsg2429 += z.to + ": driven " + Math.Round(journey.drivenKm).ToString() + " km, walked ";
+			dlMsg2429 += Math.Round(journey.walkedKm).ToString() + " km, " + journey.Alive().ToString() + "/";
+			dlMsg2429 += journey.crew.Count().ToString() + " alive, all cars lost " + journey.carLost.ToString() + ", ";
+			dlMsg2429 += journey.seconds.ToString() + " s: " + jtext;
+			DL_Log.Info(dlMsg2429);
 		}
 		DL_Film film;
 		if (journey)
@@ -2483,7 +2602,10 @@ modded class MissionServer
 				footIdx++;
 			DL_DepartUnit(du.leader, z, du.car, du.crew, prices[i], journey, film);
 		}
-		Print(DL_Const.LOG_TAG + DL_PartyWord(party) + " " + party.id.ToString() + " leaves for " + z.to + ": " + going.Count().ToString() + " " + DL_PartyWord(party) + " units together");
+		string dlMsg2503 = DL_PartyWord(party) + " " + party.id.ToString() + " leaves for ";
+		dlMsg2503 += z.to + ": " + going.Count().ToString() + " ";
+		dlMsg2503 += DL_PartyWord(party) + " units together";
+		DL_Log.Info(dlMsg2503);
 	}
 
 	// refuse mode (no road events): the plain film of a party - every car with its crew, or the group walking
@@ -2663,7 +2785,9 @@ modded class MissionServer
 		if (missing != "" && DL_RefusesShortTrips())
 		{
 			m_DL_MustLeaveZone.Set(sid, true);
-			Print(DL_Const.LOG_TAG + sid + " can't pay the trip to " + z.to + " any more (" + price.Text() + "): " + missing);
+			string dlMsg2683 = sid + " can't pay the trip to " + z.to + " any more (";
+			dlMsg2683 += price.Text() + "): " + missing;
+			DL_Log.Info(dlMsg2683);
 			DL_CrewNotify(pb, 12, "Not enough for " + z.name, price.Text() + ". Missing: " + missing + ".");
 			return;
 		}
@@ -2676,7 +2800,12 @@ modded class MissionServer
 			if (jtext == "")
 				jtext = "(an uneventful trip)";
 			jtext.Replace("\n", " | ");
-			Print(DL_Const.LOG_TAG + sid + "'s road to " + z.to + ": driven " + Math.Round(journey.drivenKm).ToString() + " km, walked " + Math.Round(journey.walkedKm).ToString() + " km, " + journey.Alive().ToString() + "/" + journey.crew.Count().ToString() + " alive, car lost " + journey.carLost.ToString() + ", " + journey.seconds.ToString() + " s: " + jtext);
+			string dlMsg2696 = sid + "'s road to " + z.to + ": driven ";
+			dlMsg2696 += Math.Round(journey.drivenKm).ToString() + " km, walked " + Math.Round(journey.walkedKm).ToString() + " km, ";
+			dlMsg2696 += journey.Alive().ToString() + "/" + journey.crew.Count().ToString() + " alive, car lost ";
+			dlMsg2696 += journey.carLost.ToString() + ", " + journey.seconds.ToString() + " s: ";
+			dlMsg2696 += jtext;
+			DL_Log.Info(dlMsg2696);
 		}
 		// the road film: the journey's scenes, or (refuse mode / no events) the plain drive or walk with the crew
 		DL_Film film;
@@ -2743,7 +2872,9 @@ modded class MissionServer
 			m_DL_TripOf.Set(msid, trip);
 			DL_SendDepart(m, z, null, sid, car.CrewMemberIndex(m), crew.Count(), price, journey, film);
 		}
-		Print(DL_Const.LOG_TAG + sid + " drives " + car.GetType() + " to " + z.to + " with " + trip.waiting.ToString() + " passenger(s): their trips first, his own once all are taken");
+		string dlMsg2763 = sid + " drives " + car.GetType() + " to ";
+		dlMsg2763 += z.to + " with " + trip.waiting.ToString() + " passenger(s): their trips first, his own once all are taken";
+		DL_Log.Info(dlMsg2763);
 	}
 
 	// One player's trip. car = the car he drives (it goes inside his trip), carGroup/seat = a passenger's tag.
@@ -2826,14 +2957,18 @@ modded class MissionServer
 			q.payload.carSeat = seat;
 			carText = "passenger in seat " + seat.ToString() + " of " + carGroup + "'s car";
 		}
-		Print(DL_Const.LOG_TAG + sid + " leaving to " + z.to + " (" + z.arrival + "), " + q.payload.items.Count().ToString() + " items, " + q.payload.bleeding.Count().ToString() + " bleeding, " + q.payload.modifiers.Count().ToString() + " modifiers, " + carText);
+		string dlMsg2846 = sid + " leaving to " + z.to + " (";
+		dlMsg2846 += z.arrival + "), " + q.payload.items.Count().ToString() + " items, ";
+		dlMsg2846 += q.payload.bleeding.Count().ToString() + " bleeding, " + q.payload.modifiers.Count().ToString() + " modifiers, ";
+		dlMsg2846 += carText;
+		DL_Log.Info(dlMsg2846);
 		if (price && !jt)
 		{
 			// the driver's snapshot holds the car: he eats from its trunk too, canisters top up the tank
 			string paid = DL_TravelCost.ChargePlayer(q.payload, price, q.payload.car);
 			if (car)
 				paid += "; car: " + DL_TravelCost.ChargeCar(q.payload.car, car, price, q.payload);
-			Print(DL_Const.LOG_TAG + sid + " pays the trip (" + price.Text() + "): " + paid);
+			DL_Log.Info(sid + " pays the trip (" + price.Text() + "): " + paid);
 		}
 		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/depart?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, DL_Hub.DepartJson(q), new DL_DepartWaiter(this, sid), "OnAnswer", "depart " + sid);
 	}
@@ -2855,7 +2990,7 @@ modded class MissionServer
 		string why = "a passenger could not travel";
 		if (!driver || DL_CarOf(driver) != trip.car)
 			why = "the driver is no longer at the wheel";
-		Print(DL_Const.LOG_TAG + trip.driverSid + "'s car trip called off: " + why + " (refused: " + trip.refused.Count().ToString() + ")");
+		DL_Log.Warn(trip.driverSid + "'s car trip called off: " + why + " (refused: " + trip.refused.Count().ToString() + ")");
 		m_DL_Leaving.Remove(trip.driverSid);
 		if (trip.car)
 			trip.car.SetAllowDamage(true);
@@ -2893,7 +3028,7 @@ modded class MissionServer
 			string why = "hub refused or unreachable (see the hub window)";
 			if (r && r.error != "")
 				why = r.error;
-			Print(DL_Const.LOG_TAG + sid + " NOT sent: " + why);
+			DL_Log.Info(sid + " NOT sent: " + why);
 			if (pb)
 			{
 				pb.SetAllowDamage(true);
@@ -2908,26 +3043,26 @@ modded class MissionServer
 			// delete it after he has been removed from the seat (DL_RemoveTraveller runs at 1.5 s).
 			DL_CarGuard.Remember(car);
 			DL_ParkCar(car);
-			Print(DL_Const.LOG_TAG + car.GetType() + " " + DL_CarGuard.IdOf(car) + " travels with " + sid + ", removing it here once its seats are empty");
+			DL_Log.Detail(car.GetType() + " " + DL_CarGuard.IdOf(car) + " travels with " + sid + ", removing it here once its seats are empty");
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveCar, 3000, false, car, 0);
 		}
 		if (!pb)
 		{
 			// He logged out between the snapshot and now: the hub already holds him in transit, he will arrive on
 			// the target next time he joins anywhere (the hub redirects him there).
-			Print(DL_Const.LOG_TAG + sid + " left before the redirect; in transit to " + r.target.name);
+			DL_Log.Info(sid + " left before the redirect; in transit to " + r.target.name);
 			return;
 		}
 		if (r.readyIn > 0)
 		{
 			// travel time: he is on the road. Back to the main menu with the time; every server refuses him until then
 			DL_SendKick(sid, "On the road to " + r.target.name + ": about " + DL_TravelCost.Duration(r.readyIn) + ". Join " + r.target.name + " when that time has passed (no server lets you in before).");
-			Print(DL_Const.LOG_TAG + sid + " is on the road to " + r.target.name + " for " + r.readyIn.ToString() + " s");
+			DL_Log.Info(sid + " is on the road to " + r.target.name + " for " + r.readyIn.ToString() + " s");
 		}
 		else
 			DL_SendRedirect(pb.GetIdentity(), r.target, "zone");
 		m_DL_Doomed.Set(pb, true);
-		Print(DL_Const.LOG_TAG + sid + " handed over to " + r.target.name + ", removing the character here");
+		DL_Log.Info(sid + " handed over to " + r.target.name + ", removing the character here");
 		// give the RPC a moment to reach the client, then remove the character WITHOUT killing it (nothing may
 		// stay behind: no body, no dropped gear)
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveTraveller, 1500, false, sid);
@@ -2946,14 +3081,14 @@ modded class MissionServer
 		car.SetPosition(p);
 		car.SetOrientation(car.GetOrientation());
 		car.SetSynchDirty();
-		Print(DL_Const.LOG_TAG + car.GetType() + " parked: " + from.ToString() + " -> " + p.ToString());
+		DL_Log.Detail(car.GetType() + " parked: " + from.ToString() + " -> " + p.ToString());
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_LogCarPos, 1000, false, car);
 	}
 
 	protected void DL_LogCarPos(Transport car)
 	{
 		if (car)
-			Print(DL_Const.LOG_TAG + car.GetType() + " 1 s after parking is at " + car.GetPosition().ToString());
+			DL_Log.Detail(car.GetType() + " 1 s after parking is at " + car.GetPosition().ToString());
 	}
 
 	// NEVER delete a car with someone in a seat: test 2026-10-18 20:06:25 the Chernarus server crashed (access
@@ -2979,10 +3114,10 @@ modded class MissionServer
 			}
 			// a minute and still occupied: leave it (a duplicate is better than a crash); the crash guard list has it,
 			// so it is removed at this server's next start
-			Print(DL_Const.LOG_TAG + "WARNING " + car.GetType() + " still occupied after 60 s, NOT removed now (removed at next start)");
+			DL_Log.Warn("WARNING " + car.GetType() + " still occupied after 60 s, NOT removed now (removed at next start)");
 			return;
 		}
-		Print(DL_Const.LOG_TAG + car.GetType() + " removed here (seats empty after " + tries.ToString() + " s)");
+		DL_Log.Detail(car.GetType() + " removed here (seats empty after " + tries.ToString() + " s)");
 		car.Delete();
 	}
 
@@ -2998,7 +3133,7 @@ modded class MissionServer
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !pb.GetIdentity())
 			return;
-		Print(DL_Const.LOG_TAG + sid + " still connected after the hand-over, disconnecting him the vanilla way");
+		DL_Log.Info(sid + " still connected after the hand-over, disconnecting him the vanilla way");
 		m_DL_Doomed.Set(pb, true); // HandleBody -> DL_Forget
 		PlayerDisconnected(pb, pb.GetIdentity(), pb.GetIdentity().GetId());
 	}
@@ -3036,7 +3171,7 @@ modded class MissionServer
 		string json;
 		string err;
 		if (!JsonFileLoader<DL_Redirect>.MakeData(r, json, err, false))
-			Print(DL_Const.LOG_TAG + "redirect json: " + err);
+			DL_Log.Info("redirect json: " + err);
 		rpc.Write(json);
 		rpc.Send(null, DL_Const.RPC_REDIRECT, true, id);
 	}
@@ -3085,9 +3220,9 @@ class DL_ConfirmWaiter : Managed
 	void OnAnswer(bool ok, string body)
 	{
 		if (ok)
-			Print(DL_Const.LOG_TAG + "hub took the " + m_What + " of " + m_Sid);
+			DL_Log.Detail("hub took the " + m_What + " of " + m_Sid);
 		else
-			Print(DL_Const.LOG_TAG + "WARNING hub did NOT take the " + m_What + " of " + m_Sid + " (see hub window)");
+			DL_Log.Warn("WARNING hub did NOT take the " + m_What + " of " + m_Sid + " (see hub window)");
 	}
 }
 

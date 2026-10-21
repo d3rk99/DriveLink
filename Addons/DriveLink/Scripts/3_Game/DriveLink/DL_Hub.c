@@ -133,13 +133,13 @@ class DL_HubCallback : RestCallback
 
 	override void OnError(int errorCode)
 	{
-		Print(DL_Const.LOG_TAG + "hub " + m_What + " failed, error " + errorCode.ToString());
+		DL_Log.Info("hub " + m_What + " failed, error " + errorCode.ToString());
 		Finish(false, "");
 	}
 
 	override void OnTimeout()
 	{
-		Print(DL_Const.LOG_TAG + "hub " + m_What + " timed out");
+		DL_Log.Warn("hub " + m_What + " timed out");
 		Finish(false, "");
 	}
 }
@@ -168,7 +168,11 @@ class DL_Hub
 		if (s_Alive.Count() > 64)
 			s_Alive.RemoveOrdered(0);
 		if (what != "layout") // the 30 s layout poll would fill the log
-			Print(DL_Const.LOG_TAG + "POST " + baseUrl + path.Substring(0, path.IndexOf("?")) + " (" + json.Length().ToString() + " bytes) for " + what);
+		{
+			string dlMsg171 = "POST " + baseUrl + path.Substring(0, path.IndexOf("?")) + " (";
+			dlMsg171 += json.Length().ToString() + " bytes) for " + what;
+			DL_Log.Detail(dlMsg171);
+		}
 		ctx.POST(cb, "", json);
 	}
 
@@ -180,7 +184,7 @@ class DL_Hub
 		string json;
 		string err;
 		if (!JsonFileLoader<DL_ArriveReq>.MakeData(q, json, err, false))
-			Print(DL_Const.LOG_TAG + "arrive json: " + err);
+			DL_Log.Info("arrive json: " + err);
 		return json;
 	}
 
@@ -194,7 +198,7 @@ class DL_Hub
 		DL_PlayerData d;
 		if (!JsonFileLoader<DL_PlayerData>.LoadData(json, d, err) || !d)
 		{
-			Print(DL_Const.LOG_TAG + "payload unreadable: " + err);
+			DL_Log.Warn("payload unreadable: " + err);
 			if (err == "")
 				err = "payload unreadable";
 			return null;
@@ -215,7 +219,7 @@ class DL_Hub
 		string json;
 		string err;
 		if (!JsonFileLoader<DL_TokenReq>.MakeData(q, json, err, false))
-			Print(DL_Const.LOG_TAG + "token request json: " + err);
+			DL_Log.Info("token request json: " + err);
 		return json;
 	}
 
@@ -224,7 +228,7 @@ class DL_Hub
 		string json;
 		string err;
 		if (!JsonFileLoader<DL_DepartReq>.MakeData(q, json, err, false))
-			Print(DL_Const.LOG_TAG + "depart json: " + err);
+			DL_Log.Info("depart json: " + err);
 		return json;
 	}
 

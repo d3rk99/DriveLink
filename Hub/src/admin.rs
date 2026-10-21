@@ -147,7 +147,7 @@ async fn state(State(h): State<Shared>) -> Response {
     Json(json!({
         "servers": servers, "maps": maps, "tools": tools.map(|t| t.display().to_string()), "pending": pending,
         "hub": {
-            "serverKey": cfg.server_key, "lanIp": lan, "publicHost": cfg.public_host, "homeServer": cfg.home_server,
+            "serverKey": cfg.server_key, "lanIp": lan, "publicHost": cfg.public_host, "homeServer": cfg.home_server, "experimentalPlanes": cfg.experimental_planes,
             "httpPort": hub_port(&cfg.listen), "httpsPort": hub_port(&cfg.listen_tls), "listen": cfg.listen, "listenTls": cfg.listen_tls,
             "dayzPath": cfg.dayz_path, "dayzToolsPath": cfg.dayz_tools_path, "hasPassword": !cfg.admin_password.is_empty(),
         },

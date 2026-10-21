@@ -54,7 +54,7 @@ modded class MissionGameplay
 				m_DL_FlyVel = fv;
 				m_DL_FlyT = 1.5;
 				m_DL_StartEngine = true;
-				Print(DL_Const.LOG_TAG + "arriving in the air: flying on at " + Math.Round(fv.Length() * 3.6).ToString() + " km/h");
+				DL_Log.Detail("arriving in the air: flying on at " + Math.Round(fv.Length() * 3.6).ToString() + " km/h");
 			}
 			return;
 		}
@@ -98,7 +98,7 @@ modded class MissionGameplay
 				return;
 			if (skip)
 			{
-				Print(DL_Const.LOG_TAG + "road film skipped: everyone voted");
+				DL_Log.Detail("road film skipped: everyone voted");
 				m_DL_Film.Stop();
 			}
 			else
@@ -154,7 +154,8 @@ modded class MissionGameplay
 		super.OnUpdate(timeslice);
 		if (m_DL_Film)
 		{
-			// F9: the demo film (every scene), for testing; F9 again or Space stops it
+#ifdef DL_DEV
+			// F9: the demo film (every scene), for testing; F9 again or Space stops it - dev builds only
 			bool f9 = KeyState(KeyCode.KC_F9) != 0;
 			if (f9 && !m_DL_F9WasDown)
 			{
@@ -164,6 +165,7 @@ modded class MissionGameplay
 					m_DL_Film.Play(DL_FilmPlayer.Demo());
 			}
 			m_DL_F9WasDown = f9;
+#endif
 			m_DL_Film.Update(timeslice);
 			if (m_DL_Film.TakeVote())
 				DL_SendFilmVote();
@@ -176,7 +178,7 @@ modded class MissionGameplay
 			if (m_DL_WaitAge > 20)
 			{
 				// the server sends one every second; it went quiet, never leave the player stuck in the dark
-				Print(DL_Const.LOG_TAG + "waiting room: no word from the server for 20 s, lifting the black screen");
+				DL_Log.Warn("waiting room: no word from the server for 20 s, lifting the black screen");
 				m_DL_WaitWanted = false;
 			}
 		}
@@ -262,7 +264,7 @@ modded class MissionGameplay
 			m_DL_WaitShown = true;
 			m_DL_WaitRoot.Show(true);
 			PlayerControlDisable(INPUT_EXCLUDE_ALL);
-			Print(DL_Const.LOG_TAG + "waiting room: black screen on (" + msg + ")");
+			DL_Log.Detail("waiting room: black screen on (" + msg + ")");
 		}
 	}
 
@@ -348,7 +350,7 @@ modded class MissionGameplay
 		if (m_DL_WaitRoot)
 			m_DL_WaitRoot.Show(false);
 		PlayerControlEnable(false);
-		Print(DL_Const.LOG_TAG + "waiting room: black screen off");
+		DL_Log.Detail("waiting room: black screen off");
 	}
 
 	// The driver's machine simulates a PHYSICS car, so the engine is started here (as vanilla ActionStartEngine does,
@@ -373,7 +375,7 @@ modded class MissionGameplay
 			if (car.GetNetworkMoveStrategy() == NetworkMoveStrategy.PHYSICS)
 			{
 				DL_Veh.EngineStart(car);
-				Print(DL_Const.LOG_TAG + "waiting room: engine started on this client, running " + DL_Veh.EngineIsOn(car).ToString());
+				DL_Log.Detail("waiting room: engine started on this client, running " + DL_Veh.EngineIsOn(car).ToString());
 			}
 			return;
 		}
@@ -381,7 +383,7 @@ modded class MissionGameplay
 		{
 			m_DL_StartEngine = false;
 			m_DL_EngineTries = 0;
-			Print(DL_Const.LOG_TAG + "waiting room: not at the wheel, engine not started");
+			DL_Log.Detail("waiting room: not at the wheel, engine not started");
 		}
 	}
 }

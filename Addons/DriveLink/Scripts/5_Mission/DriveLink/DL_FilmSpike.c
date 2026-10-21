@@ -22,7 +22,7 @@ class DL_FilmSpike
 		if (!img)
 			return null;
 		if (!img.LoadImageFile(0, tex))
-			Print(DL_Const.LOG_TAG + "road film: could not load " + tex);
+			DL_Log.Warn("road film: could not load " + tex);
 		img.SetImage(0);
 		img.SetColor(color);
 		return img;

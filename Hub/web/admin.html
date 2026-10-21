@@ -77,7 +77,7 @@
     <div class="tools">
       <button id="tZone" title="Click the centre, drag out the radius">+ Leaving zone</button>
       <button id="tArr" title="Click the spot, drag the way they face">+ Arrival point</button>
-      <button id="tAir" title="Click one corner, drag to the opposite one: a square plane zone (e.g. a whole map border)">+ Plane zone</button>
+      <button id="tAir" style="display:none" title="Click one corner, drag to the opposite one: a square plane zone (e.g. a whole map border)">+ Plane zone</button>
     </div>
     <div class="hint" id="toolHint">Pick a tool, or click a zone / point on the map to edit it.</div>
     <div class="box" id="edit" style="display:none"></div>
@@ -196,6 +196,7 @@ const yawOf = (from, to) => ((Math.atan2(to.lng - from.lng, to.lat - from.lat) *
 const dist = (a, b) => Math.hypot(a.lng - b.lng, a.lat - b.lat);
 const otherServers = () => S.servers.filter(s => s.id !== cur);
 
+const planesOn = () => !!(S && S.hub && S.hub.experimentalPlanes);   // hub.json "experimentalPlanes": true
 function setTool(t) {
   tool = tool === t ? null : t;
   $("tZone").classList.toggle("on", tool === "zone");
@@ -254,6 +255,7 @@ function arrowIcon(yaw, color) {
 const handleIcon = L.divIcon({ className: "", iconSize: [14, 14], iconAnchor: [7, 7], html: `<div class="handle"></div>` });
 
 function drawLayout() {
+  $("tAir").style.display = planesOn() ? "" : "none";
   if (!layer) return;
   layer.clearLayers();
   const L1 = L_of(srv());
@@ -350,6 +352,7 @@ function drawBoatSpot(a) {
 
 // where a plane arriving here comes in (only drawn when pinned): a plane shape along its heading, its height
 function drawAirSpot(a) {
+  if (!planesOn()) return;
   const ap = a.airPos;
   if (!ap || (ap[0] === 0 && ap[2] === 0)) return;
   const r = (a.airYaw || 0) * Math.PI / 180, fx = Math.sin(r), fz = Math.cos(r), rx = Math.cos(r), rz = -Math.sin(r), k = 6;
@@ -388,7 +391,7 @@ function renderEdit() {
       <label>Name (shown to players)</label><input id="fName" value="${esc(z.name)}">
       <div class="row"><div><label>x</label><input id="fX" type="number" step="0.1" value="${z.center[0].toFixed(1)}"></div><div><label>z</label><input id="fZ" type="number" step="0.1" value="${z.center[2].toFixed(1)}"></div></div>
       <div class="row"><div><label>Shape</label><select id="fShape"><option value="circle" ${z.shape !== "rect" ? "selected" : ""}>Circle</option><option value="rect" ${z.shape === "rect" ? "selected" : ""}>Square / strip</option></select></div>
-      <div><label>Who travels through it</label><select id="fAir"><option value="0" ${!z.air ? "selected" : ""}>On foot, cars, bikes, boats</option><option value="1" ${z.air ? "selected" : ""}>Planes in flight only</option></select></div></div>
+      <div style="${planesOn() || z.air ? "" : "display:none"}"><label>Who travels through it</label><select id="fAir"><option value="0" ${!z.air ? "selected" : ""}>On foot, cars, bikes, boats</option><option value="1" ${z.air ? "selected" : ""}>Planes in flight only</option></select></div></div>
       ${z.shape === "rect" ? `<div class="row"><div><label>Width (m, east-west)</label><input id="fW" type="number" min="20" value="${Math.round(z.width || 0)}"></div><div><label>Depth (m, north-south)</label><input id="fD" type="number" min="20" value="${Math.round(z.depth || 0)}"></div></div>`
         : `<div class="row"><div><label>Radius (m)</label><input id="fR" type="number" min="1" value="${Math.round(z.radius)}"></div></div>`}
       ${z.air ? `<div class="hint">A plane zone: anyone flying an aircraft into it (LM's Planes mod on both servers) travels on; it arrives in the air at the arrival point's plane entry. Everyone else, and planes on the ground, ignore it.</div>` : ""}
@@ -428,18 +431,20 @@ function renderEdit() {
       <div class="row"><div><label>x</label><input id="bX" type="number" step="0.1" value="${pinnedBoat ? bp[0].toFixed(1) : ""}" placeholder="auto"></div><div><label>z</label><input id="bZ" type="number" step="0.1" value="${pinnedBoat ? bp[2].toFixed(1) : ""}" placeholder="auto"></div><div><label>facing</label><input id="bYaw" type="number" min="0" max="359" value="${Math.round(a.boatYaw || 0)}"></div></div>
       <div class="btns"><button id="bPick">Pick on the map</button>${pinnedBoat ? `<button id="bClear">Nearest water (auto)</button>` : ""}</div>`);
     const ap = a.airPos || [0, 0, 0], pinnedAir = ap[0] !== 0 || ap[2] !== 0;
-    box.insertAdjacentHTML("beforeend", `<h2 style="margin-top:12px">Plane entry</h2>
+    if (planesOn()) box.insertAdjacentHTML("beforeend", `<h2 style="margin-top:12px">Plane entry</h2>
       <div class="hint">A plane that comes along arrives here in flight: at this height above the ground, flying this way, engine running, at the speed it left with. Not set = above the arrival point, facing its way. Put it somewhere with room to fly on (not into a hill).</div>
       <div class="row"><div><label>x</label><input id="pX" type="number" step="1" value="${pinnedAir ? Math.round(ap[0]) : ""}" placeholder="the point"></div><div><label>z</label><input id="pZ" type="number" step="1" value="${pinnedAir ? Math.round(ap[2]) : ""}" placeholder="the point"></div></div>
       <div class="row"><div><label>Height above the ground (m)</label><input id="pH" type="number" min="50" step="10" value="${Math.round(ap[1] || 300)}"></div><div><label>Flying towards (deg)</label><input id="pYaw" type="number" min="0" max="359" value="${Math.round(a.airYaw || a.yaw || 0)}"></div></div>
       <div class="btns"><button id="pPick">Pick on the map</button>${pinnedAir ? `<button id="pClear">Above the point</button>` : ""}</div>`);
     const setAir = (x, z) => { a.airPos = [x, Math.max(50, +$("pH").value || 300), z]; changed(true); renderEdit(); };
-    $("pX").onchange = () => setAir(+$("pX").value || 0, +$("pZ").value || 0);
-    $("pZ").onchange = () => setAir(+$("pX").value || 0, +$("pZ").value || 0);
-    $("pH").onchange = () => { a.airPos = [ap[0], Math.max(50, +$("pH").value || 300), ap[2]]; changed(); };
-    $("pYaw").onchange = e => { a.airYaw = ((+e.target.value % 360) + 360) % 360; changed(true); };
-    $("pPick").onclick = () => { setStatus("Click where the plane should come in"); map.once("click", ev => { setAir(Math.round(ev.latlng.lng), Math.round(ev.latlng.lat)); setStatus(""); }); };
-    if ($("pClear")) $("pClear").onclick = () => setAir(0, 0);
+    if (planesOn()) {
+      $("pX").onchange = () => setAir(+$("pX").value || 0, +$("pZ").value || 0);
+      $("pZ").onchange = () => setAir(+$("pX").value || 0, +$("pZ").value || 0);
+      $("pH").onchange = () => { a.airPos = [ap[0], Math.max(50, +$("pH").value || 300), ap[2]]; changed(); };
+      $("pYaw").onchange = e => { a.airYaw = ((+e.target.value % 360) + 360) % 360; changed(true); };
+      $("pPick").onclick = () => { setStatus("Click where the plane should come in"); map.once("click", ev => { setAir(Math.round(ev.latlng.lng), Math.round(ev.latlng.lat)); setStatus(""); }); };
+      if ($("pClear")) $("pClear").onclick = () => setAir(0, 0);
+    }
     const setBoat = (x, z) => { a.boatPos = [x, 0, z]; changed(true); renderEdit(); };
     $("bX").onchange = () => setBoat(+$("bX").value || 0, +$("bZ").value || 0);
     $("bZ").onchange = () => setBoat(+$("bX").value || 0, +$("bZ").value || 0);

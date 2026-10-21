@@ -21,7 +21,7 @@ modded class PlayerBase
 		ctx.Write(t);
 		ctx.Write(crewIdx);
 		SendSyncJuncture(DL_SJ_SEAT, ctx);
-		Print(DL_Const.LOG_TAG + "seat juncture " + DL_SJ_SEAT.ToString() + " sent for " + t.GetType() + " crew " + crewIdx.ToString());
+		DL_Log.Detail("seat juncture " + DL_SJ_SEAT.ToString() + " sent for " + t.GetType() + " crew " + crewIdx.ToString());
 	}
 
 	override void OnSyncJuncture(int pJunctureID, ParamsReadContext pCtx)
@@ -36,7 +36,9 @@ modded class PlayerBase
 				m_DL_SeatIn = Transport.Cast(ent);
 				m_DL_SeatIdx = idx;
 			}
-			Print(DL_Const.LOG_TAG + "seat juncture received (server " + g_Game.IsServer().ToString() + "): read " + ok.ToString() + ", transport " + (m_DL_SeatIn != null).ToString() + ", crew " + idx.ToString());
+			string dlMsg39 = "seat juncture received (server " + g_Game.IsServer().ToString() + "): read " + ok.ToString();
+			dlMsg39 += ", transport " + (m_DL_SeatIn != null).ToString() + ", crew " + idx.ToString();
+			DL_Log.Detail(dlMsg39);
 			return;
 		}
 		super.OnSyncJuncture(pJunctureID, pCtx);
@@ -56,6 +58,8 @@ modded class PlayerBase
 		string side = "client";
 		if (g_Game.IsServer())
 			side = "server";
-		Print(DL_Const.LOG_TAG + "seat (" + side + "): StartCommand_Vehicle " + t.GetType() + " crew " + idx.ToString() + " -> " + (vc != null).ToString());
+		string dlMsg59 = "seat (" + side + "): StartCommand_Vehicle " + t.GetType();
+		dlMsg59 += " crew " + idx.ToString() + " -> " + (vc != null).ToString();
+		DL_Log.Detail(dlMsg59);
 	}
 }

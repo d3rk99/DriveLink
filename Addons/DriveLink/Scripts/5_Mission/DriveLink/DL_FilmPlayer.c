@@ -642,7 +642,7 @@ class DL_FilmPlayer
 		JsonSerializer js = new JsonSerializer();
 		if (!js.ReadFromString(f, json, err) || !f)
 		{
-			Print(DL_Const.LOG_TAG + "road film unreadable: " + err);
+			DL_Log.Warn("road film unreadable: " + err);
 			return;
 		}
 		m_LastJson = json;
@@ -664,7 +664,10 @@ class DL_FilmPlayer
 		m_Scene = -1;
 		m_Ending = false;
 		NextScene();
-		Print(DL_Const.LOG_TAG + "road film: " + f.events.Count().ToString() + " scenes, " + f.crew.Count().ToString() + " in the crew, " + m_Cars.Count().ToString() + " car(s), " + f.biomeFrom + " -> " + f.biomeTo);
+		string dlMsg667 = "road film: " + f.events.Count().ToString() + " scenes, " + f.crew.Count().ToString();
+		dlMsg667 += " in the crew, " + m_Cars.Count().ToString() + " car(s), " + f.biomeFrom;
+		dlMsg667 += " -> " + f.biomeTo;
+		DL_Log.Detail(dlMsg667);
 	}
 
 	void Stop()
@@ -2610,7 +2613,7 @@ class DL_FilmPlayer
 			}
 			if (gone || m_StepT > DL_Film.END_SECONDS + 2)
 			{
-				Print(DL_Const.LOG_TAG + "road film ended");
+				DL_Log.Detail("road film ended");
 				if (m_Film.skip == "vote" && !m_Voted)
 				{
 					m_Voted = true;
@@ -2636,12 +2639,12 @@ class DL_FilmPlayer
 					m_VoteOut = true;
 					if (m_SkipText)
 						m_SkipText.SetText("You voted to skip - waiting for the others");
-					Print(DL_Const.LOG_TAG + "road film: voted to skip");
+					DL_Log.Detail("road film: voted to skip");
 				}
 			}
 			else if (m_Film.skip != "none")
 			{
-				Print(DL_Const.LOG_TAG + "road film skipped");
+				DL_Log.Detail("road film skipped");
 				Stop();
 			}
 		}

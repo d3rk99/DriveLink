@@ -107,6 +107,7 @@ class DL_Config
 	string hubKey = "";                         // the hub's server key (web app, Setup page)
 	string serverId = "";                       // filled in by the hub once this server is approved (Servers page)
 	string joinId = "";                         // made on the first start: how the hub tells this server apart before it has an id
+	string log = "normal";                     // "quiet" (warnings only) | "normal" (trips, arrivals) | "verbose" (every detail)
 	int countdownSeconds = 5;
 	float checkEverySeconds = 1;
 	int arrivalProtectSeconds = 10;             // no damage right after arriving
@@ -270,7 +271,8 @@ class DL_CarData
 	vector vel;               // its velocity when it left, m/s (a plane goes on flying with it)
 }
 
-// $profile:DriveLink/debug.json - test switches, only read when the file exists. Never ship it on a live server.
+// $profile:DriveLink/debug.json - test switches, read only by a dev build (DL_DEV, Tools/build-mod.ps1 -Dev) and only
+// when the file exists.
 class DL_DebugZone
 {
 	vector center;

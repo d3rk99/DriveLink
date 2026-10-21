@@ -221,7 +221,7 @@ class DL_Snapshot
 			int parentId;
 			if (!par || !ids.Find(par, parentId))
 			{
-				Print(DL_Const.LOG_TAG + "capture: skipped " + e.GetType() + " (parent not in list)");
+				DL_Log.Detail("capture: skipped " + e.GetType() + " (parent not in list)");
 				continue;
 			}
 			DL_ItemData it = CaptureOne(p, e, inHands);
@@ -386,7 +386,7 @@ class DL_Snapshot
 				p.OnItemInHandsChanged();
 			}
 			else
-				Print(DL_Const.LOG_TAG + "could not put " + d.restrainItem + " back in the hands");
+				DL_Log.Warn("could not put " + d.restrainItem + " back in the hands");
 		}
 		p.SetSynchDirty();
 		return made;
@@ -422,11 +422,11 @@ class DL_Snapshot
 				if (e)
 				{
 					dropped++;
-					Print(DL_Const.LOG_TAG + "no room for " + it.type + " (" + it.slot + "), put on the ground");
+					DL_Log.Info("no room for " + it.type + " (" + it.slot + "), put on the ground");
 				}
 				else
 				{
-					Print(DL_Const.LOG_TAG + "could not create " + it.type + " at all");
+					DL_Log.Warn("could not create " + it.type + " at all");
 					continue;
 				}
 			}
@@ -625,7 +625,7 @@ class DL_Snapshot
 			}
 		}
 		if (!bm.OnStoreLoad(rw.GetReadContext(), g_Game.SaveVersion()))
-			Print(DL_Const.LOG_TAG + "bleeding sources could not be restored");
+			DL_Log.Warn("bleeding sources could not be restored");
 	}
 
 	protected void ApplyStomach(PlayerBase p, DL_PlayerData d)

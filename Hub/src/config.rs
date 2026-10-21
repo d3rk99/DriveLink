@@ -234,6 +234,9 @@ pub struct Config {
     /// everyone respawns where he died
     #[serde(default)]
     pub home_server: String,
+    /// show the plane tools on the Map page (plane zones, plane entry): LM's Planes support, on hold
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub experimental_planes: bool,
 }
 
 /// Fills in an admin password when there is none; returns it when it was just made.
@@ -278,6 +281,7 @@ pub fn load_or_create(path: &Path) -> Result<(Config, bool), String> {
                 map_pbos: HashMap::new(),
                 public_host: String::new(),
                 home_server: String::new(),
+                experimental_planes: false,
             };
             save(path, &c)?;
             return Ok((c, true));
