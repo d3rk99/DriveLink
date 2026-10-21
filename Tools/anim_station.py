@@ -11,7 +11,7 @@ import random
 from PIL import Image, ImageDraw
 
 LOT_X0 = 176          # film x of the frame's left edge
-LOT_W, LOT_H = 80, 210
+LOT_W, LOT_H = 80, 200
 FLARE = 16            # the driveways: curved joins to the road at the top and the bottom
 R = 12                # their radius
 HOUSE_Y = 20          # the shop building at the back of the lot ...
@@ -21,6 +21,7 @@ ROOF_K = 0.75         # canopy scale: deeper than a car is long (a Humvee is 84 
 ROOF_X = 16           # its left edge (film 192): clear of the road, the rest runs off the screen
 PUMP_X = 50           # where the filler stands at the pumps (frame px; facing up at them): see pump_y()
 SHADOW = (6, 5)       # every shadow falls down-right, like the cars'
+CANOPY_H = 16         # how high the canopy roof stands, film px in this front-on view
 
 PACK = r'C:\DayZMods\_assets\minidayz\minidayz-assets\buildings'
 
@@ -135,41 +136,56 @@ def draw_lot(biome):
     hx = ROOF_X + 6
     lot.alpha_composite(silhouette(house, 100).crop((0, 0, LOT_W - hx - SHADOW[0], house.height)), (hx + SHADOW[0], HOUSE_Y + SHADOW[1]))
     lot.alpha_composite(house.crop((0, 0, LOT_W - hx, house.height)), (hx, HOUSE_Y))
-    # roof, its shadow and the structure under it
+    # the canopy (front-on like MiniDayZ's buildings: we look at it from the front and above). Its roof stands
+    # CANOPY_H above the ground: the shade it throws lies that much lower, and its front row of columns runs from
+    # the sign strip down to the pump island, the pumps standing on the island between them
     roof, rx0, rh = roof_layer()
-    lot.alpha_composite(silhouette(roof, 95), SHADOW)
-    front = ROOF_Y + rh                                    # the roof's front edge (its sign strip)
-    d = ImageDraw.Draw(lot)
-    # the pump island: raised concrete with a yellow-and-black curb
-    isl = (ROOF_X + 2, front + 3, LOT_W - 1, front + 10)
-    d.rectangle((isl[0] + SHADOW[0] // 2, isl[1] + 2, isl[2], isl[3] + 2), fill=(0, 0, 0, 70))
-    d.rectangle(isl, fill=(156, 152, 142, 255))
-    d.line((isl[0], isl[1], isl[2], isl[1]), fill=(186, 182, 170, 255))
+    front = roof.getbbox()[3]                              # the roof's front edge (bottom of its sign strip)
+    ground = front + CANOPY_H                              # the ground under that edge
+    lot.alpha_composite(silhouette(roof, 105), (SHADOW[0], CANOPY_H))   # the shade under the canopy
+    # shadows go on their own layer, blended over the asphalt (drawing them straight in would punch holes)
+    sh = Image.new('RGBA', (LOT_W, LOT_H), (0, 0, 0, 0))
+    ds = ImageDraw.Draw(sh)
+    ob = Image.new('RGBA', (LOT_W, LOT_H), (0, 0, 0, 0))   # ... and the island, pumps, columns over them
+    d = ImageDraw.Draw(ob)
+    # the pump island: raised concrete (top face, then its yellow-and-black kerb facing us)
+    isl = (ROOF_X + 1, ground - 7, LOT_W - 1, ground)
+    ds.rectangle((isl[0] + 3, isl[3] + 1, isl[2], isl[3] + 3), fill=(0, 0, 0, 80))       # its shadow
+    d.rectangle((isl[0], isl[1], isl[2], isl[3] - 2), fill=(158, 154, 144, 255))
+    d.line((isl[0], isl[1], isl[2], isl[1]), fill=(190, 186, 174, 255))
     for x in range(isl[0], isl[2] + 1):
-        d.point((x, isl[3]), fill=((206, 170, 52, 255) if (x // 3) % 2 else (34, 34, 34, 255)))
-    # pillars holding the roof: posts from the island up into the roof's front edge
-    for pxl in (ROOF_X + 4, LOT_W - 6):
-        d.rectangle((pxl + 3, front - 2, pxl + 5, front + 7), fill=(0, 0, 0, 70))   # shadow
-        d.rectangle((pxl, front - 3, pxl + 2, front + 6), fill=(178, 176, 170, 255))
-        d.line((pxl, front - 3, pxl, front + 6), fill=(214, 212, 206, 255))
-        d.line((pxl + 2, front - 3, pxl + 2, front + 6), fill=(120, 118, 112, 255))
-    # two pumps on the island: red body, white panel, dark display, a black hose
-    for pxl in (ROOF_X + 16, ROOF_X + 34):
-        top = front - 1
-        d.rectangle((pxl + 2, top + 3, pxl + 8, top + 11), fill=(0, 0, 0, 80))                # shadow
-        d.rectangle((pxl, top, pxl + 6, top + 9), fill=(176, 44, 38, 255), outline=(70, 24, 22, 255))
-        d.rectangle((pxl + 1, top + 1, pxl + 5, top + 4), fill=(226, 222, 210, 255))
+        c = (206, 170, 52, 255) if (x // 3) % 2 else (34, 34, 34, 255)
+        d.line((x, isl[3] - 1, x, isl[3]), fill=c)
+    # two pumps standing on the island: red body, white panel, dark display, a black hose
+    for pxl in (ROOF_X + 15, ROOF_X + 33):
+        base = isl[1] + 2
+        top = base - 12
+        ds.rectangle((pxl + 7, top + 4, pxl + 9, base + 1), fill=(0, 0, 0, 70))               # shadow
+        d.rectangle((pxl, top, pxl + 6, base), fill=(176, 44, 38, 255), outline=(70, 24, 22, 255))
+        d.line((pxl + 1, top + 1, pxl + 1, base - 1), fill=(214, 84, 70, 255))                 # lit side
+        d.rectangle((pxl + 1, top + 1, pxl + 5, top + 5), fill=(226, 222, 210, 255))
         d.rectangle((pxl + 2, top + 2, pxl + 4, top + 3), fill=(40, 52, 48, 255))
-        d.point((pxl + 1, top + 6), fill=(230, 200, 70, 255))
-        d.line((pxl + 6, top + 5, pxl + 8, top + 7), fill=(24, 24, 24, 255))
-        d.line((pxl + 8, top + 7, pxl + 8, top + 10), fill=(24, 24, 24, 255))
+        d.point((pxl + 3, top + 7), fill=(230, 200, 70, 255))
+        d.line((pxl + 6, top + 6, pxl + 8, top + 8), fill=(24, 24, 24, 255))
+        d.line((pxl + 8, top + 8, pxl + 8, base - 1), fill=(24, 24, 24, 255))
+    # the columns carrying the roof: from the sign strip down onto the island, a base plate where they stand
+    for pxl in (ROOF_X + 5, LOT_W - 9):
+        ds.polygon([(pxl + 4, ground - 2), (pxl + 7, ground - 2), (pxl + 13, ground + 4), (pxl + 10, ground + 4)],
+                   fill=(0, 0, 0, 90))                                                       # its shadow
+        d.rectangle((pxl, front - 2, pxl + 3, ground - 3), fill=(176, 174, 168, 255))
+        d.line((pxl, front - 2, pxl, ground - 3), fill=(222, 220, 214, 255))                # lit side
+        d.line((pxl + 3, front - 2, pxl + 3, ground - 3), fill=(112, 110, 104, 255))        # shaded side
+        d.line((pxl - 1, front - 1, pxl + 4, front - 1), fill=(92, 90, 86, 255))            # bracket under the strip
+        d.rectangle((pxl - 1, ground - 3, pxl + 4, ground - 2), fill=(96, 94, 90, 255))     # base plate
+    lot.alpha_composite(sh)
+    lot.alpha_composite(ob)
     return lot
 
 
 def pump_y():
     """frame y where the filler stands in front of the pumps"""
-    _, _, rh = roof_layer()
-    return ROOF_Y + rh + 14
+    roof, _, _ = roof_layer()
+    return roof.getbbox()[3] + CANOPY_H + 6
 
 
 def draw_roof():
@@ -188,6 +204,6 @@ if __name__ == '__main__':
     import anim_humvee
     car = anim_humvee.draw('camo')
     g.alpha_composite(car, (128 - 28, y0 + pump_y() - 42))
-    print('pump y', pump_y(), 'front', ROOF_Y + roof_layer()[2], 'lot h', LOT_H)
+    print("pump y", pump_y(), "front", draw_roof().getbbox()[3], "lot h", LOT_H)
     g.alpha_composite(draw_roof(), (LOT_X0, y0))
     g.resize((g.width * 3, g.height * 3), Image.NEAREST).save(out)

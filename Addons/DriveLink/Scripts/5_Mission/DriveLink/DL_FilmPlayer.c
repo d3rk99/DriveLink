@@ -572,9 +572,9 @@ class DL_FilmPlayer
 	// roof over the people; both one frame of LOT_W x LOT_H film px with its left edge at LOT_X0
 	static const float LOT_X0 = 176;
 	static const float LOT_W = 80;
-	static const float LOT_H = 210;
+	static const float LOT_H = 200;
 	static const float LOT_PUMP_X = 50;    // where the filler stands at the pumps, in the frame
-	static const float LOT_PUMP_Y = 184;
+	static const float LOT_PUMP_Y = 178;
 	protected ref DL_FilmThing m_Roof;
 	protected ref DL_FilmThing m_Pump;    // MiniDayZ water pump (a well find on land)
 	protected ref DL_FilmThing m_Lot;
