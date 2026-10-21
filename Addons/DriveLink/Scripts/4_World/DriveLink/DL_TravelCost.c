@@ -146,27 +146,41 @@ class DL_TravelCost
 		float canisters = 0;
 		array<string> miss = new array<string>;
 		array<ref DL_PlayerData> snaps = new array<ref DL_PlayerData>;
-		for (int i = 0; i < crew.Count(); i++)
+		array<PlayerBase> who4 = new array<PlayerBase>;
+		foreach (PlayerBase cp : crew)
 		{
-			PlayerBase pb = crew[i];
-			if (!pb)
+			if (!cp)
 				continue;
-			DL_PlayerData d = snap.Capture(pb);
-			snaps.Insert(d);
+			snaps.Insert(snap.Capture(cp));
+			who4.Insert(cp);
+		}
+		array<DL_CarData> partyTrunks = new array<DL_CarData>;
+		if (cd)
+			partyTrunks.Insert(cd);
+		float keep = PartyKeep(snaps, partyTrunks);
+		for (int i = 0; i < who4.Count(); i++)
+		{
+			PlayerBase pb = who4[i];
+			DL_PlayerData d = snaps[i];
 			DL_CarData trunk;
 			if (i == 0)
 				trunk = cd; // the driver eats from the trunk too (it travels in his snapshot)
 			float food;
 			float water;
 			float canL;
-			Count(d, trunk, food, water, canL);
+			Count(d, trunk, food, water, canL, keep);
 			canisters += canL;
 			string who = "you";
 			if (crew.Count() > 1 && pb.GetIdentity())
 				who = pb.GetIdentity().GetName();
 			string m = "";
 			if (food < needFood)
+			{
 				m += "food " + Math.Floor(food).ToString() + " of " + Kcal(Math.Ceil(needFood));
+				int shut = ClosedCans(d, trunk);
+				if (shut > 0 && keep <= 0)
+					m += " (" + shut.ToString() + " closed cans, nothing to open them)";
+			}
 			if (water < needWater)
 			{
 				if (m != "")
@@ -304,6 +318,72 @@ class DL_TravelCost
 		return energyPerUnit > 0 || waterPerUnit > 0;
 	}
 
+	// ---------------- closed cans ----------------
+	// A closed can (BakedBeansCan, ...) has no quantity and no nutrition; vanilla opens it with a tool into
+	// <type>_Opened (recipe OpenCan, opencan.c), spilling a random share in the tool's openItemSpillRange[] (%,
+	// openitem.c: a CanOpener 0-0, knives 10-20, axes 20-40, bats 40-80). On the road: opened with the best tool
+	// anyone of the party carries (vehicle trunks included), losing that tool's average spill; no tool = uneatable.
+
+	// "<type>_Opened" when it is a closed can, else ""
+	static string OpenedType(DL_ItemData it)
+	{
+		if (!it || it.liquid != 0 || it.quantity > 0 || it.agents != 0)
+			return "";
+		string o = it.type + "_Opened";
+		if (!g_Game.ConfigIsExisting("CfgVehicles " + o) || !g_Game.IsKindOf(o, "Edible_Base"))
+			return "";
+		return o;
+	}
+
+	// what share of a can the best opener among these items leaves (1 = a can opener), -1 = nothing to open cans
+	static float OpenKeep(array<ref DL_ItemData> items, float keep = -1)
+	{
+		foreach (DL_ItemData t : items)
+		{
+			if (!t || t.health == 0)
+				continue;
+			string path = "CfgVehicles " + t.type + " openItemSpillRange";
+			if (!g_Game.ConfigIsExisting(path))
+				continue;
+			array<int> range = new array<int>;
+			g_Game.ConfigGetIntArray(path, range);
+			if (range.Count() < 2)
+				continue;
+			float k = 1 - (range[0] + range[1]) / 200.0;
+			if (k > keep)
+				keep = k;
+		}
+		return keep;
+	}
+
+	// the best opener of a whole party: everyone's gear + the vehicles' trunks
+	static float PartyKeep(array<ref DL_PlayerData> people, array<DL_CarData> trunks)
+	{
+		float keep = -1;
+		foreach (DL_PlayerData pd : people)
+		{
+			if (pd)
+				keep = OpenKeep(pd.items, keep);
+		}
+		foreach (DL_CarData cd : trunks)
+		{
+			if (cd)
+				keep = OpenKeep(cd.items, keep);
+		}
+		return keep;
+	}
+
+	// a closed can's food after opening it with keep: its opened type's full quantity x keep
+	static float CanQuantity(string opened, float keep)
+	{
+		if (keep <= 0)
+			return 0;
+		float q = g_Game.ConfigGetFloat("CfgVehicles " + opened + " varQuantityInit");
+		if (q <= 0)
+			q = g_Game.ConfigGetFloat("CfgVehicles " + opened + " varQuantityMax");
+		return q * keep;
+	}
+
 	static NutritionalProfile StomachProfile(DL_StomachItem s)
 	{
 		NutritionalProfile p = Liquid.GetNutritionalProfileByName(s.type);
@@ -318,7 +398,8 @@ class DL_TravelCost
 	}
 
 	// what one traveller (+ the car trunk, for the driver) has: food/water in stat units, canister fuel in litres
-	static void Count(DL_PlayerData d, DL_CarData car, out float food, out float water, out float canisterL)
+	// keep: the party's best can opener (PartyKeep), -2 = look in his own gear + this trunk only
+	static void Count(DL_PlayerData d, DL_CarData car, out float food, out float water, out float canisterL, float keep = -2)
 	{
 		food = d.energy;
 		water = d.water;
@@ -340,6 +421,8 @@ class DL_TravelCost
 			foreach (DL_ItemData b : car.items)
 				lists.Insert(b);
 		}
+		if (keep == -2)
+			keep = OpenKeep(lists);
 		foreach (DL_ItemData it : lists)
 		{
 			float e;
@@ -349,9 +432,38 @@ class DL_TravelCost
 				food += it.quantity * e;
 				water += it.quantity * w;
 			}
+			string opened = OpenedType(it);
+			if (opened != "" && keep > 0)
+			{
+				float ce = Edible_Base.GetFoodEnergy(null, opened, 0) / 100;
+				float cw = Edible_Base.GetFoodWater(null, opened, 0) / 100;
+				float cq = CanQuantity(opened, keep);
+				food += cq * ce;
+				water += cq * cw;
+			}
 			if (IsFuel(it))
 				canisterL += it.quantity / 1000;
 		}
+	}
+
+	// closed cans among his gear (+ this trunk)
+	static int ClosedCans(DL_PlayerData d, DL_CarData car)
+	{
+		int n = 0;
+		foreach (DL_ItemData a : d.items)
+		{
+			if (OpenedType(a) != "")
+				n++;
+		}
+		if (car)
+		{
+			foreach (DL_ItemData b : car.items)
+			{
+				if (OpenedType(b) != "")
+					n++;
+			}
+		}
+		return n;
 	}
 
 	// takes "units" of what is needed from one source; returns how many units it took
@@ -387,9 +499,16 @@ class DL_TravelCost
 	}
 
 	// as EatEx, from his own gear first and then from each of trunks in turn (a convoy shares its cars' trunks)
-	static string EatShared(DL_PlayerData d, array<DL_CarData> trunks, float needFood, float needWater, out float unpaidFood, out float unpaidWater)
+	// keep: the party's best can opener (PartyKeep), -2 = look in his own gear + these trunks only
+	static string EatShared(DL_PlayerData d, array<DL_CarData> trunks, float needFood, float needWater, out float unpaidFood, out float unpaidWater, float keep = -2)
 	{
 		string eaten = "";
+		if (keep == -2)
+		{
+			array<ref DL_PlayerData> me = new array<ref DL_PlayerData>;
+			me.Insert(d);
+			keep = PartyKeep(me, trunks);
+		}
 		foreach (DL_StomachItem s : d.stomach)
 		{
 			if (needFood <= 0 && needWater <= 0)
@@ -415,6 +534,17 @@ class DL_TravelCost
 				DL_ItemData it = list[i];
 				float e;
 				float w;
+				string opened = OpenedType(it);
+				if (opened != "" && keep > 0 && needFood > 0)
+				{
+					// opened now: it becomes the opened can, minus what the tool spilt
+					it.type = opened;
+					it.quantity = CanQuantity(opened, keep);
+					it.foodStage = -1;
+					if (eaten != "")
+						eaten += ", ";
+					eaten += "opened " + opened;
+				}
 				if (!Nutrition(it, e, w))
 					continue;
 				float units = Take(it.quantity, e, w, needFood, needWater);

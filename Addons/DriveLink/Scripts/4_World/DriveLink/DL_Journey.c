@@ -255,7 +255,15 @@ class DL_Journey
 				j.DriveLeg(t, cv, f, done, at, weakened);
 			}
 			bool walking = j.In(-1).Count() > 0;
-			// food + water for this leg: in a seat at car rates, walking at foot rates; own gear first, then the trunks
+			// food + water for this leg: in a seat at car rates, walking at foot rates; own gear first, then the trunks.
+			// Closed cans: opened with the best tool anyone (alive) or any trunk still has
+			array<ref DL_PlayerData> living = new array<ref DL_PlayerData>;
+			foreach (DL_Traveller lt : j.crew)
+			{
+				if (!lt.dead)
+					living.Insert(lt.d);
+			}
+			float keep = DL_TravelCost.PartyKeep(living, j.Trunks(-1));
 			foreach (DL_Traveller tv : j.crew)
 			{
 				if (tv.dead)
@@ -279,7 +287,7 @@ class DL_Journey
 				tv.needWater += nw;
 				float uf;
 				float uw;
-				DL_TravelCost.EatShared(tv.d, j.Trunks(tv.veh), nf, nw, uf, uw);
+				DL_TravelCost.EatShared(tv.d, j.Trunks(tv.veh), nf, nw, uf, uw, keep);
 				tv.unpaidFood += uf;
 				tv.unpaidWater += uw;
 				// in the water: drowning (the longer the swim, the likelier), no infected out here
