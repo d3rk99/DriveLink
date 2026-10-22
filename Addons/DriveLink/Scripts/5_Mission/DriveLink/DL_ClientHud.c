@@ -23,6 +23,7 @@ modded class MissionGameplay
 	protected int m_DL_FilmId;                                   // the film being received in parts (RPC_FILM)
 	protected ref array<string> m_DL_FilmParts = new array<string>;
 	protected int m_DL_FilmGot;
+	protected string m_DL_PendingFilm; // receive while loading; begin event storytelling only when the client is ready
 	protected bool m_DL_F9WasDown;
 	protected TextWidget m_DL_Title;
 	protected bool m_DL_TextLow;        // the black screen's texts moved under the film
@@ -38,6 +39,7 @@ modded class MissionGameplay
 	override void OnMissionFinish()
 	{
 		GetDayZGame().Event_OnRPC.Remove(DL_OnRpc);
+		m_DL_PendingFilm = "";
 		GetDayZGame().DL_Transition().MissionFinishing();
 		if (m_DL_Film)
 			m_DL_Film.Stop();
@@ -87,15 +89,7 @@ modded class MissionGameplay
 				fj += pc;
 			m_DL_FilmParts.Clear();
 			m_DL_FilmId = 0;
-			DL_FilmPlayer continuous = GetDayZGame().DL_Transition().TakeArrival(fj);
-			if (continuous)
-				m_DL_Film = continuous;
-			else
-			{
-				GetDayZGame().DL_Transition().Stop("authoritative arrival film");
-				if (m_DL_Film)
-					m_DL_Film.PlayJson(fj);
-			}
+			m_DL_PendingFilm = fj;
 			return;
 		}
 		if (rpc_type == DL_Const.RPC_FILM_SKIP)
@@ -108,6 +102,7 @@ modded class MissionGameplay
 				return;
 			if (skip)
 			{
+				m_DL_PendingFilm = "";
 				DL_Log.Detail("road film skipped: everyone voted");
 				m_DL_Film.Stop();
 			}
@@ -159,9 +154,28 @@ modded class MissionGameplay
 			NotificationSystem.AddNotificationExtended(3, "DriveLink", "Travel cancelled.", "");
 	}
 
+	protected void DL_PlayArrivalFilm(string json)
+	{
+		DL_FilmPlayer continuous = GetDayZGame().DL_Transition().TakeArrival(json);
+		if (continuous)
+			m_DL_Film = continuous;
+		else
+		{
+			GetDayZGame().DL_Transition().Stop("authoritative arrival film");
+			if (m_DL_Film)
+				m_DL_Film.PlayJson(json);
+		}
+	}
+
 	override void OnUpdate(float timeslice)
 	{
 		super.OnUpdate(timeslice);
+		if (m_DL_PendingFilm != "" && GetDayZGame().DL_Transition().ReadyForArrival())
+		{
+			string readyFilm = m_DL_PendingFilm;
+			m_DL_PendingFilm = "";
+			DL_PlayArrivalFilm(readyFilm);
+		}
 		if (m_DL_Film)
 		{
 #ifdef DL_DEV
@@ -194,7 +208,9 @@ modded class MissionGameplay
 		}
 		// the road film is the loading screen: the black screen stays up until it has played out (the server may be
 		// done seating sooner; Space skips the film)
-		bool filmOn = m_DL_Film && m_DL_Film.IsPlaying() && m_DL_WaitShown;
+		bool filmOn = (m_DL_PendingFilm != "" || (m_DL_Film && m_DL_Film.IsPlaying())) && m_DL_WaitShown;
+		if (!m_DL_WaitWanted && m_DL_WaitShown && !filmOn && GetDayZGame().DL_Transition().ReadyForArrival())
+			GetDayZGame().DL_Transition().Stop("arrival ready without a story film");
 		if (m_DL_WaitWanted || filmOn)
 			DL_WaitShow(m_DL_WaitMsg);
 		else if (m_DL_WaitShown)

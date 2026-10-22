@@ -2,6 +2,7 @@
 class DL_TransitionFilm
 {
 	protected ref DL_Film m_Prepared;
+	protected bool m_PreparedReady;
 	protected ref DL_FilmPlayer m_Player;
 	protected Widget m_Root;
 	protected TextWidget m_Status;
@@ -27,6 +28,7 @@ class DL_TransitionFilm
 		m_Prepared.Add("drive", 1);
 		m_Prepared.biomeTo = m_Prepared.biomeFrom;
 		m_Prepared.skip = "none";
+		m_PreparedReady = true;
 		Start("prototype demonstration");
 	}
 
@@ -36,7 +38,7 @@ class DL_TransitionFilm
 		string chunk;
 		if (!ctx.Read(id) || !ctx.Read(part) || !ctx.Read(count) || !ctx.Read(chunk))
 			return;
-		if (count < 1 || count > 128 || part < 0 || part >= count || chunk.Length() > DL_Const.FILM_CHUNK)
+		if (count < 1 || count > 128 || part < 0 || part >= count || chunk.Length() < 1 || chunk.Length() > DL_Const.FILM_CHUNK)
 			return;
 		if (m_Id != id || m_Parts.Count() != count)
 		{
@@ -58,6 +60,7 @@ class DL_TransitionFilm
 		JsonSerializer js = new JsonSerializer();
 		if (!js.ReadFromString(m_Prepared, json, err))
 			m_Prepared = null;
+		m_PreparedReady = m_Prepared != null;
 		m_Parts.Clear();
 		m_Got = 0;
 		DL_Log.Info("transition prototype: prepared travel cast");
@@ -65,9 +68,13 @@ class DL_TransitionFilm
 
 	void Start(string target)
 	{
+		// Consume one prepared cast per redirect. A later film-disabled trip must not reuse the last car/crew.
+		DL_Film prepared = m_Prepared;
+		bool ready = m_PreparedReady;
 		Stop("new transfer");
-		if (!m_Prepared || m_Prepared.events.Count() == 0)
+		if (!ready || !prepared || prepared.events.Count() == 0)
 			return;
+		m_Prepared = prepared;
 		m_Target = target;
 		m_Age = 0;
 		m_LogAge = 0;
@@ -192,7 +199,16 @@ class DL_TransitionFilm
 		if (m_Root && m_Player && m_Player.HasView())
 			MoveView(WantsLoadingWorkspace());
 		else
+		{
+			// A system update may not have run between Start() and mission teardown.
+			DetachView();
 			BuildView();
+		}
+	}
+
+	bool ReadyForArrival()
+	{
+		return GetDayZGame().GetMissionState() == DayZGame.MISSION_STATE_GAME && !GetDayZGame().IsLoading() && (!m_LoginTimer || !m_LoginTimer.IsVisible());
 	}
 
 	DL_FilmPlayer TakeArrival(string json)
@@ -226,6 +242,11 @@ class DL_TransitionFilm
 		m_Active = false;
 		g_Game.GetUpdateQueue(CALL_CATEGORY_SYSTEM).Remove(Update);
 		DetachView();
+		m_Prepared = null;
+		m_PreparedReady = false;
+		m_Parts.Clear();
+		m_Got = 0;
+		m_Id = 0;
 	}
 
 	void Update(float dt)
@@ -233,7 +254,7 @@ class DL_TransitionFilm
 		if (!m_Active)
 			return;
 		m_Age += dt;
-		if (m_ArrivalAge >= 0)
+		if (m_ArrivalAge >= 0 && ReadyForArrival())
 			m_ArrivalAge += dt;
 		if (m_Age > 120 || m_ArrivalAge > 12 || KeyState(KeyCode.KC_ESCAPE) != 0 || g_Game.GetUIManager().IsDialogVisible())
 		{
@@ -271,7 +292,7 @@ class DL_TransitionFilm
 		if (m_LogAge >= 5)
 		{
 			m_LogAge = 0;
-			DL_Log.Info("transition prototype: updating at " + m_Age.ToString() + " s, loading " + loading.ToString());
+			DL_Log.Detail("travel loading: updating at " + m_Age.ToString() + " s, loading " + loading.ToString());
 		}
 	}
 }

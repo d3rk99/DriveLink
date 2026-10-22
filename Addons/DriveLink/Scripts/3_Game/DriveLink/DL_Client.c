@@ -85,6 +85,12 @@ modded class DayZGame
 		return m_DL_Transition;
 	}
 
+	void DL_LoginTimerClosed(Widget root)
+	{
+		if (m_DL_Transition)
+			m_DL_Transition.LoginTimerClosed(root);
+	}
+
 	override void OnUpdate(bool doSim, float timeslice)
 	{
 		super.OnUpdate(doSim, timeslice);
@@ -164,11 +170,16 @@ modded class DayZGame
 			dlMsg134 += ":" + r.target.port.ToString();
 			DL_Log.Detail(dlMsg134);
 			if (host == "")
+			{
+				DL_Transition().Stop("destination has no usable address");
 				return;
+			}
 			m_DL_Next = r.target;
 			m_DL_Next.lanHost = host; // the address we decided on; DL_Reconnect uses it
 			if (r.reason == "zone")
 				DL_Transition().Start(r.target.name);
+			else
+				DL_Transition().Stop("redirect without a travel preview");
 			GetCallQueue(CALL_CATEGORY_SYSTEM).Call(DisconnectSessionForce);
 			return;
 		}

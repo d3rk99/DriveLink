@@ -18,13 +18,14 @@ modded class LoginTimeBase
 
 	override void Hide()
 	{
-		GetDayZGame().DL_Transition().LoginTimerClosed(layoutRoot);
+		GetDayZGame().DL_LoginTimerClosed(layoutRoot);
 		super.Hide();
 	}
 
 	void ~LoginTimeBase()
 	{
-		if (GetGame())
-			GetDayZGame().DL_Transition().LoginTimerClosed(layoutRoot);
+		DayZGame game = GetDayZGame();
+		if (game)
+			game.DL_LoginTimerClosed(layoutRoot);
 	}
 }

@@ -35,6 +35,30 @@ confirmed main-menu and loading-screen animation, with the timer gap noted below
 
 ## Manual test
 
+## Accepted behavior and cleanup
+
+The user confirmed a successful full transfer with menu/loading/timer coverage.
+The intended behavior is a cosmetic loading loop with the right vehicles,
+characters, and convoy while disconnected/loading; actual journey events begin
+only after the local client has loaded, during the destination waiting-room flow.
+No story outcomes are sent in the connecting preview.
+
+Cleanup after that test:
+
+- Queue the completed authoritative film on the client until the game mission is
+  active, world loading has ended, and the login timer is no longer visible.
+  Keep the arrival black screen while a story is queued; respect skip messages.
+- Consume each prepared cast once. Clear stale data and partial chunks on stop,
+  reject empty chunks, and clear a preview on unusable-address/non-trip redirects.
+- Start the short arrival fail-safe clock only after the local client is ready.
+- Dismiss a generic overlay cleanly when the waiting room ends without a film.
+- Avoid allocating a transition manager when a login menu is destroyed, and
+  reduce repeated heartbeat logging to detailed logs.
+
+These changes preserve the 3-second reconnect settle time, the server's login
+timer, and the existing server-side arrival/crew logic. Client presentation is
+deferred without changing authoritative travel outcomes.
+
 ### Continuous scene refinement after the successful user transfer
 
 The 14:22 client log confirms playback through the main menu and world loading,
