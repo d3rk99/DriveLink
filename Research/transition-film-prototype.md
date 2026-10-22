@@ -184,6 +184,22 @@ gear after engine start, no second shift on the WAIT_DONE resend, and ordinary
 Zen login/emotes after a normal reconnect. Server startup alone cannot verify
 client gesture suppression, seating, or gearbox behavior in a live transfer.
 
+### User-confirmed Zen test; switch to no-Zen testing
+
+The user confirmed normal logins still used Zen's sit/lie wake-up, and transfers
+in BOTH directions between Chernarus and Livonia put the driver directly in the
+vehicle seat with the engine running and a forward gear selected. Acceleration
+alone was sufficient to depart. This validates the wake-up/seating and gear patch
+in the user's live test.
+
+At the user's request both servers now run only CF, VPPAdminTools, and the original
+DriveLink prototype package. Neither Zen's Core Mod nor Zen's Immersive Login is
+loaded. Both DriveLink PBOs remain unchanged inside the same package to validate
+automatic compatibility without manual file adjustments. The server launcher now
+defaults to this no-Zen list; pass -WithZen explicitly to restore the Zen test list.
+The existing restart .cmd therefore also preserves the current no-Zen setup.
+The user restarts their own client and disables both Zen mods for the next test.
+
 Deployment verified 2026-10-22 14:58: both original test instances compiled World
 (CRC 623bac50) and Mission (CRC a2ea9caa), started their missions, and completed
 Hub handshakes. Neither fresh script log contained script errors or VM exceptions.

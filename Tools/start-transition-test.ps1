@@ -1,13 +1,16 @@
 [CmdletBinding()]
-param([switch]$Restart, [switch]$Client, [switch]$MenuOnly, [ValidateSet(2802,2902)][int]$Port=2802,
+param([switch]$Restart, [switch]$Client, [switch]$MenuOnly, [switch]$WithZen, [ValidateSet(2802,2902)][int]$Port=2802,
     [string]$ModRoot = 'C:\DayZMods\FilmPrototypeRuntime\@DriveLinkFilmPrototype')
 $ErrorActionPreference = 'Stop'
 $runtime = 'C:\DayZMods\FilmPrototypeRuntime'
 $mod = $ModRoot
 $serverRoot = 'E:\Steam\steamapps\common\DayZServer'
 $workshop = 'E:\Steam\steamapps\common\DayZ\!Workshop'
-$mods = @((Join-Path $serverRoot '@CF'), (Join-Path $serverRoot '@VPPAdminTools'),
-    (Join-Path $workshop '@Zens Core Mod'), (Join-Path $workshop '@Zens Immersive Login'), $mod)
+$mods = @((Join-Path $serverRoot '@CF'), (Join-Path $serverRoot '@VPPAdminTools'))
+if ($WithZen) {
+    $mods += @((Join-Path $workshop '@Zens Core Mod'), (Join-Path $workshop '@Zens Immersive Login'))
+}
+$mods += $mod
 foreach ($path in $mods) {
     if (!(Test-Path -LiteralPath $path)) { throw "Missing compatibility test mod: $path" }
 }
@@ -36,6 +39,7 @@ foreach ($server in @(@{Root='C:\DayZMods\TestServer';Port=2802},@{Root='C:\DayZ
     $running = @(Get-CimInstance Win32_Process -Filter "Name='DayZServer_x64.exe'" | Where-Object { $_.CommandLine -like "*-config=$config *" })
     if ($running -and !$Restart) { Write-Output "$config already running"; continue }
     foreach ($process in $running) { Stop-Process -Id $process.ProcessId -Force }
+    foreach ($process in $running) { Wait-Process -Id $process.ProcessId -Timeout 20 -ErrorAction SilentlyContinue }
     $args = @("-config=$config", "-profiles=$($server.Root)\Profiles", "-port=$($server.Port)",
         '-dologs','-adminlog','-netlog','-freezecheck', ('"-mod=' + ($mods -join ';') + '"'))
     $started = Start-Process -FilePath (Join-Path $serverRoot 'DayZServer_x64.exe') -ArgumentList $args -WorkingDirectory $serverRoot -WindowStyle Hidden -PassThru
