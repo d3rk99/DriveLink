@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$ModRoot = 'C:\DayZMods\FilmPrototypeRuntime\@DriveLinkFilmPrototype')
+param([string]$ModRoot = 'C:\DayZMods\FilmPrototypeRuntime\@DriveLinkFilmPrototype', [switch]$ZenCompat)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $runtime = 'C:\DayZMods\FilmPrototypeRuntime'
@@ -24,6 +24,16 @@ if ($LASTEXITCODE -ne 0 -or $log -match '\[ERROR\]' -or !(Test-Path -LiteralPath
 if ((Get-Item -LiteralPath $pbo).LastWriteTime -lt $started.AddSeconds(-2)) { throw 'PBO was not rebuilt' }
 & (Join-Path $ds 'DSSignFile.exe') $private $pbo
 if ($LASTEXITCODE -ne 0) { throw 'Prototype signing failed' }
+if ($ZenCompat) {
+    $compatSource = Join-Path $repo 'Addons\DriveLink_ZenLogin'
+    $ErrorActionPreference = 'Continue'
+    $compatLog = & $builder $compatSource $out '-prefix=DriveLink_ZenLogin' '-packonly' '-clear' 2>&1 | Out-String
+    $ErrorActionPreference = 'Stop'
+    $compatPbo = Join-Path $out 'DriveLink_ZenLogin.pbo'
+    if ($LASTEXITCODE -ne 0 -or $compatLog -match '\[ERROR\]' -or !(Test-Path -LiteralPath $compatPbo)) { throw $compatLog }
+    & (Join-Path $ds 'DSSignFile.exe') $private $compatPbo
+    if ($LASTEXITCODE -ne 0) { throw 'Compatibility addon signing failed' }
+}
 Copy-Item -LiteralPath (Join-Path $keys 'DriveLinkFilmPrototype.bikey') -Destination (Join-Path $modRoot 'keys') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'Mod\mod.cpp') -Destination $modRoot -Force
 Write-Output "Built signed experimental mod: $modRoot"

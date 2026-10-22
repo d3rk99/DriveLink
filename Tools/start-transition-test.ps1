@@ -5,7 +5,12 @@ $ErrorActionPreference = 'Stop'
 $runtime = 'C:\DayZMods\FilmPrototypeRuntime'
 $mod = $ModRoot
 $serverRoot = 'E:\Steam\steamapps\common\DayZServer'
-$mods = @((Join-Path $serverRoot '@CF'), (Join-Path $serverRoot '@VPPAdminTools'), $mod)
+$workshop = 'E:\Steam\steamapps\common\DayZ\!Workshop'
+$mods = @((Join-Path $serverRoot '@CF'), (Join-Path $serverRoot '@VPPAdminTools'),
+    (Join-Path $workshop '@Zens Core Mod'), (Join-Path $workshop '@Zens Immersive Login'), $mod)
+foreach ($path in $mods) {
+    if (!(Test-Path -LiteralPath $path)) { throw "Missing compatibility test mod: $path" }
+}
 if ($Client) {
     if (Get-Process -Name DayZ_x64,DayZ_BE -ErrorAction SilentlyContinue) { throw 'Exit the running DayZ client before launching this test.' }
     $clientRoot = 'E:\Steam\steamapps\common\DayZ'
@@ -16,7 +21,11 @@ if ($Client) {
     Start-Process -FilePath (Join-Path $clientRoot 'DayZ_BE.exe') -ArgumentList $args -WorkingDirectory $clientRoot -WindowStyle Hidden
     return
 }
-Copy-Item -LiteralPath (Join-Path $mod 'keys\DriveLinkFilmPrototype.bikey') -Destination (Join-Path $serverRoot 'keys') -Force
+foreach ($path in $mods) {
+    Get-ChildItem -LiteralPath (Join-Path $path 'keys') -Filter '*.bikey' | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $serverRoot 'keys') -Force
+    }
+}
 if (!(Get-Process -Name DriveLinkHub -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath 'C:\DayZMods\DriveLink\dist\hub-v0.4.1\DriveLinkHub\DriveLinkHub.exe' -ArgumentList @('-config','C:\DayZMods\DriveLink\Hub\hub.json') -WorkingDirectory 'C:\DayZMods\DriveLink\Hub' -WindowStyle Hidden
     Start-Sleep -Seconds 2

@@ -926,6 +926,7 @@ modded class MissionServer
 				car.Delete(); // the trip stays pending with the car in it: a later build makes it again
 			return null;
 		}
+		player.DL_MarkTransferArrival();
 		if (oldChar)
 		{
 			// only now that the new one exists: the stale copy must not live on in this server's database (or he
@@ -1399,6 +1400,7 @@ modded class MissionServer
 			m_DL_BuildError = "could not create the character " + d.charType;
 			return null;
 		}
+		player.DL_MarkTransferArrival();
 		if (newRoom)
 			m_DL_Rooms.Set(group, room);
 		if (oldChar)

@@ -211,21 +211,6 @@ class DL_TransitionFilm
 		return GetDayZGame().GetMissionState() == DayZGame.MISSION_STATE_GAME && !GetDayZGame().IsLoading() && (!m_LoginTimer || !m_LoginTimer.IsVisible());
 	}
 
-	DL_FilmPlayer TakeArrival(string json)
-	{
-		if (!m_Active || !m_Player)
-			return null;
-		DL_Film film;
-		string err;
-		JsonSerializer js = new JsonSerializer();
-		if (!js.ReadFromString(film, json, err) || !m_Player.AdoptArrival(film, json))
-			return null;
-		DL_FilmPlayer player = m_Player;
-		m_Player = null;
-		Stop("arrival continues with the same sprites");
-		return player;
-	}
-
 	void Arrived()
 	{
 		if (m_Active)

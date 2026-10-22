@@ -41,6 +41,8 @@ modded class MissionGameplay
 		GetDayZGame().Event_OnRPC.Remove(DL_OnRpc);
 		m_DL_PendingFilm = "";
 		GetDayZGame().DL_Transition().MissionFinishing();
+		if (!GetDayZGame().DL_HasPending())
+			GetDayZGame().DL_ClearTransferLogin();
 		if (m_DL_Film)
 			m_DL_Film.Stop();
 		DL_WaitHide();
@@ -156,15 +158,10 @@ modded class MissionGameplay
 
 	protected void DL_PlayArrivalFilm(string json)
 	{
-		DL_FilmPlayer continuous = GetDayZGame().DL_Transition().TakeArrival(json);
-		if (continuous)
-			m_DL_Film = continuous;
-		else
-		{
-			GetDayZGame().DL_Transition().Stop("authoritative arrival film");
-			if (m_DL_Film)
-				m_DL_Film.PlayJson(json);
-		}
+		// Separate lifecycles: the cosmetic loading tree ends before the event story starts.
+		GetDayZGame().DL_Transition().Stop("arrival story begins");
+		if (m_DL_Film)
+			m_DL_Film.PlayJson(json);
 	}
 
 	override void OnUpdate(float timeslice)

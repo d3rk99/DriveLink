@@ -77,6 +77,17 @@ modded class DayZGame
 	protected ref DL_ServerInfo m_DL_Next;
 	protected ref DL_TransitionFilm m_DL_Transition;
 	protected bool m_DL_TransitionKey;
+	protected bool m_DL_TransferLogin;
+
+	bool DL_IsTransferLogin()
+	{
+		return m_DL_TransferLogin;
+	}
+
+	void DL_ClearTransferLogin()
+	{
+		m_DL_TransferLogin = false;
+	}
 
 	DL_TransitionFilm DL_Transition()
 	{
@@ -136,6 +147,7 @@ modded class DayZGame
 		}
 		if (rpc_type == DL_Const.RPC_KICK && IsClient())
 		{
+			DL_ClearTransferLogin();
 			DL_Transition().Stop("server notice");
 			string caption;
 			string text;
@@ -175,6 +187,7 @@ modded class DayZGame
 				return;
 			}
 			m_DL_Next = r.target;
+			m_DL_TransferLogin = r.reason == "zone";
 			m_DL_Next.lanHost = host; // the address we decided on; DL_Reconnect uses it
 			if (r.reason == "zone")
 				DL_Transition().Start(r.target.name);

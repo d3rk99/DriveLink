@@ -100,3 +100,46 @@ the cosmetic overlay. Successful authoritative film delivery dismisses it too.
 
 Rollback: restart servers using C:\DayZMods\DemoServers\start-demo-servers.ps1
 -Restart, and re-enable Workshop DriveLink in the client launcher.
+
+### Arrival cleanup and Zen Immersive Login compatibility
+
+The user confirmed continuous playback, but reported a dim frozen scene with an
+offset vehicle after arrival. The arrival story now stops the cosmetic scene and
+creates its own presentation instead of adopting the loading scene's widgets.
+This supersedes the sprite-adoption behavior described above. Visual confirmation
+of this fix still requires a user-driven transfer.
+
+An optional DriveLink_ZenLogin addon depends on both DriveLink and ZenImmersiveLogin
+so the Zen methods exist before the bridge overrides them. Core DriveLink has no
+Zen dependency. Build the compatibility test with Tools/build-transition-prototype.ps1
+-ZenCompat. This packs and signs both addons in the original prototype folder.
+The Workshop Zen files are used unchanged.
+
+The bridge marks rebuilt living transfer arrivals and bypasses Zen's sleep emote,
+blackout, and control/audio lock for those arrivals. Ordinary logins keep Zen's
+normal behavior. A client transfer marker covers the interval before the new
+player's replicated state arrives and is cleared on a later ordinary logout.
+
+Client test mod list: CF, VPPAdminTools, Zen's Core Mod, Zen's Immersive Login,
+and C:\DayZMods\FilmPrototypeRuntime\@DriveLinkFilmPrototype. Disable Workshop
+DriveLink and the obsolete -v2 local copy. The bridge PBO is inside the same
+original prototype folder; there is no additional local folder to select.
+
+Compatibility checks:
+
+1. Ordinary login: Zen's wake-up, fade, and controls behave normally.
+2. DriveLink transfer on foot, by vehicle, and in a convoy: generic loading film,
+   then arrival story; no frozen offset scene or Zen wake-up/blackout/control lock.
+3. Ordinary logout and rejoin after a transfer: Zen's wake-up runs again.
+4. Check passengers and travel-death respawns separately; ordinary fresh spawns
+   are not marked as living transfer arrivals.
+
+Two compilation issues were corrected during deployment: Zen overrides were moved
+into the ordered optional addon, and the server arrival marker was moved after
+successful character creation in the waiting-room path. Packaging alone does not
+verify Enforce compilation; inspect both test-server startup logs after deploying.
+
+Deployment verified 2026-10-22 14:58: both original test instances compiled World
+(CRC 623bac50) and Mission (CRC a2ea9caa), started their missions, and completed
+Hub handshakes. Neither fresh script log contained script errors or VM exceptions.
+Both deployed PBOs and signatures matched the staged files. No client was launched.

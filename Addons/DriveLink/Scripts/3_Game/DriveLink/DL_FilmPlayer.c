@@ -666,49 +666,6 @@ class DL_FilmPlayer
 		m_Km = motion.km;
 	}
 
-	// Keep the existing sprites and road scroll when the real journey arrives.
-	bool AdoptArrival(DL_Film film, string json)
-	{
-		if (!m_Root || !m_Playing || !film || film.events.Count() == 0)
-			return false;
-		// Keep the existing arrival renderer as fallback for special scenery/cast changes.
-		if (m_Sky || m_Water || film.biomeVia != "" || film.car != m_Film.car || film.cars.Count() != m_Film.cars.Count() || film.crew.Count() != m_Film.crew.Count())
-			return false;
-		for (int ci = 0; ci < film.cars.Count(); ci++)
-		{
-			if (film.cars[ci] != m_Film.cars[ci])
-				return false;
-		}
-		g_Game.GetWorkspace().AddChild(m_Root);
-		m_Root.SetSort(31500);
-		m_TransitionParent = null;
-		m_TransitionLoop = false;
-		m_Film = film;
-		m_LastJson = json; // the destination retries this RPC; do not restart the adopted player
-		m_Km = 0;
-		m_Scene = -1;
-		m_Ending = false;
-		m_Voted = false;
-		m_VoteOut = false;
-		if (!m_GroundB && film.biomeTo != "" && film.biomeTo != film.biomeFrom)
-		{
-			m_GroundB = new DL_Strip(m_Root, Ground(film.biomeTo), 2, m_Ox, m_Oy, 256 * m_Px, m_ViewH * m_Px, 256, 256, true);
-			m_GroundB.SetAlpha(0);
-		}
-		if (!m_SkipText && film.skip != "none")
-		{
-			float width, height;
-			m_Root.GetSize(width, height);
-			float band = height * 0.045;
-			DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(120, 0, 0, 0), SORT_TEXT, 0, 0, width, band * 1.2);
-			m_SkipText = TextWidget.Cast(g_Game.GetWorkspace().CreateWidget(TextWidgetTypeID, 0, band * 0.1, width, band, DL_FilmSpike.Flags() | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 200, 200, 200), SORT_TEXT + 1, m_Root));
-			if (m_SkipText)
-				m_SkipText.SetText("Space: vote to skip (everyone has to)");
-		}
-		NextScene();
-		return true;
-	}
-
 	bool IsPlaying()
 	{
 		return m_Playing;
