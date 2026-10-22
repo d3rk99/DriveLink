@@ -17,6 +17,7 @@ modded class MissionGameplay
 	protected string m_DL_WaitMsg;
 	protected float m_DL_WaitAge;      // seconds since the last update from the server
 	protected bool m_DL_StartEngine;
+	protected bool m_DL_ArrivalEngineHandled; // WAIT_DONE is resent; do not shift a driver twice
 	protected vector m_DL_FlyVel;        // arriving in a plane: keep giving it this speed for a moment (RPC_FLY)
 	protected float m_DL_FlyT;
 	protected ref DL_FilmPlayer m_DL_Film = new DL_FilmPlayer(); // the road film (RPC_FILM); F9 = demo film
@@ -133,7 +134,8 @@ modded class MissionGameplay
 			else if (phase == DL_Const.WAIT_DONE)
 			{
 				m_DL_WaitWanted = false;
-				if (engine)
+				GetDayZGame().DL_ClearTransferLogin();
+				if (engine && !m_DL_ArrivalEngineHandled)
 					m_DL_StartEngine = true;
 			}
 			return;
@@ -391,16 +393,24 @@ modded class MissionGameplay
 			car = DL_Veh.VehicleOf(pb);
 		if (car && car.CrewDriver() == pb)
 		{
-			m_DL_StartEngine = false;
-			m_DL_EngineTries = 0;
-			if (DL_Veh.EngineIsOn(car))
-				return;
-			if (car.GetNetworkMoveStrategy() == NetworkMoveStrategy.PHYSICS)
+			if (!DL_Veh.EngineIsOn(car) && car.GetNetworkMoveStrategy() == NetworkMoveStrategy.PHYSICS)
 			{
 				DL_Veh.EngineStart(car);
 				DL_Log.Detail("waiting room: engine started on this client, running " + DL_Veh.EngineIsOn(car).ToString());
 			}
-			return;
+			if (DL_Veh.EngineIsOn(car))
+			{
+				Car roadCar = Car.Cast(car);
+				if (roadCar && roadCar.GetGear() == roadCar.GetNeutralGear())
+				{
+					roadCar.ShiftUp(); // first forward gear; same gearbox operation as E
+					DL_Log.Info("waiting room: arrival car shifted into first gear");
+				}
+				m_DL_StartEngine = false;
+				m_DL_ArrivalEngineHandled = true;
+				m_DL_EngineTries = 0;
+				return;
+			}
 		}
 		if (m_DL_EngineTries > 300)
 		{

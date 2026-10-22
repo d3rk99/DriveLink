@@ -3,7 +3,7 @@ modded class PlayerBase
 {
  protected void DL_FinishZenArrival()
  {
-  if (DL_IsTransferArrival() && GetGame().ConfigIsExisting("CfgPatches ZenImmersiveLogin"))
+  if (DL_IsTransferArrival() && String("ZenImmersiveLoginConfig").ToType())
    GetGame().GameScript.CallFunctionParams(this, "ZenImmersiveLoginFinished", null, null);
  }
  override void DL_OnTransferArrival()
@@ -14,7 +14,7 @@ modded class PlayerBase
  override void OnPlayerLoaded()
  {
   super.OnPlayerLoaded();
-  if (DL_IsTransferArrival() && GetGame().ConfigIsExisting("CfgPatches ZenImmersiveLogin"))
+  if (DL_IsTransferArrival() && String("ZenImmersiveLoginConfig").ToType())
    GetGame().GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_FinishZenArrival, 1, false);
  }
  override void OnVariablesSynchronized()

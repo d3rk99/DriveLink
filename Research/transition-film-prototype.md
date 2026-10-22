@@ -151,6 +151,39 @@ mods (Mission CRC afa06dc9), without script errors. It was built without -ZenCom
 and still contained both signed PBOs. Client wake-up suppression needs a new
 user-driven transfer test because the integration mechanism has changed.
 
+### Wake-up / vehicle-seating regression and first-gear convenience
+
+The user's next vehicle transfer left them sitting beside the restored Offroad_02.
+The client session script_2026-10-22_15-28-46.log shows the destination Zen manager
+created at 15:31:19.833 and destroyed normally at 15:31:31.256, with no DriveLink
+"skipped wake-up" message. The runtime cleanup path had not intercepted the wake-up.
+The earlier integration intercepted Zen's gesture request directly; the optional
+rewrite removed that protection and relied on cleanup polling instead.
+
+The new bridge overrides the VANILLA EmoteManager.CreateEmoteCBFromMenu entry point
+and rejects Zen's sit/lie requests while the client transfer marker is active.
+This guard does not depend on Zen class inheritance or its compile order, and is
+inactive without Zen's actual compiled config type. Cleanup now detects compiled
+Zen types at mission start, registers its system callback there, reads the final
+mission instance, and uses the returned manager reference directly. It also logs
+whether the manager type is available. The transfer marker clears on WAIT_DONE,
+after server seating is complete, so later ordinary emotes/respawns are unaffected.
+
+Core DriveLink now shifts an arrived car up from neutral once the local driver is
+seated and its engine is running. It handles an already-running engine as well.
+WAIT_DONE is resent by the server, so a per-mission completion flag prevents the
+resend from restarting or shifting a car after the driver has driven away. Engine
+start is retried within the existing bounded attempt window if it has not succeeded.
+This does not synthesize keyboard input.
+
+At 15:37 on 2026-10-22 the identical signed package compiled and started Chernarus
+without Zen (Mission CRC 10d67ef7) and Livonia with Zen (Mission CRC b1a2b1e4).
+The original prototype folder is updated for another user-driven vehicle transfer.
+Verify automatic vehicle seating, absence of sit/lie and blackout, first forward
+gear after engine start, no second shift on the WAIT_DONE resend, and ordinary
+Zen login/emotes after a normal reconnect. Server startup alone cannot verify
+client gesture suppression, seating, or gearbox behavior in a live transfer.
+
 Deployment verified 2026-10-22 14:58: both original test instances compiled World
 (CRC 623bac50) and Mission (CRC a2ea9caa), started their missions, and completed
 Hub handshakes. Neither fresh script log contained script errors or VM exceptions.

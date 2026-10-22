@@ -2,22 +2,29 @@
 modded class MissionGameplay
 {
  protected bool m_DL_ZenInstalled;
- override void OnInit()
+ override void OnMissionStart()
  {
-  super.OnInit();
-  m_DL_ZenInstalled = GetGame().ConfigIsExisting("CfgPatches ZenImmersiveLogin");
-  if (m_DL_ZenInstalled && GetGame().IsClient())
+  super.OnMissionStart();
+  m_DL_ZenInstalled = false;
+  if (String("ZenImmersiveLoginClient").ToType())
+   m_DL_ZenInstalled = true;
+  DL_Log.Info("Zen arrival integration: client manager available " + m_DL_ZenInstalled.ToString());
+  if (m_DL_ZenInstalled && !GetGame().IsDedicatedServer())
+  {
    GetGame().GetUpdateQueue(CALL_CATEGORY_SYSTEM).Insert(DL_CheckZenArrival);
+   DL_CheckZenArrival(0);
+  }
  }
  protected void DL_CheckZenArrival(float timeslice)
  {
-  if (!m_DL_ZenInstalled || !GetGame().IsClient())
+  if (!m_DL_ZenInstalled || GetGame().IsDedicatedServer())
    return;
   PlayerBase player = PlayerBase.Cast(GetGame().GetPlayer());
   if (!GetDayZGame().DL_IsTransferLogin() && (!player || !player.DL_IsTransferArrival()))
    return;
   Class zenClient;
-  if (!EnScript.GetClassVar(this, "m_ZenImmersiveLogin", 0, zenClient) || !zenClient)
+  EnScript.GetClassVar(GetGame().GetMission(), "m_ZenImmersiveLogin", 0, zenClient);
+  if (!zenClient)
    return;
   GetGame().GetCallQueue(CALL_CATEGORY_GAMEPLAY).RemoveByName(zenClient, "ApplyHardBlack");
   GetGame().GetCallQueue(CALL_CATEGORY_GAMEPLAY).RemoveByName(zenClient, "LockControls");
@@ -34,7 +41,7 @@ modded class MissionGameplay
  }
  override void OnMissionFinish()
  {
-  if (m_DL_ZenInstalled && GetGame().IsClient())
+  if (m_DL_ZenInstalled && !GetGame().IsDedicatedServer())
    GetGame().GetUpdateQueue(CALL_CATEGORY_SYSTEM).Remove(DL_CheckZenArrival);
   super.OnMissionFinish();
  }
