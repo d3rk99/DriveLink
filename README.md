@@ -22,6 +22,12 @@ DayZ 1.30. No other mods are needed.
 
 ### 1. The hub
 
+Download a Windows package from [GitHub Releases](https://github.com/d3rk99/DriveLink/releases/latest).
+Choose **with-official-maps** for ready-built Chernarus, Livonia, Sakhal and Nasdara backgrounds, or the smaller
+Hub-only ZIP if you already have map images. Keep the bundled `maps` folder next to `DriveLinkHub.exe`.
+The bundled backgrounds do not require DayZ Tools; additional maps can be built from local game files with
+DayZ Tools or imported from a complete map image. DLC map folders are detected automatically.
+
 1. Unzip **DriveLinkHub** into its own folder and start `DriveLinkHub.exe`. The first start writes `hub.json`
    (with a random server key) and prints a web app password.
 2. Open **http://localhost:7290/admin** on that PC (from another PC: `http://<hub-ip>:7290/admin` + the password).

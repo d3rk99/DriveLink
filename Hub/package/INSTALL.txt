@@ -1,0 +1,48 @@
+DriveLink Hub - Windows x64
+
+INSTALL
+Extract the entire ZIP into a permanent writable folder such as C:\DriveLinkHub.
+Run Start-Hub.cmd and open http://localhost:7290/admin on the Hub machine.
+No Rust installation is required.
+
+First launch generates your own hub.json, server key, administration password,
+database, and self-signed HTTPS certificate. The console prints the password
+needed for administration from other PCs. Configure the Hub address and firewall
+on Setup, then copy hubUrl and hubKey into each DayZ server's DriveLink config.
+Approve servers on Servers and create departure zones and arrival points on Map.
+See SERVER-GUIDE.md for the full DayZ server installation instructions.
+
+MAPS
+The with-official-maps ZIP includes ready-built map images for Chernarus,
+Livonia, Sakhal, and Nasdara. Keep the maps folder next to the executable.
+Select a configured server on Map to use its map background. No image building,
+DayZ installation, or DayZ Tools installation is needed for these bundled images.
+These are editor backgrounds only; you still need to configure servers/routes.
+
+The smaller Hub-only ZIP contains no map images. To build additional maps,
+configure local DayZ and DayZ Tools paths on Setup, install the map locally,
+then use Build from game files. Alternatively import a complete map image.
+Official DLC folders are discovered automatically, including sakhal/Addons
+and nasdara/addons. Enter folder paths without quotation marks.
+
+This Hub works with the existing DriveLink 0.4 mod (protocol 1).
+Default ports: TCP 7290 HTTP and TCP 7291 HTTPS.
+
+OPTIONAL WINDOWS SERVICE
+Stop the console Hub with Ctrl+C first. Run Install-Service.cmd as administrator
+to install and start the automatic Windows service. Keep its folder in place.
+Run Uninstall-Service.cmd as administrator to remove it.
+Run only one Hub instance, either the service or the console.
+
+UPDATING
+Stop the Hub and back up its complete folder. Replace the executable to update.
+Keep your hub.json, database and companion files, certificates, and custom maps.
+When adding bundled maps to an existing installation, copy only the official
+map folders you want; keep any custom versions you wish to preserve.
+
+Work in progress: bug fixes, improvements, and broader mod compatibility planned.
+Back up server data before testing.
+
+DriveLink by Derk.
+Official map imagery: DayZ (c) Bohemia Interactive.
+https://github.com/d3rk99/DriveLink
