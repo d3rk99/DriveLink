@@ -17,6 +17,7 @@ class DL_Const
 	static const int RPC_FILM = 4810005;       // server -> client: the road film of his trip (DL_Film as JSON), in
 	                                           // parts: int id, int part, int parts, string chunk (a long film's JSON
 	                                           // in one string arrived "String CORRUPTED" on the client)
+	static const int RPC_TRANSITION = 4810009; // prototype: plain travel cast, chunked before redirect
 	static const int FILM_CHUNK = 900;
 	static const int RPC_FILM_VOTE = 4810006;  // client -> server: he pressed Space to skip the film (or it ended)
 	static const int RPC_FILM_SKIP = 4810007;  // server -> clients watching one film: votes, total, skip now

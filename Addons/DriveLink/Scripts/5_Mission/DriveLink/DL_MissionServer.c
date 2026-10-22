@@ -101,6 +101,7 @@ modded class MissionServer
 	protected ref map<string, Transport> m_DL_GroupCar = new map<string, Transport>;         // driver sid -> the car he brought here
 	protected ref map<string, ref DL_SeatWait> m_DL_SeatWait = new map<string, ref DL_SeatWait>; // passenger sid -> waiting for that car
 	protected ref DL_Config m_DL_Cfg;
+	protected ref map<string, ref DL_Film> m_DL_TransitionOf = new map<string, ref DL_Film>;
 	protected ref map<string, ref DL_Pending> m_DL_Pending = new map<string, ref DL_Pending>;    // steamId -> hub answer
 	protected ref array<ref DL_Party> m_DL_Parties = new array<ref DL_Party>;                   // forming in the zones
 	protected int m_DL_PartyN;
@@ -925,6 +926,7 @@ modded class MissionServer
 				car.Delete(); // the trip stays pending with the car in it: a later build makes it again
 			return null;
 		}
+		player.DL_MarkTransferArrival();
 		if (oldChar)
 		{
 			// only now that the new one exists: the stale copy must not live on in this server's database (or he
@@ -1276,7 +1278,14 @@ modded class MissionServer
 	}
 
 	// the film's JSON in FILM_CHUNK pieces, one RPC each (guaranteed, in order); the client puts them together
+	// CallLater dispatches dynamically and does not supply default arguments.
+	// Keep the original two-argument callback, including its retry sends.
 	protected void DL_SendFilm(string sid, string json)
+	{
+		DL_SendFilmRpc(sid, json, DL_Const.RPC_FILM);
+	}
+
+	protected void DL_SendFilmRpc(string sid, string json, int rpcType)
 	{
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !pb.GetIdentity())
@@ -1297,7 +1306,7 @@ modded class MissionServer
 			rpc.Write(i);
 			rpc.Write(parts);
 			rpc.Write(json.Substring(at, n));
-			rpc.Send(null, DL_Const.RPC_FILM, true, pb.GetIdentity());
+			rpc.Send(null, rpcType, true, pb.GetIdentity());
 		}
 		DL_Log.Detail(sid + "'s road film sent: " + len.ToString() + " chars in " + parts.ToString() + " parts");
 	}
@@ -1391,6 +1400,7 @@ modded class MissionServer
 			m_DL_BuildError = "could not create the character " + d.charType;
 			return null;
 		}
+		player.DL_MarkTransferArrival();
 		if (newRoom)
 			m_DL_Rooms.Set(group, room);
 		if (oldChar)
@@ -2924,6 +2934,8 @@ modded class MissionServer
 		}
 		if (film)
 			q.payload.film = film;
+		if (film && (!m_DL_Cfg.travel || !m_DL_Cfg.travel.filmOff))
+			m_DL_TransitionOf.Set(sid, film);
 		if (q.payload.vehKind == "")
 		{
 			Transport ride = DL_CarOf(pb);
@@ -3011,6 +3023,8 @@ modded class MissionServer
 
 	void DL_OnDepartAnswer(string sid, bool ok, string body)
 	{
+		DL_Film connectingFilm = m_DL_TransitionOf.Get(sid);
+		m_DL_TransitionOf.Remove(sid);
 		PlayerBase pb = DL_FindPlayer(sid);
 		Transport car = m_DL_TravelCar.Get(sid);
 		m_DL_TravelCar.Remove(sid);
@@ -3067,7 +3081,10 @@ modded class MissionServer
 			DL_Log.Info(sid + " is on the road to " + r.target.name + " for " + r.readyIn.ToString() + " s");
 		}
 		else
+		{
+			DL_SendTransition(sid, connectingFilm);
 			DL_SendRedirect(pb.GetIdentity(), r.target, "zone");
+		}
 		m_DL_Doomed.Set(pb, true);
 		DL_Log.Info(sid + " handed over to " + r.target.name + ", removing the character here");
 		// give the RPC a moment to reach the client, then remove the character WITHOUT killing it (nothing may
@@ -3167,6 +3184,32 @@ modded class MissionServer
 			return;
 		}
 		super.HandleBody(player);
+	}
+
+	// Only a plain driving/walking cast is sent before disconnect, after the Hub accepts the transfer.
+	// Road events and skip voting remain under the destination server's existing arrival flow.
+	protected void DL_SendTransition(string sid, DL_Film source)
+	{
+		if (!source)
+			return;
+		DL_Film preview = new DL_Film();
+		preview.car = source.car;
+		foreach (string look : source.cars)
+			preview.cars.Insert(look);
+		foreach (DL_FilmActor actor : source.crew)
+			preview.crew.Insert(actor);
+		preview.biomeFrom = source.biomeFrom;
+		preview.biomeTo = source.biomeFrom;
+		preview.km = 1;
+		preview.skip = "none";
+		string kind = "walk";
+		if (preview.car != "" || preview.cars.Count() > 0)
+			kind = "drive";
+		preview.Add(kind, 1);
+		string json, err;
+		if (!JsonFileLoader<DL_Film>.MakeData(preview, json, err, false))
+			return;
+		DL_SendFilmRpc(sid, json, DL_Const.RPC_TRANSITION);
 	}
 
 	protected void DL_SendRedirect(PlayerIdentity id, DL_ServerInfo target, string reason)

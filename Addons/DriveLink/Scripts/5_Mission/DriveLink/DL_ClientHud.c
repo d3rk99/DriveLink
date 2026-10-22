@@ -17,12 +17,14 @@ modded class MissionGameplay
 	protected string m_DL_WaitMsg;
 	protected float m_DL_WaitAge;      // seconds since the last update from the server
 	protected bool m_DL_StartEngine;
+	protected bool m_DL_ArrivalEngineHandled; // WAIT_DONE is resent; do not shift a driver twice
 	protected vector m_DL_FlyVel;        // arriving in a plane: keep giving it this speed for a moment (RPC_FLY)
 	protected float m_DL_FlyT;
 	protected ref DL_FilmPlayer m_DL_Film = new DL_FilmPlayer(); // the road film (RPC_FILM); F9 = demo film
 	protected int m_DL_FilmId;                                   // the film being received in parts (RPC_FILM)
 	protected ref array<string> m_DL_FilmParts = new array<string>;
 	protected int m_DL_FilmGot;
+	protected string m_DL_PendingFilm; // receive while loading; begin event storytelling only when the client is ready
 	protected bool m_DL_F9WasDown;
 	protected TextWidget m_DL_Title;
 	protected bool m_DL_TextLow;        // the black screen's texts moved under the film
@@ -31,11 +33,17 @@ modded class MissionGameplay
 	{
 		super.OnMissionStart();
 		GetDayZGame().Event_OnRPC.Insert(DL_OnRpc);
+		GetDayZGame().DL_Transition().MissionStarted("gameplay");
+		GetDayZGame().DL_Transition().Arrived();
 	}
 
 	override void OnMissionFinish()
 	{
 		GetDayZGame().Event_OnRPC.Remove(DL_OnRpc);
+		m_DL_PendingFilm = "";
+		GetDayZGame().DL_Transition().MissionFinishing();
+		if (!GetDayZGame().DL_HasPending())
+			GetDayZGame().DL_ClearTransferLogin();
 		if (m_DL_Film)
 			m_DL_Film.Stop();
 		DL_WaitHide();
@@ -84,8 +92,7 @@ modded class MissionGameplay
 				fj += pc;
 			m_DL_FilmParts.Clear();
 			m_DL_FilmId = 0;
-			if (m_DL_Film)
-				m_DL_Film.PlayJson(fj);
+			m_DL_PendingFilm = fj;
 			return;
 		}
 		if (rpc_type == DL_Const.RPC_FILM_SKIP)
@@ -98,6 +105,7 @@ modded class MissionGameplay
 				return;
 			if (skip)
 			{
+				m_DL_PendingFilm = "";
 				DL_Log.Detail("road film skipped: everyone voted");
 				m_DL_Film.Stop();
 			}
@@ -126,7 +134,8 @@ modded class MissionGameplay
 			else if (phase == DL_Const.WAIT_DONE)
 			{
 				m_DL_WaitWanted = false;
-				if (engine)
+				GetDayZGame().DL_ClearTransferLogin();
+				if (engine && !m_DL_ArrivalEngineHandled)
 					m_DL_StartEngine = true;
 			}
 			return;
@@ -149,9 +158,23 @@ modded class MissionGameplay
 			NotificationSystem.AddNotificationExtended(3, "DriveLink", "Travel cancelled.", "");
 	}
 
+	protected void DL_PlayArrivalFilm(string json)
+	{
+		// Separate lifecycles: the cosmetic loading tree ends before the event story starts.
+		GetDayZGame().DL_Transition().Stop("arrival story begins");
+		if (m_DL_Film)
+			m_DL_Film.PlayJson(json);
+	}
+
 	override void OnUpdate(float timeslice)
 	{
 		super.OnUpdate(timeslice);
+		if (m_DL_PendingFilm != "" && GetDayZGame().DL_Transition().ReadyForArrival())
+		{
+			string readyFilm = m_DL_PendingFilm;
+			m_DL_PendingFilm = "";
+			DL_PlayArrivalFilm(readyFilm);
+		}
 		if (m_DL_Film)
 		{
 #ifdef DL_DEV
@@ -184,7 +207,9 @@ modded class MissionGameplay
 		}
 		// the road film is the loading screen: the black screen stays up until it has played out (the server may be
 		// done seating sooner; Space skips the film)
-		bool filmOn = m_DL_Film && m_DL_Film.IsPlaying() && m_DL_WaitShown;
+		bool filmOn = (m_DL_PendingFilm != "" || (m_DL_Film && m_DL_Film.IsPlaying())) && m_DL_WaitShown;
+		if (!m_DL_WaitWanted && m_DL_WaitShown && !filmOn && GetDayZGame().DL_Transition().ReadyForArrival())
+			GetDayZGame().DL_Transition().Stop("arrival ready without a story film");
 		if (m_DL_WaitWanted || filmOn)
 			DL_WaitShow(m_DL_WaitMsg);
 		else if (m_DL_WaitShown)
@@ -368,16 +393,24 @@ modded class MissionGameplay
 			car = DL_Veh.VehicleOf(pb);
 		if (car && car.CrewDriver() == pb)
 		{
-			m_DL_StartEngine = false;
-			m_DL_EngineTries = 0;
-			if (DL_Veh.EngineIsOn(car))
-				return;
-			if (car.GetNetworkMoveStrategy() == NetworkMoveStrategy.PHYSICS)
+			if (!DL_Veh.EngineIsOn(car) && car.GetNetworkMoveStrategy() == NetworkMoveStrategy.PHYSICS)
 			{
 				DL_Veh.EngineStart(car);
 				DL_Log.Detail("waiting room: engine started on this client, running " + DL_Veh.EngineIsOn(car).ToString());
 			}
-			return;
+			if (DL_Veh.EngineIsOn(car))
+			{
+				Car roadCar = Car.Cast(car);
+				if (roadCar && roadCar.GetGear() == roadCar.GetNeutralGear())
+				{
+					roadCar.ShiftUp(); // first forward gear; same gearbox operation as E
+					DL_Log.Info("waiting room: arrival car shifted into first gear");
+				}
+				m_DL_StartEngine = false;
+				m_DL_ArrivalEngineHandled = true;
+				m_DL_EngineTries = 0;
+				return;
+			}
 		}
 		if (m_DL_EngineTries > 300)
 		{

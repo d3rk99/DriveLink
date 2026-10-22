@@ -75,6 +75,45 @@ class DL_Net
 modded class DayZGame
 {
 	protected ref DL_ServerInfo m_DL_Next;
+	protected ref DL_TransitionFilm m_DL_Transition;
+	protected bool m_DL_TransitionKey;
+	protected bool m_DL_TransferLogin;
+
+	bool DL_IsTransferLogin()
+	{
+		return m_DL_TransferLogin;
+	}
+
+	void DL_ClearTransferLogin()
+	{
+		m_DL_TransferLogin = false;
+	}
+
+	DL_TransitionFilm DL_Transition()
+	{
+		if (!m_DL_Transition)
+			m_DL_Transition = new DL_TransitionFilm();
+		return m_DL_Transition;
+	}
+
+	void DL_LoginTimerClosed(Widget root)
+	{
+		if (m_DL_Transition)
+			m_DL_Transition.LoginTimerClosed(root);
+	}
+
+	override void OnUpdate(bool doSim, float timeslice)
+	{
+		super.OnUpdate(doSim, timeslice);
+		string prototype;
+		if (!IsDedicatedServer() && CommandlineGetParam("dlTransitionDemo", prototype))
+		{
+			bool pressed = KeyState(KeyCode.KC_F8) != 0;
+			if (pressed && !m_DL_TransitionKey)
+				DL_Transition().Demo();
+			m_DL_TransitionKey = pressed;
+		}
+	}
 	protected string m_DL_NoticeCaption;
 	protected string m_DL_Notice;    // shown as a dialog in the main menu after a RPC_KICK
 
@@ -101,8 +140,15 @@ modded class DayZGame
 
 	override void OnRPC(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
 	{
+		if (rpc_type == DL_Const.RPC_TRANSITION && IsClient())
+		{
+			DL_Transition().Receive(ctx);
+			return;
+		}
 		if (rpc_type == DL_Const.RPC_KICK && IsClient())
 		{
+			DL_ClearTransferLogin();
+			DL_Transition().Stop("server notice");
 			string caption;
 			string text;
 			if (!ctx.Read(caption) || !ctx.Read(text))
@@ -136,9 +182,17 @@ modded class DayZGame
 			dlMsg134 += ":" + r.target.port.ToString();
 			DL_Log.Detail(dlMsg134);
 			if (host == "")
+			{
+				DL_Transition().Stop("destination has no usable address");
 				return;
+			}
 			m_DL_Next = r.target;
+			m_DL_TransferLogin = r.reason == "zone";
 			m_DL_Next.lanHost = host; // the address we decided on; DL_Reconnect uses it
+			if (r.reason == "zone")
+				DL_Transition().Start(r.target.name);
+			else
+				DL_Transition().Stop("redirect without a travel preview");
 			GetCallQueue(CALL_CATEGORY_SYSTEM).Call(DisconnectSessionForce);
 			return;
 		}

@@ -498,6 +498,17 @@ class DL_FilmCar
 	}
 }
 
+// Recovery snapshot for the cosmetic travel loop if the engine destroys its native widget tree.
+class DL_TransitionMotion
+{
+	float elapsed;
+	float sceneTime;
+	float scroll;
+	float speed;
+	float target;
+	float km;
+}
+
 class DL_FilmPlayer
 {
 	static const string DIR = "DriveLink/gui/anim/";
@@ -620,6 +631,40 @@ class DL_FilmPlayer
 	protected bool m_Playing;
 	protected bool m_KeyWasDown;
 	protected string m_LastJson;
+	protected Widget m_TransitionParent;
+	protected bool m_TransitionLoop;
+
+	// Prototype: only the cosmetic connecting scene loops; arrival films keep their normal lifecycle.
+	void TransitionParent(Widget parent)
+	{
+		m_TransitionParent = parent;
+		m_TransitionLoop = parent != null;
+	}
+
+	bool HasView()
+	{
+		return m_Root != null;
+	}
+
+	void SaveTransitionMotion(DL_TransitionMotion motion)
+	{
+		motion.elapsed = m_T;
+		motion.sceneTime = m_SceneT;
+		motion.scroll = m_Scroll;
+		motion.speed = m_Speed;
+		motion.target = m_Target;
+		motion.km = m_Km;
+	}
+
+	void RestoreTransitionMotion(DL_TransitionMotion motion)
+	{
+		m_T = motion.elapsed;
+		m_SceneT = motion.sceneTime;
+		m_Scroll = motion.scroll;
+		m_Speed = motion.speed;
+		m_Target = motion.target;
+		m_Km = motion.km;
+	}
 
 	bool IsPlaying()
 	{
@@ -735,7 +780,7 @@ class DL_FilmPlayer
 		}
 		float winX = (sw - winW) / 2;
 		m_Bottom = (winY + winH) / sh;
-		m_Root = ws.CreateWidget(FrameWidgetTypeID, winX, winY, winW, winH, DL_FilmSpike.Flags() | WidgetFlags.CLIPCHILDREN, ARGB(255, 255, 255, 255), 31500);
+		m_Root = ws.CreateWidget(FrameWidgetTypeID, winX, winY, winW, winH, DL_FilmSpike.Flags() | WidgetFlags.CLIPCHILDREN, ARGB(255, 255, 255, 255), 31500, m_TransitionParent);
 		if (!m_Root)
 			return false;
 		DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 16, 16, 16), 0, 0, 0, winW, winH);
@@ -1417,6 +1462,8 @@ class DL_FilmPlayer
 	protected void NextScene()
 	{
 		m_Scene++;
+		if (m_TransitionLoop && m_Scene >= m_Film.events.Count())
+			m_Scene = 0;
 		m_SceneT = 0;
 		m_Step = 0;
 		m_StepT = 0;
