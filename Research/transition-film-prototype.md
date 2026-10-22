@@ -109,16 +109,19 @@ creates its own presentation instead of adopting the loading scene's widgets.
 This supersedes the sprite-adoption behavior described above. Visual confirmation
 of this fix still requires a user-driven transfer.
 
-An optional DriveLink_ZenLogin addon depends on both DriveLink and ZenImmersiveLogin
-so the Zen methods exist before the bridge overrides them. Core DriveLink has no
-Zen dependency. Build the compatibility test with Tools/build-transition-prototype.ps1
--ZenCompat. This packs and signs both addons in the original prototype folder.
-The Workshop Zen files are used unchanged.
+DriveLink_ZenLogin is always packaged and depends only on DriveLink. It detects
+CfgPatches ZenImmersiveLogin at runtime and does nothing when it is absent. No Zen
+class inheritance or Zen-specific method overrides are compiled into the bridge.
+The build script always packs and signs both addons; -ZenCompat remains accepted
+only for older commands. No PBO removal or package adjustment is needed when
+switching between servers with and without Zen. Workshop Zen files are unchanged.
 
-The bridge marks rebuilt living transfer arrivals and bypasses Zen's sleep emote,
-blackout, and control/audio lock for those arrivals. Ordinary logins keep Zen's
-normal behavior. A client transfer marker covers the interval before the new
-player's replicated state arrives and is cleared on a later ordinary logout.
+The bridge marks rebuilt living transfer arrivals and invokes Zen's public
+completion method dynamically. On transfer logins it finds Zen's client effect
+manager, removes its queued blackout/control callbacks, calls Cleanup, and deletes
+the manager. A system update callback covers loading; a mission callback is also
+available. Ordinary logins leave the manager untouched. A client transfer marker
+covers the interval before replicated state arrives and clears on ordinary logout.
 
 Client test mod list: CF, VPPAdminTools, Zen's Core Mod, Zen's Immersive Login,
 and C:\DayZMods\FilmPrototypeRuntime\@DriveLinkFilmPrototype. Disable Workshop
@@ -138,6 +141,15 @@ Two compilation issues were corrected during deployment: Zen overrides were move
 into the ordered optional addon, and the server arrival marker was moved after
 successful character creation in the waiting-room path. Packaging alone does not
 verify Enforce compilation; inspect both test-server startup logs after deploying.
+
+The ordered addon approach above was subsequently replaced by runtime discovery
+to eliminate the hard dependency. Several configuration-order approaches were
+rejected after actual engine tests; the bridge now has no Zen compile-time types.
+On 2026-10-22 at 15:13 the identical final package completed mission startup on
+Chernarus without either Zen mod (Mission CRC 7a159769), and Livonia with both Zen
+mods (Mission CRC afa06dc9), without script errors. It was built without -ZenCompat
+and still contained both signed PBOs. Client wake-up suppression needs a new
+user-driven transfer test because the integration mechanism has changed.
 
 Deployment verified 2026-10-22 14:58: both original test instances compiled World
 (CRC 623bac50) and Mission (CRC a2ea9caa), started their missions, and completed

@@ -1,35 +1,25 @@
-// This addon depends on both mods, so all overridden methods already exist.
+// Runtime integration avoids a dependency on Zen types and script load order.
 modded class PlayerBase
 {
-	override void DL_OnTransferArrival()
-	{
-		super.DL_OnTransferArrival();
-		ZenImmersiveLoginFinished();
-	}
-
-	override void OnVariablesSynchronized()
-	{
-		super.OnVariablesSynchronized();
-		if (DL_IsTransferArrival())
-			ZenImmersiveLoginFinished();
-	}
-
-	override bool ZenLoginOverrideAI()
-	{
-		return DL_IsTransferArrival() || super.ZenLoginOverrideAI();
-	}
-
-	override void ZenImmersiveLogin_OnPlayerLoaded()
-	{
-		if (DL_IsTransferArrival())
-			ZenImmersiveLoginFinished();
-		else
-			super.ZenImmersiveLogin_OnPlayerLoaded();
-	}
-
-	override void CreateZenSpawnFire()
-	{
-		if (!DL_IsTransferArrival())
-			super.CreateZenSpawnFire();
-	}
+ protected void DL_FinishZenArrival()
+ {
+  if (DL_IsTransferArrival() && GetGame().ConfigIsExisting("CfgPatches ZenImmersiveLogin"))
+   GetGame().GameScript.CallFunctionParams(this, "ZenImmersiveLoginFinished", null, null);
+ }
+ override void DL_OnTransferArrival()
+ {
+  super.DL_OnTransferArrival();
+  DL_FinishZenArrival();
+ }
+ override void OnPlayerLoaded()
+ {
+  super.OnPlayerLoaded();
+  if (DL_IsTransferArrival() && GetGame().ConfigIsExisting("CfgPatches ZenImmersiveLogin"))
+   GetGame().GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_FinishZenArrival, 1, false);
+ }
+ override void OnVariablesSynchronized()
+ {
+  super.OnVariablesSynchronized();
+  DL_FinishZenArrival();
+ }
 }

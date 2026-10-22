@@ -24,7 +24,9 @@ if ($LASTEXITCODE -ne 0 -or $log -match '\[ERROR\]' -or !(Test-Path -LiteralPath
 if ((Get-Item -LiteralPath $pbo).LastWriteTime -lt $started.AddSeconds(-2)) { throw 'PBO was not rebuilt' }
 & (Join-Path $ds 'DSSignFile.exe') $private $pbo
 if ($LASTEXITCODE -ne 0) { throw 'Prototype signing failed' }
-if ($ZenCompat) {
+# Keep -ZenCompat accepted for older commands; every package now includes the
+# automatically guarded bridge, whether or not Zen is installed on the server.
+& {
     $compatSource = Join-Path $repo 'Addons\DriveLink_ZenLogin'
     $ErrorActionPreference = 'Continue'
     $compatLog = & $builder $compatSource $out '-prefix=DriveLink_ZenLogin' '-packonly' '-clear' 2>&1 | Out-String
