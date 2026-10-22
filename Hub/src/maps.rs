@@ -55,22 +55,55 @@ fn steam_libraries() -> Vec<PathBuf> {
     libs
 }
 
-/// addons folders that have map data: hub.json dayzPath first, then the DayZ client / server installs found.
-pub fn addon_dirs(dayz_path: &str) -> Vec<PathBuf> {
+/// Main game addons followed by DLC addons (e.g. sakhal/Addons and nasdara/addons).
+/// Scan only one level below the install root; Workshop mods are handled separately.
+fn install_addon_dirs(path: &Path) -> Vec<PathBuf> {
+    let is_addons = path.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("addons"));
+    let root = if is_addons { path.parent().unwrap_or(path) } else { path };
+    let main = if is_addons { path.to_path_buf() } else { root.join("addons") };
     let mut out = Vec::new();
-    if !dayz_path.is_empty() {
-        let p = PathBuf::from(dayz_path);
-        out.push(if p.ends_with("addons") { p } else { p.join("addons") });
+    if main.is_dir() {
+        out.push(main);
     }
-    for lib in steam_libraries() {
-        for game in ["DayZ", "DayZServer"] {
-            let a = lib.join("steamapps").join("common").join(game).join("addons");
-            if a.is_dir() && !out.contains(&a) {
-                out.push(a);
+    let mut dlc = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('@') || name.to_string_lossy().eq_ignore_ascii_case("addons") {
+                continue;
+            }
+            // Windows installs use both Addons and addons; match either spelling.
+            if let Ok(children) = std::fs::read_dir(entry.path()) {
+                for child in children.flatten() {
+                    if child.file_name().to_string_lossy().eq_ignore_ascii_case("addons") && child.path().is_dir() {
+                        dlc.push(child.path());
+                    }
+                }
             }
         }
     }
-    out.into_iter().filter(|p| p.is_dir()).collect()
+    dlc.sort();
+    out.extend(dlc);
+    out
+}
+
+/// Map data folders: configured installation first, then discovered client/server installs, including DLCs.
+pub fn addon_dirs(dayz_path: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if !dayz_path.is_empty() {
+        out.extend(install_addon_dirs(Path::new(dayz_path)));
+    }
+    for lib in steam_libraries() {
+        for game in ["DayZ", "DayZServer"] {
+            let root = lib.join("steamapps").join("common").join(game);
+            for a in install_addon_dirs(&root) {
+                if !out.contains(&a) {
+                    out.push(a);
+                }
+            }
+        }
+    }
+    out
 }
 
 pub fn tools_dir(tools_path: &str) -> Option<PathBuf> {
@@ -482,6 +515,56 @@ pub fn build(dir: PathBuf, map: String, pbo: PathBuf, tools: PathBuf, status: St
     match res {
         Ok(m) => set(format!("ready ({} m, zoom {}..0)", m.size, m.min_zoom)),
         Err(e) => set(format!("FAILED: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Install(PathBuf);
+    impl Install {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("drivelink-map-discovery-{}", rand::random::<u64>()));
+            for dir in ["addons", "sakhal/Addons", "nasdara/addons", "@Example/Addons", "unrelated/nested/addons"] {
+                std::fs::create_dir_all(root.join(dir)).unwrap();
+            }
+            Self(root)
+        }
+    }
+    impl Drop for Install {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn finds_dlc_folders_without_scanning_mods_or_nested_directories() {
+        let install = Install::new();
+        let dirs = install_addon_dirs(&install.0);
+        assert_eq!(dirs, vec![install.0.join("addons"), install.0.join("nasdara/addons"), install.0.join("sakhal/Addons")]);
+    }
+
+    #[test]
+    fn configured_addons_folder_also_finds_sibling_dlc() {
+        let install = Install::new();
+        assert_eq!(install_addon_dirs(&install.0.join("addons")), install_addon_dirs(&install.0));
+        assert!(install_addon_dirs(&install.0.join("missing")).is_empty());
+    }
+
+    #[test]
+    fn available_maps_include_dlc_and_keep_pinned_pbo_priority() {
+        let install = Install::new();
+        let dlc = install.0.join("sakhal/Addons/worlds_test_dlc_discovery_data.pbo");
+        std::fs::write(&dlc, []).unwrap();
+        let mut cfg: crate::config::Config = serde_json::from_value(serde_json::json!({
+            "serverKey": "test-only-map-discovery-key", "dayzPath": install.0
+        })).unwrap();
+        assert_eq!(available(&cfg).get("test_dlc_discovery"), Some(&dlc));
+        let pinned = install.0.join("pinned.pbo");
+        std::fs::write(&pinned, []).unwrap();
+        cfg.map_pbos.insert("test_dlc_discovery".into(), pinned.to_string_lossy().into_owned());
+        assert_eq!(available(&cfg).get("test_dlc_discovery"), Some(&pinned));
     }
 }
 
