@@ -31,11 +31,14 @@ modded class MissionGameplay
 	{
 		super.OnMissionStart();
 		GetDayZGame().Event_OnRPC.Insert(DL_OnRpc);
+		GetDayZGame().DL_Transition().MissionStarted("gameplay");
+		GetDayZGame().DL_Transition().Arrived();
 	}
 
 	override void OnMissionFinish()
 	{
 		GetDayZGame().Event_OnRPC.Remove(DL_OnRpc);
+		GetDayZGame().DL_Transition().MissionFinishing();
 		if (m_DL_Film)
 			m_DL_Film.Stop();
 		DL_WaitHide();
@@ -84,8 +87,15 @@ modded class MissionGameplay
 				fj += pc;
 			m_DL_FilmParts.Clear();
 			m_DL_FilmId = 0;
-			if (m_DL_Film)
-				m_DL_Film.PlayJson(fj);
+			DL_FilmPlayer continuous = GetDayZGame().DL_Transition().TakeArrival(fj);
+			if (continuous)
+				m_DL_Film = continuous;
+			else
+			{
+				GetDayZGame().DL_Transition().Stop("authoritative arrival film");
+				if (m_DL_Film)
+					m_DL_Film.PlayJson(fj);
+			}
 			return;
 		}
 		if (rpc_type == DL_Const.RPC_FILM_SKIP)

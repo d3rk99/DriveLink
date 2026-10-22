@@ -21,7 +21,9 @@ class DL_FilmSpike
 		ImageWidget img = ImageWidget.Cast(g_Game.GetWorkspace().CreateWidget(ImageWidgetTypeID, x, y, w, h, Flags() | WidgetFlags.STRETCH | WidgetFlags.NOFILTER | WidgetFlags.SOURCEALPHA | WidgetFlags.BLEND, color, sort, parent));
 		if (!img)
 			return null;
-		if (!img.LoadImageFile(0, tex))
+		// Solid panels use the widget's color directly, like the existing arrival HUD.
+		// The engine does not accept procedural material strings as image files.
+		if (tex != PLAIN && !img.LoadImageFile(0, tex))
 			DL_Log.Warn("road film: could not load " + tex);
 		img.SetImage(0);
 		img.SetColor(color);

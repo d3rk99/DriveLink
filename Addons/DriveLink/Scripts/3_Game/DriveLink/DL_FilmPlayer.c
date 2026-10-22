@@ -498,6 +498,17 @@ class DL_FilmCar
 	}
 }
 
+// Recovery snapshot for the cosmetic travel loop if the engine destroys its native widget tree.
+class DL_TransitionMotion
+{
+	float elapsed;
+	float sceneTime;
+	float scroll;
+	float speed;
+	float target;
+	float km;
+}
+
 class DL_FilmPlayer
 {
 	static const string DIR = "DriveLink/gui/anim/";
@@ -620,6 +631,83 @@ class DL_FilmPlayer
 	protected bool m_Playing;
 	protected bool m_KeyWasDown;
 	protected string m_LastJson;
+	protected Widget m_TransitionParent;
+	protected bool m_TransitionLoop;
+
+	// Prototype: only the cosmetic connecting scene loops; arrival films keep their normal lifecycle.
+	void TransitionParent(Widget parent)
+	{
+		m_TransitionParent = parent;
+		m_TransitionLoop = parent != null;
+	}
+
+	bool HasView()
+	{
+		return m_Root != null;
+	}
+
+	void SaveTransitionMotion(DL_TransitionMotion motion)
+	{
+		motion.elapsed = m_T;
+		motion.sceneTime = m_SceneT;
+		motion.scroll = m_Scroll;
+		motion.speed = m_Speed;
+		motion.target = m_Target;
+		motion.km = m_Km;
+	}
+
+	void RestoreTransitionMotion(DL_TransitionMotion motion)
+	{
+		m_T = motion.elapsed;
+		m_SceneT = motion.sceneTime;
+		m_Scroll = motion.scroll;
+		m_Speed = motion.speed;
+		m_Target = motion.target;
+		m_Km = motion.km;
+	}
+
+	// Keep the existing sprites and road scroll when the real journey arrives.
+	bool AdoptArrival(DL_Film film, string json)
+	{
+		if (!m_Root || !m_Playing || !film || film.events.Count() == 0)
+			return false;
+		// Keep the existing arrival renderer as fallback for special scenery/cast changes.
+		if (m_Sky || m_Water || film.biomeVia != "" || film.car != m_Film.car || film.cars.Count() != m_Film.cars.Count() || film.crew.Count() != m_Film.crew.Count())
+			return false;
+		for (int ci = 0; ci < film.cars.Count(); ci++)
+		{
+			if (film.cars[ci] != m_Film.cars[ci])
+				return false;
+		}
+		g_Game.GetWorkspace().AddChild(m_Root);
+		m_Root.SetSort(31500);
+		m_TransitionParent = null;
+		m_TransitionLoop = false;
+		m_Film = film;
+		m_LastJson = json; // the destination retries this RPC; do not restart the adopted player
+		m_Km = 0;
+		m_Scene = -1;
+		m_Ending = false;
+		m_Voted = false;
+		m_VoteOut = false;
+		if (!m_GroundB && film.biomeTo != "" && film.biomeTo != film.biomeFrom)
+		{
+			m_GroundB = new DL_Strip(m_Root, Ground(film.biomeTo), 2, m_Ox, m_Oy, 256 * m_Px, m_ViewH * m_Px, 256, 256, true);
+			m_GroundB.SetAlpha(0);
+		}
+		if (!m_SkipText && film.skip != "none")
+		{
+			float width, height;
+			m_Root.GetSize(width, height);
+			float band = height * 0.045;
+			DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(120, 0, 0, 0), SORT_TEXT, 0, 0, width, band * 1.2);
+			m_SkipText = TextWidget.Cast(g_Game.GetWorkspace().CreateWidget(TextWidgetTypeID, 0, band * 0.1, width, band, DL_FilmSpike.Flags() | WidgetFlags.CENTER | WidgetFlags.VCENTER, ARGB(255, 200, 200, 200), SORT_TEXT + 1, m_Root));
+			if (m_SkipText)
+				m_SkipText.SetText("Space: vote to skip (everyone has to)");
+		}
+		NextScene();
+		return true;
+	}
 
 	bool IsPlaying()
 	{
@@ -735,7 +823,7 @@ class DL_FilmPlayer
 		}
 		float winX = (sw - winW) / 2;
 		m_Bottom = (winY + winH) / sh;
-		m_Root = ws.CreateWidget(FrameWidgetTypeID, winX, winY, winW, winH, DL_FilmSpike.Flags() | WidgetFlags.CLIPCHILDREN, ARGB(255, 255, 255, 255), 31500);
+		m_Root = ws.CreateWidget(FrameWidgetTypeID, winX, winY, winW, winH, DL_FilmSpike.Flags() | WidgetFlags.CLIPCHILDREN, ARGB(255, 255, 255, 255), 31500, m_TransitionParent);
 		if (!m_Root)
 			return false;
 		DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 16, 16, 16), 0, 0, 0, winW, winH);
@@ -1417,6 +1505,8 @@ class DL_FilmPlayer
 	protected void NextScene()
 	{
 		m_Scene++;
+		if (m_TransitionLoop && m_Scene >= m_Film.events.Count())
+			m_Scene = 0;
 		m_SceneT = 0;
 		m_Step = 0;
 		m_StepT = 0;

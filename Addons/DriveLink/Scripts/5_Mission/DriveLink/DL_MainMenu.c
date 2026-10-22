@@ -21,6 +21,7 @@ modded class MissionMainMenu
 	override void OnMissionStart()
 	{
 		super.OnMissionStart();
+		GetDayZGame().DL_Transition().MissionStarted("main menu");
 		if (GetDayZGame().DL_HasPending())
 		{
 			m_DL_Waited = 0;
@@ -28,6 +29,12 @@ modded class MissionMainMenu
 		}
 		else if (GetDayZGame().DL_HasNotice())
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_Notice, 500, false);
+	}
+
+	override void OnMissionFinish()
+	{
+		GetDayZGame().DL_Transition().MissionFinishing();
+		super.OnMissionFinish();
 	}
 
 	protected void DL_Go()
