@@ -1,4 +1,4 @@
-# Packs Addons\DriveLink into @DriveLink\Addons\DriveLink.pbo (scripts + config, -packonly) and links it into
+# Packs core DriveLink and its automatic Zen bridge into @DriveLink\Addons (scripts + config, -packonly) and links it into
 # BOTH test servers. Usage: powershell -ExecutionPolicy Bypass -File Tools\build-mod.ps1 [-Dev]
 #   (none) = the release build: no test switches
 #   -Dev   = adds the DL_DEV define: F9 demo film, debug.json test switches (test car on login, car rebuild zone),
@@ -28,13 +28,16 @@ $out     = Join-Path $modRoot "Addons"
 $builder = "E:\Steam\steamapps\common\DayZ Tools\Bin\AddonBuilder\AddonBuilder.exe"
 if (!(Test-Path -LiteralPath $builder)) { throw "AddonBuilder not found at $builder" }
 New-Item -ItemType Directory -Force -Path $out | Out-Null
-$pbo = Join-Path $out "DriveLink.pbo"
+$builtPbos = @()
+foreach ($addon in @(@{Name='DriveLink';Source=$source},
+    @{Name='DriveLink_ZenLogin';Source=(Join-Path $repo 'Addons\DriveLink_ZenLogin')})) {
+$pbo = Join-Path $out ($addon.Name + '.pbo')
 $started = Get-Date
 # AddonBuilder exits 0 even on "[ERROR]: Build failed" (2026-10-18: the old PBO stayed because a running DayZ
 # client/server held it open), so check its log text and that the PBO really is new.
 # Its stderr banner ("Setting breakpad minidump ...") would stop the script under "Stop" in PowerShell 5.1.
 $ErrorActionPreference = "Continue"
-$log = & $builder $source $out "-prefix=DriveLink" "-packonly" "-clear" 2>&1 | Out-String
+$log = & $builder $addon.Source $out ("-prefix=" + $addon.Name) "-packonly" "-clear" 2>&1 | Out-String
 $ErrorActionPreference = "Stop"
 if ($LASTEXITCODE -ne 0 -or $log -match "\[ERROR\]") {
   Write-Host $log
@@ -42,6 +45,8 @@ if ($LASTEXITCODE -ne 0 -or $log -match "\[ERROR\]") {
 }
 if (!(Test-Path $pbo) -or (Get-Item $pbo).LastWriteTime -lt $started.AddSeconds(-2)) { throw "No new PBO at $pbo" }
 Write-Host "Built $pbo ($((Get-Item $pbo).Length) bytes)"
+$builtPbos += $pbo
+}
 # signed with the release key (kept OUTSIDE the repo; a copy in C:\DayZMods\KeyBackups), its public key in keys\,
 # mod.cpp (name, logo, description) at the mod's root
 $signDir = "C:\DayZMods\DriveLink-signing"
@@ -50,8 +55,10 @@ $pubKey  = Join-Path $signDir "DriveLink.bikey"
 $signer  = "E:\Steam\steamapps\common\DayZ Tools\Bin\DsUtils\DSSignFile.exe"
 Get-ChildItem -LiteralPath $out -Filter "*.bisign" | Remove-Item -Force
 if (Test-Path -LiteralPath $privKey) {
-  & $signer $privKey $pbo
-  if ($LASTEXITCODE -ne 0) { throw "DSSignFile failed" }
+  foreach ($builtPbo in $builtPbos) {
+    & $signer $privKey $builtPbo
+    if ($LASTEXITCODE -ne 0) { throw "DSSignFile failed: $builtPbo" }
+  }
   $keys = Join-Path $modRoot "keys"
   New-Item -ItemType Directory -Force -Path $keys | Out-Null
   Get-ChildItem -LiteralPath $keys -Filter "*.bikey" | Remove-Item -Force
