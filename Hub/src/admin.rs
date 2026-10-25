@@ -36,6 +36,7 @@ pub fn routes(h: Shared) -> Router<Shared> {
         .route("/admin/api/servers", post(save_server))
         .route("/admin/api/servers/{id}/delete", post(delete_server))
         .route("/admin/api/servers/{id}/travel", post(save_travel))
+        .route("/admin/api/servers/{id}/helper-route", post(save_helper_route))
         .route("/admin/api/pending/{claim}/approve", post(approve))
         .route("/admin/api/pending/{claim}/dismiss", post(dismiss))
         .route("/admin/api/settings", post(save_settings))
@@ -122,6 +123,7 @@ async fn state(State(h): State<Shared>) -> Response {
             "seenSecondsAgo": ago, "local": h.is_local_server(&s.id), "travel": s.travel,
             "mod": h.versions.lock().unwrap().get(&s.id).cloned(), "hubProtocol": crate::api::PROTOCOL,
             "spots": h.spots.lock().unwrap().get(&s.id).cloned(),
+            "clientMods": crate::mod_policy::report(&h,s), "helperRoutes": crate::mod_policy::routes(&h,&s.id),
         }));
     }
     drop(db);
@@ -243,6 +245,21 @@ async fn save_server(State(h): State<Shared>, body: Bytes) -> Response {
         }
         Err(e) => bad(e),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase")]
+struct HelperRouteForm { target_id:String, mode:String }
+async fn save_helper_route(State(h):State<Shared>,Path(id):Path<String>,body:Bytes)->Response {
+    let f:HelperRouteForm=match serde_json::from_slice(&body){Ok(f)=>f,Err(e)=>return bad(format!("bad helper route: {e}"))};
+    if !["auto","direct","restart"].contains(&f.mode.as_str()){return bad("mode must be auto, direct or restart");}
+    let result=h.update_cfg(|cfg|{
+        if id==f.target_id || cfg.server(&f.target_id).is_none(){return Err("unknown/self destination".into());}
+        let source=cfg.servers.iter_mut().find(|s|s.id==id).ok_or("unknown source server")?;
+        if f.mode=="auto"{source.helper_routes.remove(&f.target_id);}else{source.helper_routes.insert(f.target_id.clone(),f.mode.clone());}
+        Ok(())
+    });
+    match result { Ok(())=>Json(json!({"ok":true})).into_response(),Err(e)=>bad(e) }
 }
 
 // travel rules for trips leaving this server; the DayZ server picks them up with its next layout poll (~30 s)

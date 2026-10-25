@@ -325,7 +325,8 @@ function drawCarSpots(a) {
   const b = carBase(a), chk = spotCheck(a);
   const r = b.yaw * Math.PI / 180, fx = Math.sin(r), fz = Math.cos(r), rx = Math.cos(r), rz = -Math.sin(r);
   for (let k = 0; k < 4; k++) {
-    const cx = b.x - fx * 10 * k, cz = b.z - fz * 10 * k, hw = 1.1, hl = 2.4;
+    const spacing = a.convoySpacing || 20;
+    const cx = b.x - fx * spacing * k, cz = b.z - fz * spacing * k, hw = 1.1, hl = 2.4;
     const pts = [[hl, hw], [hl, -hw], [-hl, -hw], [-hl, hw]].map(([l, w]) => [cz + fz * l + rz * w, cx + fx * l + rx * w]);
     const place = chk && chk.places ? chk.places[k] : null;
     const free = place ? String(place.car || "").startsWith("free") : null;
@@ -338,6 +339,7 @@ function drawCarSpots(a) {
 
 // where a boat arriving here goes on the water: the pinned boat spot, else the nearest free water the server found
 function drawBoatSpot(a) {
+  drawStaging(a);
   const pinned = a.boatPos && (a.boatPos[0] !== 0 || a.boatPos[2] !== 0);
   const chk = spotCheck(a);
   const at = pinned ? a.boatPos : chk && chk.boatAt && (chk.boatAt[0] || chk.boatAt[2]) ? chk.boatAt : null;
@@ -348,6 +350,18 @@ function drawBoatSpot(a) {
   L.polygon(pts, { color: ok ? "#4fb3ff" : "#ff5d5d", weight: 1, fillOpacity: .45, dashArray: pinned ? null : "3 3" }).addTo(layer)
     .bindTooltip(`${esc(a.name)}: boat ${pinned ? "spot (pinned)" : "(nearest free water)"}${chk && chk.boat ? "<br>" + esc(chk.boat) : ""}`, { direction: "top", className: "lbl" });
   L.polyline([[a.pos[2], a.pos[0]], [at[2], at[0]]], { color: "#4fb3ff", weight: 1, dashArray: "2 4", interactive: false }).addTo(layer);
+}
+
+function drawStaging(a) {
+  if (!a.stagingEnabled) return;
+  for (const [point, yaw, label] of [[a.stagingPos, a.stagingYaw || 0, "vehicle assembly"], [a.stagingBoatPos, a.stagingBoatYaw || 0, "boat assembly"]]) {
+    if (!point || (!point[0] && !point[2])) continue;
+    L.marker([point[2], point[0]], { icon: arrowIcon(yaw, "#cc91ff") }).addTo(layer)
+      .bindTooltip(`${esc(a.name)}: ${label}`, { permanent: true, direction: "right", className: "lbl" });
+    L.polyline([[point[2], point[0]], [a.pos[2], a.pos[0]]], { color: "#cc91ff", weight: 1, dashArray: "6 6", interactive: false }).addTo(layer);
+    const angle = yaw * Math.PI / 180, spacing = a.stagingSpacing || 25;
+    for (let k = 0; k < 4; k++) L.circle([point[2] - Math.cos(angle) * spacing * k, point[0] - Math.sin(angle) * spacing * k], { radius: 5, color: "#cc91ff", weight: 1, fillOpacity: .1, interactive: false }).addTo(layer);
+  }
 }
 
 // where a plane arriving here comes in (only drawn when pinned): a plane shape along its heading, its height
@@ -421,7 +435,7 @@ function renderEdit() {
       <label>Name (zones on other servers point here)</label><input id="fName" value="${esc(a.name)}">
       <div class="row"><div><label>x</label><input id="fX" type="number" step="0.1" value="${a.pos[0].toFixed(1)}"></div><div><label>z</label><input id="fZ" type="number" step="0.1" value="${a.pos[2].toFixed(1)}"></div></div>
       <label>Facing (degrees, 0 = north, 90 = east)</label><input id="fYaw" type="number" min="0" max="359" value="${Math.round(a.yaw)}">
-      <div class="hint" style="margin-top:6px">A car that comes along is built here facing the same way; the driver stands 3 m to its left. A convoy's cars line up behind it, 10 m apart (the boxes on the map). A car whose place is taken stands at the nearest free spot.</div>
+      <div class="hint" style="margin-top:6px">A car that comes along is built here facing the same way; the driver stands 3 m to its left. A convoy's cars line up behind it, with the configured convoy spacing (the boxes on the map). A car whose place is taken stands at the nearest free spot.</div>
       ${(() => { const c = spotCheck(a); if (!c || !c.places) return `<div class="hint">The server hasn't checked these places yet (it does after it starts and after every change here, within ~1 min).</div>`;
         return `<table style="margin-top:6px"><tr><th>Place</th><th>Car</th><th>Truck</th></tr>${c.places.map((p, k) => `<tr><td>${k === 0 ? "car spot" : "convoy car " + (k + 1)}</td><td class="${String(p.car).startsWith("free") ? "ok" : "badtxt"}">${esc(p.car)}</td><td class="${String(p.truck).startsWith("free") ? "ok" : "badtxt"}">${esc(p.truck)}</td></tr>`).join("")}</table>`; })()}
       <div style="margin-top:10px"><button class="danger" id="fDel">Delete point</button></div>`;
@@ -445,6 +459,26 @@ function renderEdit() {
       $("pPick").onclick = () => { setStatus("Click where the plane should come in"); map.once("click", ev => { setAir(Math.round(ev.latlng.lng), Math.round(ev.latlng.lat)); setStatus(""); }); };
       if ($("pClear")) $("pClear").onclick = () => setAir(0, 0);
     }
+    const stage = a.stagingPos || [0, 0, 0], stageBoat = a.stagingBoatPos || [0, 0, 0];
+    box.insertAdjacentHTML("beforeend", `<h2 style="margin-top:12px">Arrival staging</h2>
+      <label><input id="sEnabled" type="checkbox" ${a.stagingEnabled ? "checked" : ""}> Assemble vehicles away from the final arrival</label>
+      <div class="hint">Requires the updated Hub and DriveLink mod. Choose quiet, flat ground at least 100 m from the destination for cars/bikes. Boats can use a separate water staging point with dry land nearby. A vehicle kind without its own staging point uses the direct arrival. This is a real area of the map, not a private instance. Keep it clear of players and objects. Aircraft continue to use their in-flight arrival.</div>
+      <div class="row"><div><label>Ground staging x</label><input id="sX" type="number" value="${stage[0]}"></div><div><label>z</label><input id="sZ" type="number" value="${stage[2]}"></div><div><label>Facing</label><input id="sYaw" type="number" value="${Math.round(a.stagingYaw || 0)}"></div></div>
+      <button id="sPick">Pick ground staging on map</button>
+      <div class="row"><div><label>Boat staging x</label><input id="sbX" type="number" value="${stageBoat[0]}"></div><div><label>z</label><input id="sbZ" type="number" value="${stageBoat[2]}"></div><div><label>Facing</label><input id="sbYaw" type="number" value="${Math.round(a.stagingBoatYaw || 0)}"></div></div>
+      <button id="sbPick">Pick boat staging on water</button>
+      <div class="row"><div><label>Assembly spacing (15–100 m)</label><input id="sSpacing" type="number" min="15" max="100" value="${a.stagingSpacing || 25}"></div><div><label>Final convoy spacing (12–100 m)</label><input id="cSpacing" type="number" min="12" max="100" value="${a.convoySpacing || 20}"></div></div>
+      <div class="hint">People and vehicles remain visible during assembly. Once the crew and convoy are ready and the story completes, the server checks the final spots, moves everyone and briefly holds the vehicles before releasing control. Blocked arrivals remain held rather than spawning into an obstruction.</div>`);
+    $("sEnabled").onchange = e => { a.stagingEnabled = e.target.checked; changed(true); };
+    const setStage = (boat, x, z) => { a[boat ? "stagingBoatPos" : "stagingPos"] = [x, 0, z]; changed(true); renderEdit(); };
+    for (const [prefix, boat] of [["s", false], ["sb", true]]) {
+      $(prefix + "X").onchange = () => setStage(boat, +$(prefix + "X").value || 0, +$(prefix + "Z").value || 0);
+      $(prefix + "Z").onchange = () => setStage(boat, +$(prefix + "X").value || 0, +$(prefix + "Z").value || 0);
+      $(prefix + "Yaw").onchange = e => { a[boat ? "stagingBoatYaw" : "stagingYaw"] = ((+e.target.value % 360) + 360) % 360; changed(true); };
+      $(prefix + "Pick").onclick = () => { setStatus(boat ? "Click a quiet water staging point" : "Click a quiet, flat ground staging point"); map.once("click", ev => { setStage(boat, Math.round(ev.latlng.lng), Math.round(ev.latlng.lat)); setStatus(""); }); };
+    }
+    $("sSpacing").onchange = e => { a.stagingSpacing = Math.max(15, Math.min(100, +e.target.value || 25)); changed(true); };
+    $("cSpacing").onchange = e => { a.convoySpacing = Math.max(12, Math.min(100, +e.target.value || 20)); changed(true); };
     const setBoat = (x, z) => { a.boatPos = [x, 0, z]; changed(true); renderEdit(); };
     $("bX").onchange = () => setBoat(+$("bX").value || 0, +$("bZ").value || 0);
     $("bZ").onchange = () => setBoat(+$("bX").value || 0, +$("bZ").value || 0);
@@ -561,6 +595,13 @@ function readForm(isNew) {
 function idFrom(text) { return (text || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32); }
 const WORLD_NAMES = { chernarusplus: "Chernarus", enoch: "Livonia", sakhal: "Sakhal" };
 
+function helperPolicyBox(server) {
+  const rows = (server.helperRoutes || []).map(r => `<tr><td>${esc(S.servers.find(s => s.id === r.targetId)?.name || r.targetId)}</td>
+    <td><select data-helper-target="${esc(r.targetId)}">${[["auto","Automatic"],["direct","Keep client (same mods)"],["restart","Restart with helper"]].map(([v,label]) => `<option value="${v}" ${r.mode === v ? "selected" : ""}>${label}</option>`).join("")}</select></td>
+    <td class="${r.known ? "ok" : "warn"}">${r.known ? (r.restart ? "Helper restart" : "No helper") : "Waiting / blocked"}</td><td>${esc(r.reason)}</td></tr>`).join("");
+  return `<div class="box"><h2>Client switching</h2><div class="hint">Requires DriveLink mod 0.4.9 or newer on each server and client. Automatic compares the servers' advertised client mod identities, builds and order through their Steam query ports. Map/DLC differences alone do not require a restart. No routes.json editing is needed. A missing report or mismatched shared mod build blocks travel with an explanation instead of asking players to install the helper. Use an override only after verifying the required client mods.</div>
+    <table><tr><th>Destination</th><th>Policy</th><th>Result</th><th>Reason</th></tr>${rows}</table><div id="helperPolicyMsg" class="status"></div></div>`;
+}
 function renderServers() {
   const b = $("pageBody");
   let h = `<h2 class="big">Servers</h2>`;
@@ -583,16 +624,18 @@ function renderServers() {
       ${!isNew && !claim ? `<button class="danger" id="sDel">Remove server</button>` : ""}</div><div class="status" id="pageMsg"></div></div>`;
   }
   if (editing && !editing.isNew && !editing.claim) h += travelBox(editing.f);
+  if (editing && !editing.isNew && !editing.claim) h += helperPolicyBox(editing.f);
   h += `<div class="box"><h2>Connected to this hub</h2>`;
   if (!S.servers.length) h += `<div class="hint">No servers yet. Start a DayZ server with the DriveLink mod and this hub's address + key (see <a href="#" id="goSetup" style="color:var(--accent)">Setup</a>): it shows up above to approve. Or add one by hand.</div>`;
   else {
-    h += `<table><tr><th>Name</th><th>Status</th><th>Map</th><th>Address</th><th>Port</th><th>DriveLink</th></tr>`;
+    h += `<table><tr><th>Name</th><th>Status</th><th>Map</th><th>Address</th><th>Port</th><th>Client mods</th><th>DriveLink</th></tr>`;
     S.servers.forEach((s, i) => {
       const st = ago(s.seenSecondsAgo);
       const cls = st === "online" ? "ok" : st ? "warn" : "hint";
       h += `<tr class="click" data-edit="${i}"><td><b>${esc(s.name)}</b> <span class="hint">${esc(s.id)}</span></td>
         <td class="${cls}">${esc(st || "never connected")}${s.local ? ' <span class="hint">(this PC)</span>' : ""}</td><td>${esc(s.map || "?")}</td>
         <td>${esc(s.lanHost || "-")}${s.publicHost ? " / " + esc(s.publicHost) : ""}</td><td>${s.port}${s.queryPort ? ` <span class="hint">q ${s.queryPort}</span>` : ""}</td>
+        <td>${s.clientMods?.known ? `${s.clientMods.mods.length} detected` : `<span class="warn" title="${esc(s.clientMods?.reason || "Waiting for query")}">Query unavailable</span>`}</td>
         <td>${!s.mod ? `<span class="hint">-</span>` : s.mod.ok ? esc(s.mod.version) : `<span class="badtxt" title="This server's DriveLink speaks protocol ${s.mod.protocol}, the hub ${s.hubProtocol}: travel is off there until both are the same build">${esc(s.mod.version)} - ${s.mod.protocol < s.hubProtocol ? "update the mod" : "update the hub"}</span>`}</td></tr>`;
     });
     h += `</table>`;
@@ -606,6 +649,14 @@ function renderServers() {
       <div><button class="primary" id="sHomeSave">Save starting server</button></div></div><div class="status" id="sHomeMsg"></div></div>`;
   }
   b.innerHTML = h;
+  b.querySelectorAll("[data-helper-target]").forEach(x => x.onchange = async () => {
+    const id = editing.f.id, message = $("helperPolicyMsg");
+    try {
+      await post(`/admin/api/servers/${encodeURIComponent(id)}/helper-route`, { targetId: x.dataset.helperTarget, mode: x.value });
+      await refresh(); editing.f = {...S.servers.find(s => s.id === id)}; renderServers();
+      $("helperPolicyMsg").textContent = "Saved. Server policy refreshes within about 30 seconds.";
+    } catch(e) { message.textContent = e.message; message.className = "status badtxt"; }
+  });
   const hs = $("sHomeSave");
   if (hs) hs.onclick = async () => {
     const m = $("sHomeMsg");

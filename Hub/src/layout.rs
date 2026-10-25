@@ -111,6 +111,13 @@ pub fn clean_arrivals(v: &Value) -> Value {
                     // a plane arrives here in flight: x, height above the terrain (m), z; 0 0 = above the point
                     "airPos": [num(a, "airPos", 0), num(a, "airPos", 1), num(a, "airPos", 2)],
                     "airYaw": a.get("airYaw").and_then(Value::as_f64).unwrap_or(0.0).rem_euclid(360.0),
+                    "stagingEnabled": a.get("stagingEnabled").and_then(Value::as_bool).unwrap_or(false),
+                    "stagingPos": [num(a, "stagingPos", 0), 0.0, num(a, "stagingPos", 2)],
+                    "stagingYaw": a.get("stagingYaw").and_then(Value::as_f64).unwrap_or(0.0).rem_euclid(360.0),
+                    "stagingBoatPos": [num(a, "stagingBoatPos", 0), 0.0, num(a, "stagingBoatPos", 2)],
+                    "stagingBoatYaw": a.get("stagingBoatYaw").and_then(Value::as_f64).unwrap_or(0.0).rem_euclid(360.0),
+                    "stagingSpacing": a.get("stagingSpacing").and_then(Value::as_f64).unwrap_or(25.0).clamp(15.0, 100.0),
+                    "convoySpacing": a.get("convoySpacing").and_then(Value::as_f64).unwrap_or(20.0).clamp(12.0, 100.0),
                 })
             })
             .collect(),
@@ -118,5 +125,36 @@ pub fn clean_arrivals(v: &Value) -> Value {
 }
 
 fn num(o: &Value, key: &str, i: usize) -> f64 {
-    o.get(key).and_then(|v| v.get(i)).and_then(Value::as_f64).unwrap_or(0.0)
+    o.get(key).and_then(|v| v.get(i)).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100000.0, 100000.0)
+}
+
+#[cfg(test)]
+mod staging_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn legacy_arrivals_do_not_enable_staging() {
+        let v=clean_arrivals(&json!([{"name":"dock","pos":[100,0,200]}]));
+        assert_eq!(v[0]["stagingEnabled"],false);
+        assert_eq!(v[0]["stagingSpacing"],25.0);
+    }
+    #[test]
+    fn staging_survives_layout_save_and_reload() {
+        let c=Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE layouts(server_id TEXT PRIMARY KEY,zones TEXT,arrivals TEXT,map TEXT,rev INTEGER,updated_at TEXT);").unwrap();
+        let a=clean_arrivals(&json!([{"name":"dock","pos":[100,0,200],"stagingEnabled":true,"stagingPos":[1000,900,2000],"stagingYaw":450,"stagingBoatPos":[1200,0,2100],"stagingSpacing":30,"convoySpacing":25}]));
+        save(&c,"test","[]",&a.to_string(),None).unwrap();
+        let loaded=to_json(&get(&c,"test").unwrap().unwrap());
+        assert_eq!(loaded["arrivals"][0]["stagingPos"],json!([1000.0,0.0,2000.0]));
+        assert_eq!(loaded["arrivals"][0]["stagingYaw"],90.0);
+        assert_eq!(loaded["arrivals"][0]["stagingBoatPos"],json!([1200.0,0.0,2100.0]));
+        assert_eq!(loaded["arrivals"][0]["convoySpacing"],25.0);
+    }
+    #[test]
+    fn spacing_is_bounded_and_terrain_controls_height() {
+        let a=clean_arrivals(&json!([{"stagingPos":[1e90,500,-1e90],"stagingSpacing":-2,"convoySpacing":999}]));
+        assert_eq!(a[0]["stagingPos"],json!([100000.0,0.0,-100000.0]));
+        assert_eq!(a[0]["stagingSpacing"],15.0);
+        assert_eq!(a[0]["convoySpacing"],100.0);
+    }
 }

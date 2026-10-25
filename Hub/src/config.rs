@@ -30,6 +30,9 @@ pub struct ServerEntry {
     /// rules for trips that START here (Research/travel-cost-design.md); sent to the server with its layout
     #[serde(default)]
     pub travel: TravelRules,
+    /// Optional per-destination override; absent entries use automatic advertised client-mod comparison.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub helper_routes: HashMap<String, String>,
 }
 
 /// Travel cost + time for trips leaving one server. Costs are per 10 km of the zone's distance (0 km = free).

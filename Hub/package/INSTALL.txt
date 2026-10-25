@@ -25,8 +25,22 @@ then use Build from game files. Alternatively import a complete map image.
 Official DLC folders are discovered automatically, including sakhal/Addons
 and nasdara/addons. Enter folder paths without quotation marks.
 
-This Hub works with the existing DriveLink 0.4 mod (protocol 1).
+Protocol-1 mods can connect, but automatic client switching requires both the
+Hub and the DriveLink mod at 0.4.9-rc1 or newer. Updating only the Hub does not
+remove helper prompts in an older mod.
 Default ports: TCP 7290 HTTP and TCP 7291 HTTPS.
+
+AUTOMATIC CLIENT SWITCHING
+The Hub queries each server's advertised client mods through its UDP Steam
+query port. Keep that port reachable from the Hub. In Servers, leave Client
+switching set to Automatic: identical client mod lists use direct reconnect,
+while differing lists require the helper. No manual routes.json edits are needed.
+Server-only mods and official map/DLC flags do not trigger a restart requirement.
+Unavailable/stale reports hold departure and explain the problem. Conflicting
+builds of shared mods must be synchronized on the servers.
+Optional per-destination Keep client / Restart overrides are in the Hub editor.
+Matching-mod travel needs no helper installation. A restart route still needs
+the player's one-time helper setup and downloaded destination mods.
 
 OPTIONAL WINDOWS SERVICE
 Stop the console Hub with Ctrl+C first. Run Install-Service.cmd as administrator

@@ -18,6 +18,7 @@ mod maps;
 mod net;
 mod numfix;
 mod players;
+mod mod_policy;
 #[cfg(windows)]
 mod service;
 mod tls;
@@ -72,10 +73,13 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
         versions: Default::default(),
         db: Mutex::new(conn),
         spots: Default::default(),
+        client_mods: Default::default(),
+        mod_query_notify: Default::default(),
     });
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(async move {
+        let mod_queries = tokio::spawn(mod_policy::run(hub.clone()));
         let app = api::routes(hub.clone());
         let handle = axum_server::Handle::<SocketAddr>::new();
         let mut tasks = Vec::new();
@@ -110,6 +114,7 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
             let _ = stop.changed().await;
         }
         logf!("DriveLink Hub stopping");
+        mod_queries.abort();
         handle.graceful_shutdown(Some(Duration::from_secs(5)));
         for t in tasks {
             if let Ok(Err(e)) = t.await {

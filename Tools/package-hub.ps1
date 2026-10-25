@@ -16,6 +16,7 @@ foreach ($name in @('INSTALL.txt','Start-Hub.cmd','Install-Service.cmd','Uninsta
     Copy-Item -LiteralPath (Join-Path $hub "package\$name") -Destination $stage
 }
 Copy-Item -LiteralPath (Join-Path $repo 'README.md') -Destination (Join-Path $stage 'SERVER-GUIDE.md')
+Copy-Item -LiteralPath (Join-Path $hub 'CHANGELOG.md') -Destination $stage
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $minimal = Join-Path $out "DriveLinkHub-v$version-windows-x64.zip"
 [IO.Compression.ZipFile]::CreateFromDirectory($stage, $minimal, [IO.Compression.CompressionLevel]::Optimal, $true)

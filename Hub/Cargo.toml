@@ -1,6 +1,6 @@
 [package]
 name = "drivelink-hub"
-version = "0.4.1"
+version = "0.4.9-rc1"
 edition = "2024"
 
 [dependencies]

@@ -34,6 +34,8 @@ pub struct Hub {
     pub db: Mutex<Connection>,
     /// server id -> its last arrival spot check (POST /api/spots): which convoy places a car / truck fits on
     pub spots: Mutex<HashMap<String, Value>>,
+    pub client_mods: Mutex<HashMap<String, crate::mod_policy::Observation>>,
+    pub mod_query_notify: tokio::sync::Notify,
 }
 
 /// The protocol this hub speaks with the DayZ mod (DL_Const.PROTOCOL): requests, answers and the snapshot format.
@@ -312,6 +314,8 @@ async fn hello(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body:
         Ok(s) => s,
         Err(r) => return r,
     };
+    h.client_mods.lock().unwrap().remove(&sid);
+    h.mod_query_notify.notify_one();
     let servers: Vec<Value> = h.cfg().servers.iter().map(|s| server_out(&h, &s.id)).collect();
     // Map editor: the server sends the zones/arrival points from its config.json; the first time, they become the
     // hub's copy. From then on the hub's copy wins (edited on the map) and goes back in "layout".
@@ -332,7 +336,8 @@ async fn hello(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body:
         Err(e) => return db_error(e),
     };
     crate::logf!("hello from {sid}");
-    reply(StatusCode::OK, json!({"ok": true, "serverId": sid, "servers": servers, "layout": layout, "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)}))
+    reply(StatusCode::OK, json!({"ok": true, "serverId": sid, "servers": servers, "layout": layout, "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "helperPolicyVersion":1,"helperRoutes":crate::mod_policy::routes(&h,&sid)}))
 }
 
 // POST /api/spots  {serverId,key,spots:[{arrival, places:[{car, truck}]}]} - the server checked where cars can stand
@@ -371,9 +376,11 @@ async fn layout(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
             let mut out = crate::layout::for_server(&l, &travel);
             out["ok"] = json!(true);
             out["changed"] = json!(true);
+            out["helperPolicyVersion"] = json!(1);
+            out["helperRoutes"] = json!(crate::mod_policy::routes(&h,&sid));
             reply(StatusCode::OK, out)
         }
-        Ok(l) => reply(StatusCode::OK, json!({"ok": true, "changed": false, "rev": l.map(|l| l.rev).unwrap_or(0)})),
+        Ok(l) => reply(StatusCode::OK, json!({"ok": true, "changed": false, "rev": l.map(|l| l.rev).unwrap_or(0),"helperPolicyVersion":1,"helperRoutes":crate::mod_policy::routes(&h,&sid)})),
         Err(e) => db_error(e),
     }
 }

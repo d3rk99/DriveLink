@@ -40,7 +40,7 @@ Ports: **7290** (HTTP) and **7291** (HTTPS, self-signed unless you set `tlsCert`
 
 ### 2. Each DayZ server
 
-1. Add `@DriveLink` to the server's `-mod=` list and copy `@DriveLink\keys\DriveLink.bikey` into the server's
+1. Add `@DriveLink` to the server's `-mod=` list and copy the supplied public `.bikey` files from `@DriveLink\keys` into the server's
    `keys` folder.
 2. Start the server once: it writes `<profiles>\DriveLink\config.json`. Put in the two lines from the hub's Setup
    page and restart.
@@ -51,7 +51,35 @@ Ports: **7290** (HTTP) and **7291** (HTTPS, self-signed unless you set `tlsCert`
    - **Arrival points**: where players come out, facing which way. A car that comes along stands at its car spot
      (convoys line up behind it); a boat goes on the nearest free water, or a boat spot you pin.
 
-Players get the mod from the Workshop like any other; nothing to set up on their side.
+Players subscribe to [DriveLink on Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3824238331)
+and load the server's required mods. Matching-mod routes do not need the Windows helper. Routes that switch
+client mod lists require its disclosed, one-time setup from `@DriveLink\Helper\DriveLink Setup.exe` and
+already-downloaded destination mods. The setup installs the background tray agent for future sessions;
+players can remove it through its tray menu or Windows installed apps.
+
+### Automatic client switching (Hub and mod 0.4.9-rc1 or newer)
+
+Leave **Client switching** on **Automatic** in the Hub's server editor. The Hub queries each server's UDP
+Steam query port and compares its advertised client mod identities, order and builds. Identical lists use
+direct reconnect; different lists use the helper. Official map/DLC flags and server-only mods do not count
+as client mod differences. The query port must be reachable from the Hub.
+
+No manual `routes.json` editing is needed. The server receives the policy with normal Hub polling and writes
+`<profiles>\DriveLinkRestart\hub-routes.json` as a generated diagnostic cache. Missing or stale query data
+pauses departure with an explanation, rather than claiming the player needs helper setup. Conflicting builds
+of a shared mod require server mod versions to be synchronized.
+
+An administrator can choose **Keep client** or **Restart** for an individual destination in the Hub. Overrides
+are directional and bypass the automatic comparison; return to Automatic to remove one. Explicit legacy
+`routes.json` entries are a fallback for an older Hub, not the configuration method for an updated network.
+
+### Optional arrival staging
+
+In the Map editor, an arrival can have a separate staging position and direction for land vehicles and boats.
+Choose an empty area with suitable terrain or water and enough space for the convoy. The mod prepares the
+crew and vehicles there, then moves the ready arrival to its configured destination. Existing arrival points
+keep staging disabled unless the owner enables it. Staging needs a supporting DriveLink mod on the servers
+and clients; the Hub alone cannot change vehicle behavior.
 
 ## Settings
 
@@ -96,9 +124,14 @@ Zones, arrival points and travel rules come from the hub and are rewritten in co
 
 ## Updating
 
-Update the hub and every server's mod together. The mod and the hub check that they speak the same version: a server
-on another build has travel switched off (its log says `TRAVEL IS OFF` and which side to update), and the hub's
-Servers page shows each server's DriveLink version.
+Back up the Hub folder and server profiles before updating. Replace the Hub executable while it is stopped,
+preserving `hub.json`, its database, certificates and custom maps. Avoid starting an upgrade in an empty folder:
+that creates a separate network with fresh credentials rather than loading the existing one.
+
+Update the Hub and every server's mod together for new features. The protocol handshake blocks incompatible
+protocols; matching protocol numbers alone do not mean an older mod supports newer features. In particular,
+automatic client switching requires both Hub and mod 0.4.9-rc1 or newer. Older protocol-1 mods can still connect
+to this Hub but do not consume its automatic helper policy.
 
 ## Troubleshooting
 
