@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param([switch]$Restart, [switch]$Client, [switch]$MenuOnly, [switch]$WithZen, [ValidateSet(2802,2902)][int]$Port=2802,
-    [string]$ModRoot = 'C:\DayZMods\FilmPrototypeRuntime\@DriveLinkFilmPrototype')
+    [string]$ModRoot = 'E:\DayZMods\FilmPrototypeRuntime\@DriveLinkFilmPrototype')
 $ErrorActionPreference = 'Stop'
-$runtime = 'C:\DayZMods\FilmPrototypeRuntime'
+$runtime = 'E:\DayZMods\FilmPrototypeRuntime'
 $mod = $ModRoot
 $serverRoot = 'E:\Steam\steamapps\common\DayZServer'
 $workshop = 'E:\Steam\steamapps\common\DayZ\!Workshop'
@@ -30,11 +30,11 @@ foreach ($path in $mods) {
     }
 }
 if (!(Get-Process -Name DriveLinkHub -ErrorAction SilentlyContinue)) {
-    Start-Process -FilePath 'C:\DayZMods\DriveLink\dist\hub-v0.4.1\DriveLinkHub\DriveLinkHub.exe' -ArgumentList @('-config','C:\DayZMods\DriveLink\Hub\hub.json') -WorkingDirectory 'C:\DayZMods\DriveLink\Hub' -WindowStyle Hidden
+    Start-Process -FilePath 'E:\DayZMods\DriveLink\dist\hub-v0.4.1\DriveLinkHub\DriveLinkHub.exe' -ArgumentList @('-config','E:\DayZMods\DriveLink\Hub\hub.json') -WorkingDirectory 'E:\DayZMods\DriveLink\Hub' -WindowStyle Hidden
     Start-Sleep -Seconds 2
 }
 $null = Invoke-RestMethod 'http://127.0.0.1:7290/admin/api/state'
-foreach ($server in @(@{Root='C:\DayZMods\TestServer';Port=2802},@{Root='C:\DayZMods\TestServer2';Port=2902})) {
+foreach ($server in @(@{Root='E:\DayZMods\TestServer';Port=2802},@{Root='E:\DayZMods\TestServer2';Port=2902})) {
     $config = Join-Path $server.Root 'serverDZ.cfg'
     $running = @(Get-CimInstance Win32_Process -Filter "Name='DayZServer_x64.exe'" | Where-Object { $_.CommandLine -like "*-config=$config *" })
     if ($running -and !$Restart) { Write-Output "$config already running"; continue }

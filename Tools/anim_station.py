@@ -23,7 +23,7 @@ PUMP_X = 50           # where the filler stands at the pumps (frame px; facing u
 SHADOW = (6, 5)       # every shadow falls down-right, like the cars'
 CANOPY_H = 16         # how high the canopy roof stands, film px in this front-on view
 
-PACK = r'C:\DayZMods\_assets\minidayz\minidayz-assets\buildings'
+PACK = r'E:\DayZMods\_assets\minidayz\minidayz-assets\buildings'
 
 ASPHALT = {'snow': (84, 88, 94)}
 EDGE = (178, 174, 160)

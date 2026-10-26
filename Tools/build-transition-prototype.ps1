@@ -1,8 +1,8 @@
 [CmdletBinding()]
-param([string]$ModRoot = 'C:\DayZMods\FilmPrototypeRuntime\@DriveLinkFilmPrototype', [switch]$ZenCompat)
+param([string]$ModRoot = 'E:\DayZMods\FilmPrototypeRuntime\@DriveLinkFilmPrototype', [switch]$ZenCompat)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$runtime = 'C:\DayZMods\FilmPrototypeRuntime'
+$runtime = 'E:\DayZMods\FilmPrototypeRuntime'
 $out = Join-Path $modRoot 'Addons'
 $keys = Join-Path $runtime 'Signing'
 New-Item -ItemType Directory -Path $out,$keys,(Join-Path $modRoot 'keys') -Force | Out-Null

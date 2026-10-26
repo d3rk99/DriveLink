@@ -18,7 +18,7 @@ import io, json, os, subprocess, sys, zipfile
 from PIL import Image
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APK = sys.argv[1] if len(sys.argv) > 1 else r'C:\DayZMods\Mini+DAYZ_+Zombie+Survival_1.4.1_APKPure.apk'
+APK = sys.argv[1] if len(sys.argv) > 1 else r'E:\DayZMods\Mini+DAYZ_+Zombie+Survival_1.4.1_APKPure.apk'
 OUT = os.path.join(REPO, 'Addons', 'DriveLink', 'gui', 'anim', 'chr')
 CATALOG = os.path.join(REPO, 'Addons', 'DriveLink', 'Scripts', '3_Game', 'DriveLink', 'DL_FilmCatalog.c')
 IMAGE_TO_PAA = r'E:\Steam\steamapps\common\DayZ Tools\Bin\ImageToPAA\ImageToPAA.exe'

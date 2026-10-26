@@ -3,7 +3,7 @@
 #   (none) = the release build: no test switches
 #   -Dev   = adds the DL_DEV define: F9 demo film, debug.json test switches (test car on login, car rebuild zone),
 #            clients log every detail
-param([switch]$Dev,[string]$Destination="C:\DayZMods\Mods\@DriveLink")
+param([switch]$Dev,[string]$Destination="E:\DayZMods\Mods\@DriveLink")
 $ErrorActionPreference = "Stop"
 $repo    = Split-Path -Parent $PSScriptRoot
 $source  = Join-Path $repo "Addons\DriveLink"
@@ -52,4 +52,4 @@ $builtPbos += $pbo
 & (Join-Path $PSScriptRoot 'sign-derk.ps1') -ModPath $modRoot
 Copy-Item -LiteralPath (Join-Path $repo "Mod\mod.cpp") -Destination $modRoot -Force
 $link ="E:\Steam\steamapps\common\DayZServer\@DriveLink"
-if ($Destination -eq "C:\DayZMods\Mods\@DriveLink" -and !(Test-Path -LiteralPath $link)) { New-Item -ItemType Junction -Path $link -Target $modRoot | Out-Null; Write-Host "Linked $link" }
+if ($Destination -eq "E:\DayZMods\Mods\@DriveLink" -and !(Test-Path -LiteralPath $link)) { New-Item -ItemType Junction -Path $link -Target $modRoot | Out-Null; Write-Host "Linked $link" }

@@ -1,7 +1,7 @@
 # Builds the road-film textures into Addons/DriveLink/gui/anim/ (Research/road-animation-research.md).
 #   - DriveLink's own pixel art (drawn here, committed as source in Art/anim): one top-down ground tile per biome
 #     (forest, field, desert, snow) with a 2-lane road, and a props atlas (trees, bushes, rocks, fence, sign, pole...)
-#   - MiniDayZ sheets copied from the local pack (C:\DayZMods\_assets\minidayz): PROTOTYPE ONLY, never committed
+#   - MiniDayZ sheets copied from the local pack (E:\DayZMods\_assets\minidayz): PROTOTYPE ONLY, never committed
 #     (gitignored) until Bohemia OKs them or they are replaced
 # Every texture is a power-of-two PNG named *_ca.png, converted to .paa with DayZ Tools ImageToPAA (DXT5 + alpha).
 # Usage: python Tools/build-anim-assets.py
@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(REPO, 'Addons', 'DriveLink', 'gui', 'anim')
 OWN_SRC = os.path.join(REPO, 'Art', 'anim')
-PACK = r'C:\DayZMods\_assets\minidayz\minidayz-assets'
+PACK = r'E:\DayZMods\_assets\minidayz\minidayz-assets'
 IMAGE_TO_PAA = r'E:\Steam\steamapps\common\DayZ Tools\Bin\ImageToPAA\ImageToPAA.exe'
 
 MINIDAYZ = {  # texture name -> file in the pack

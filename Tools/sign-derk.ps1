@@ -1,7 +1,7 @@
 param([Parameter(Mandatory=$true)][string]$ModPath)
 $ErrorActionPreference='Stop'
-$private='C:\DayZMods\Keys\Derk.biprivatekey'
-$public='C:\DayZMods\Keys\Derk.bikey'
+$private='E:\DayZMods\Keys\Derk.biprivatekey'
+$public='E:\DayZMods\Keys\Derk.bikey'
 foreach($file in @($private,$public)){if(!(Test-Path -LiteralPath $file)){throw ('Required Derk signing file is missing: '+$file)}}
 $mod=[IO.Path]::GetFullPath($ModPath).TrimEnd('\')
 $addons=Join-Path $mod 'Addons'
