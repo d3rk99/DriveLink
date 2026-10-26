@@ -1,0 +1,54 @@
+FrameWidgetClass Root {
+ size 0.70 0.64
+ halign center_ref
+ valign center_ref
+ hexactpos 0
+ vexactpos 0
+ hexactsize 0
+ vexactsize 0
+ {
+  SmartPanelWidgetClass Background {
+   color 0.03 0.04 0.04 0.98
+   size 1 1
+   style DayZDefaultPanel
+   {
+    TextWidgetClass Title {
+     position 0.04 0.05
+     size 0.92 0.12
+     text "DriveLink helper: one-time setup"
+     font "gui/fonts/sdf_MetronBook24"
+     "exact text" 1
+     "exact text size" 22
+     "size to text h" 0
+     "size to text v" 0
+     wrap 1
+    }
+    MultilineTextWidgetClass Instructions {
+     position 0.04 0.16
+     size 0.92 0.60
+     text "This trip requires different mods. Temporary GOD MODE protects you during this setup wait.\n\nFind this mod's folder and run Helper > DriveLink Setup.exe. The vanilla launcher's Open folder option may not work. Browse manually: your Steam library > steamapps > workshop > content > 221100 > this mod's numeric Workshop folder > Helper. Find the folder containing DriveLink Setup.exe.\n\nFor this local RC, use the @DriveLinkTravel folder you added to the launcher instead; it has no Workshop ID yet.\n\nFinish setup and return here; readiness is detected automatically. Cancel to stay. Temporary protection ends when travel resumes, you cancel, leave the zone, or the three-minute wait expires."
+     font "gui/fonts/sdf_MetronBook24"
+     "exact text" 1
+     "exact text size" 22
+     "size to text h" 0
+     "size to text v" 0
+     wrap 1
+    }
+    ButtonWidgetClass Completed {
+     position 0.04 0.82
+     size 0.43 0.12
+     text "Setup completed - check again"
+     "exact text" 1
+     "exact text size" 20
+    }
+    ButtonWidgetClass Cancel {
+     position 0.53 0.82
+     size 0.43 0.12
+     text "Cancel travel"
+     "exact text" 1
+     "exact text size" 20
+    }
+   }
+  }
+ }
+}

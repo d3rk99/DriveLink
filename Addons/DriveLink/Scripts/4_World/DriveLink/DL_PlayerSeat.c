@@ -38,7 +38,7 @@ modded class PlayerBase
 			}
 			string dlMsg39 = "seat juncture received (server " + g_Game.IsServer().ToString() + "): read " + ok.ToString();
 			dlMsg39 += ", transport " + (m_DL_SeatIn != null).ToString() + ", crew " + idx.ToString();
-			DL_Log.Detail(dlMsg39);
+			DL_Log.Info(dlMsg39);
 			return;
 		}
 		super.OnSyncJuncture(pJunctureID, pCtx);
@@ -52,6 +52,8 @@ modded class PlayerBase
 		Transport t = m_DL_SeatIn;
 		int idx = m_DL_SeatIdx;
 		m_DL_SeatIn = null;
+		HumanCommandVehicle current = GetCommand_Vehicle();
+		if(current && current.GetTransport()==t && t.CrewMemberIndex(this)==idx)return;
 		HumanCommandVehicle vc = StartCommand_Vehicle(t, idx, t.GetSeatAnimationType(idx));
 		if (vc)
 			vc.SetVehicleType(t.GetAnimInstance());
@@ -60,6 +62,6 @@ modded class PlayerBase
 			side = "server";
 		string dlMsg59 = "seat (" + side + "): StartCommand_Vehicle " + t.GetType();
 		dlMsg59 += " crew " + idx.ToString() + " -> " + (vc != null).ToString();
-		DL_Log.Detail(dlMsg59);
+		DL_Log.Info(dlMsg59);
 	}
 }

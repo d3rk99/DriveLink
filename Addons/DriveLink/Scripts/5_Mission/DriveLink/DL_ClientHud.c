@@ -14,6 +14,7 @@ modded class MissionGameplay
 	protected string m_DL_Story;
 	protected bool m_DL_WaitWanted;
 	protected bool m_DL_WaitShown;
+	protected float m_DL_InputRecoveryRemaining;
 	protected string m_DL_WaitMsg;
 	protected float m_DL_WaitAge;      // seconds since the last update from the server
 	protected bool m_DL_StartEngine;
@@ -169,6 +170,21 @@ modded class MissionGameplay
 	override void OnUpdate(float timeslice)
 	{
 		super.OnUpdate(timeslice);
+		if(m_DL_InputRecoveryRemaining>0)
+		{
+			m_DL_InputRecoveryRemaining-=timeslice;
+			// Only the completed arrival may request this once. Never clear an inventory,
+			// chat, pause menu or another mod's active control restriction.
+			if(!m_DL_WaitWanted && !m_DL_WaitShown && g_Game.IsAppActive() && !g_Game.GetUIManager().GetMenu() && !IsControlDisabled())
+			{
+				bool focused=g_Game.GetInput().HasGameFocus();
+				if(!focused)g_Game.GetInput().ResetGameFocus();
+				GetUApi().UpdateControls();GetUApi().SupressNextFrame(false);
+				GetDayZGame().RefreshMouseCursorVisibility();
+				m_DL_InputRecoveryRemaining=0;
+				DL_Log.Info("arrival input refreshed; previous game focus "+focused.ToString());
+			}
+		}
 		if (m_DL_PendingFilm != "" && GetDayZGame().DL_Transition().ReadyForArrival())
 		{
 			string readyFilm = m_DL_PendingFilm;
@@ -375,6 +391,7 @@ modded class MissionGameplay
 		if (m_DL_WaitRoot)
 			m_DL_WaitRoot.Show(false);
 		PlayerControlEnable(false);
+		m_DL_InputRecoveryRemaining=5;
 		DL_Log.Detail("waiting room: black screen off");
 	}
 

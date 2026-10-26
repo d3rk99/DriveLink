@@ -9,6 +9,10 @@ and can cost more than that.
 
 **Status: public test.** Back up your servers before trying it.
 
+Current source baseline: mod and Hub **0.4.9-rc1**, Windows companion **0.4.8-rc3**. Both the game mod and
+Hub are maintained in this repository. Windows helper/agent/setup/updater source and build instructions are
+in [Companion](Companion/README.md); its release addon is [Addons/DriveLinkRestart](Addons/DriveLinkRestart).
+
 ## How it fits together
 
 | Part | Where it runs | What it does |

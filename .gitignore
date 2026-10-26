@@ -3,6 +3,7 @@ Hub/hub.json
 Hub/hub.log
 *.pbo
 *.biprivatekey
+*.bisign
 Hub/last-payload.json
 Hub/drivelink.db
 Hub/drivelink.db-*
@@ -29,3 +30,8 @@ Addons/DriveLink/gui/anim/gasroof_ca.paa
 Addons/DriveLink/gui/anim/waterpump_ca.paa
 Addons/DriveLink/gui/anim/car_*_ca.paa
 Addons/DriveLink/gui/anim/wake_ca.paa
+
+# Windows companion source is tracked; runtime assets come from the distributed mod.
+Companion/Helper/Assets/
+Companion/dist/
+Companion/Build/

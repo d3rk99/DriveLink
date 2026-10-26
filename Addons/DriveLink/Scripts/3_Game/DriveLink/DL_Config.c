@@ -3,7 +3,10 @@
 
 class DL_Const
 {
-	static const string VERSION = "0.4";
+    static const int RPC_STAGE_CONTROL = 4810010;
+    static const int RPC_STAGE_ACK = 4810011;
+    static const int RPC_STAGE_VISIBLE = 4810012;
+	static const string VERSION = "0.4.9";
 	// the hub <-> mod protocol (Hub/src/api.rs PROTOCOL): every hub call carries it; another one = travel off here
 	static const int PROTOCOL = 1;
 	static const string LOG_TAG = "[DriveLink] ";
@@ -93,6 +96,13 @@ class DL_TravelRules
 // Where you come out when you arrive from another server.
 class DL_ArrivalPoint
 {
+    bool stagingEnabled;
+    vector stagingPos;
+    float stagingYaw;
+    vector stagingBoatPos;
+    float stagingBoatYaw;
+    float stagingSpacing = 25;
+    float convoySpacing = 20;
 	string name;
 	vector pos;
 	float yaw;
@@ -113,7 +123,7 @@ class DL_Config
 	string log = "normal";                     // "quiet" (warnings only) | "normal" (trips, arrivals) | "verbose" (every detail)
 	int countdownSeconds = 5;
 	float checkEverySeconds = 1;
-	int arrivalProtectSeconds = 10;             // no damage right after arriving
+	int arrivalProtectSeconds = 60;             // arrivals always get at least 60 s after the party is ready
 	// M3 waiting room: a car crew arriving here waits (black screen) until all of them are in, at most this long;
 	// then the car is built with whoever made it (no driver by then = the passengers go on on foot).
 	int crewWaitSeconds = 120;

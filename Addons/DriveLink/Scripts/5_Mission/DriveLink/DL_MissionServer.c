@@ -60,6 +60,28 @@ class DL_SeatWait
 // crewWaitSeconds) the car is built, everyone is seated, the driver's engine starts and the screen clears.
 class DL_Room
 {
+    bool finalConstructed;
+    bool ShouldRetrySeat(string sid, int now, bool serverSeated)
+    {
+        if(!deliveryVisible.Contains(sid))return false;
+        if(serverSeated && deliveryAcks.Contains(sid))return false;
+        return now>=deliverySeatRetry.Get(sid);
+    }
+    bool staged;
+    vector finalCarPos;
+    float finalCarYaw;
+    vector finalLandPos;
+    float finalLandYaw;
+    int deliveryEpoch;
+    int deliveryAfter;
+    vector deliveryPos;
+    vector deliveryOri;
+    int deliverySeatAfter;
+    bool deliveryCorrectionSent;
+    ref map<string,bool> deliveryAcks = new map<string,bool>;
+    ref map<string,bool> deliveryVisible = new map<string,bool>;
+    ref map<string,int> deliverySeatRetry = new map<string,int>;
+    string deliveryBlocked;
 	string group;                                   // the driver's steam id
 	int expected;                                   // players in the car when it left (driver included)
 	ref array<string> here = new array<string>;     // members built here so far
@@ -87,6 +109,7 @@ class DL_Room
 // target side: the cars of one convoy, each in its own waiting room; the black screen lifts for all at once
 class DL_ConvoyArrival
 {
+    bool releasing;
 	string id;
 	int expected;                                   // cars that arrive (the ones left on the road don't)
 	ref map<string, Transport> ready = new map<string, Transport>; // room group -> its car, built and seated
@@ -95,6 +118,281 @@ class DL_ConvoyArrival
 
 modded class MissionServer
 {
+    protected ref map<string, ref DL_ArrivalGuard> m_DL_ArrivalGuards = new map<string, ref DL_ArrivalGuard>;
+    protected ref map<Object, ref DL_ArrivalGuard> m_DL_GuardOf = new map<Object, ref DL_ArrivalGuard>;
+
+    void DL_GuardObject(DL_ArrivalGuard guard, Object entity)
+    {
+        if(!guard || !entity)return;
+        if(!guard.originalDamage.Contains(entity))guard.originalDamage.Set(entity,entity.GetAllowDamage());
+        m_DL_GuardOf.Set(entity,guard);entity.SetAllowDamage(false);
+    }
+    void DL_GuardJoin(PlayerBase player, DL_PlayerData data, Transport car = null)
+    {
+        if(!player || !player.GetIdentity() || !data)return;
+        string sid=player.GetIdentity().GetPlainId();string key=data.partyId;
+        if(key=="")key=data.convoyId;
+        if(key=="")key=data.carGroup;
+        if(key=="")key=sid;
+        DL_ArrivalGuard guard=m_DL_ArrivalGuards.Get(key);
+        if(!guard){guard=new DL_ArrivalGuard();guard.timeoutAt=GetGame().GetTime()+Math.Max(120,m_DL_Cfg.crewWaitSeconds)*1000;m_DL_ArrivalGuards.Set(key,guard);}
+        guard.expected=Math.Max(guard.expected,Math.Max(1,data.crewCount));
+        if(data.film)guard.expected=Math.Max(guard.expected,data.film.crew.Count());
+        guard.expiresAt=0;guard.members.Set(sid,-1);
+        DL_GuardObject(guard,player);DL_GuardObject(guard,car);
+    }
+    void DL_GuardReady(PlayerBase player, int delayMs = 0)
+    {
+        DL_ArrivalGuard guard=m_DL_GuardOf.Get(player);
+        if(guard && player && player.GetIdentity())guard.members.Set(player.GetIdentity().GetPlainId(),GetGame().GetTime()+delayMs);
+    }
+    void DL_GuardVehicle(DL_Room room, Transport car)
+    {
+        foreach(string member:room.here){PlayerBase player=DL_FindPlayer(member);DL_ArrivalGuard guard=m_DL_GuardOf.Get(player);if(guard){DL_GuardObject(guard,car);return;}}
+    }
+    void DL_GuardTick()
+    {
+        int now=GetGame().GetTime();array<string> finished=new array<string>;
+        foreach(string key,DL_ArrivalGuard guard:m_DL_ArrivalGuards)
+        {
+            bool pending=false;
+            foreach(string sid,int readyAt:guard.members){PlayerBase member=DL_FindPlayer(sid);if(member && member.IsAlive() && (readyAt<0 || now<readyAt))pending=true;}
+            // Never time out an active assembly. Missing travellers use the existing crew timeout.
+            int previousDeadline=guard.expiresAt;
+            bool expired=guard.Expired(now,pending,m_DL_Cfg.arrivalProtectSeconds);
+            if(previousDeadline==0 && guard.expiresAt>0)DL_Log.Info("arrival protection: party ready; grace period started");
+            if(!expired)continue;
+            foreach(Object entity,bool allowed:guard.originalDamage){if(entity){entity.SetAllowDamage(allowed);m_DL_GuardOf.Remove(entity);}}
+            finished.Insert(key);
+        }
+        foreach(string done:finished)m_DL_ArrivalGuards.Remove(done);
+    }
+
+    float DL_DistanceXZ(vector a,vector b){a[1]=0;b[1]=0;return vector.Distance(a,b);}
+    bool DL_StagingHasObservers(vector at,string ownGroup)
+    {
+        array<Man> people=new array<Man>;GetGame().GetPlayers(people);
+        foreach(Man person:people)
+        {
+            if(!person.GetIdentity() || person.GetIdentity().GetPlainId()==ownGroup)continue;
+            bool traveller=false;
+            foreach(string roomKey,DL_Room waiting:m_DL_Rooms)if(waiting.here.Find(person.GetIdentity().GetPlainId())>=0)traveller=true;
+            if(!traveller && DL_DistanceXZ(person.GetPosition(),at)<100)return true;
+        }
+        return false;
+    }
+    bool DL_AssemblyGroundSpot(vector want,float yaw,DL_PlayerData d,string group,float spacing,out vector found)
+    {
+        string type="Truck_01_Covered";if(d.car && d.car.type!="")type=d.car.type;
+        float width,length;DL_CarBox(type,width,length);
+        vector forward=Vector(yaw,0,0).AnglesToVector();vector right=Vector(yaw+90,0,0).AnglesToVector();
+        for(int slot=0;slot<24;slot++)
+        {
+            int lane=slot/8;int back=slot-lane*8;
+            vector candidate=want-forward*(spacing*back)+right*(spacing*lane);candidate[1]=GetGame().SurfaceY(candidate[0],candidate[2]);
+            bool reserved=false;
+            foreach(string key,DL_Room other:m_DL_Rooms)if(key!=group && DL_DistanceXZ(candidate,other.carPos)<12)reserved=true;
+            if(!reserved && !DL_StagingHasObservers(candidate,group) && DL_SpotFree(candidate,yaw,width,length)){found=candidate;return true;}
+        }
+        return false;
+    }
+    void DL_SendStageControl(DL_Room room,Transport car,bool pause,int epoch)
+    {
+        if(!room || !car)return;
+        foreach(string member:room.here)
+        {
+            PlayerBase player=DL_FindPlayer(member);if(!player || !player.GetIdentity())continue;
+            vector position=car.GetPosition();vector orientation=car.GetOrientation();
+            if(epoch>0){position=room.deliveryPos;orientation=room.deliveryOri;}
+            ScriptRPC rpc=new ScriptRPC();rpc.Write(car);rpc.Write(position);rpc.Write(orientation);rpc.Write(pause);rpc.Write(epoch);rpc.Write(room.staged);
+            rpc.Send(player,DL_Const.RPC_STAGE_CONTROL,true,player.GetIdentity());
+        }
+    }
+    void DL_StageAck(string payload)
+    {
+        array<string> parts=new array<string>;payload.Split("|",parts);if(parts.Count()!=2)return;
+        int epoch=parts[1].ToInt();
+        foreach(string key,DL_Room room:m_DL_Rooms)
+        {
+            if(room.deliveryEpoch>0 && room.deliveryEpoch==epoch && room.here.Find(parts[0])>=0)room.deliveryAcks.Set(parts[0],true);
+        }
+    }
+    void DL_StageVisible(string payload)
+    {
+        array<string> parts=new array<string>;payload.Split("|",parts);if(parts.Count()!=2)return;
+        int epoch=parts[1].ToInt();
+        foreach(string key,DL_Room room:m_DL_Rooms)
+        {
+            if(room.deliveryEpoch>0 && room.deliveryEpoch==epoch && room.here.Find(parts[0])>=0)room.deliveryVisible.Set(parts[0],true);
+        }
+    }
+    bool DL_StageCrewReady(DL_Room room)
+    {
+        if(!room.builtCar)return true;
+        if(room.staged && GetGame().GetTime()<room.deliverySeatAfter)return false;
+        foreach(string sid:room.here)
+        {
+            PlayerBase pb=DL_FindPlayer(sid);if(!pb || !pb.IsAlive() || !pb.GetIdentity())continue;
+            int now=GetGame().GetTime();
+            if(!room.deliveryVisible.Contains(sid))
+            {
+                room.deliveryBlocked="Loading the destination vehicle on your client...";
+                if(now>=room.deliverySeatRetry.Get(sid))
+                {
+                    // Do not possess the car until the unseated player's client can resolve it.
+                    if(room.builtCar.CrewMemberIndex(pb)<0)pb.ForceCorrection();
+                    room.deliverySeatRetry.Set(sid,now+3000);
+                    DL_Log.Info("arrival awaiting client vehicle visibility: "+sid);
+                }
+                return false;
+            }
+            if(!room.deliveryAcks.Contains(sid) || room.builtCar.CrewMemberIndex(pb)<0)
+            {
+                room.deliveryBlocked="Seating and confirming your client...";
+                if(room.ShouldRetrySeat(sid,now,room.builtCar.CrewMemberIndex(pb)>=0))
+                {
+                    DL_SeatTraveller(sid,room.builtCar,room.seats.Get(sid));
+                    room.deliverySeatRetry.Set(sid,now+3000);
+                    DL_Log.Info("arrival seat retry awaiting client acknowledgement: "+sid);
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+    bool DL_FinalDeliverySpot(DL_Room room,map<string,vector> planned,out vector result)
+    {
+        vector forward=Vector(room.finalCarYaw,0,0).AnglesToVector();vector right=Vector(room.finalCarYaw+90,0,0).AnglesToVector();
+        float width,length;DL_CarBox(room.car.type,width,length);
+        for(int slot=0;slot<25;slot++)
+        {
+            int lane=slot/5;int back=slot-lane*5;
+            float side=lane*6;if(lane==2 || lane==4)side=-side;
+            vector p=room.finalCarPos-forward*(12*back)+right*side;p[1]=GetGame().SurfaceY(p[0],p[2]);
+            bool reserved=false;
+            foreach(string plannedGroup,vector reservedPos:planned)if(DL_DistanceXZ(p,reservedPos)<12)reserved=true;
+            if(reserved)continue;
+            if(room.boat){if(!DL_WaterFree(p,room.finalCarYaw))continue;p=DL_OnWater(p);}
+            else if(!DL_SpotFree(p,room.finalCarYaw,width,length))continue;
+            result=p;return true;
+        }
+        return false;
+    }
+    void DL_ReleaseArrivalBatch(array<string> candidates)
+    {
+        array<string> handled=new array<string>;
+        foreach(string first:candidates)
+        {
+            DL_Room initial=m_DL_Rooms.Get(first);if(!initial)continue;
+            string batchId=initial.convoyId;if(batchId=="")batchId=first;
+            if(handled.Find(batchId)>=0)continue;handled.Insert(batchId);
+            array<string> batch=new array<string>;
+            foreach(string next:candidates){DL_Room matching=m_DL_Rooms.Get(next);if(!matching)continue;string matchId=matching.convoyId;if(matchId=="")matchId=next;if(matchId==batchId)batch.Insert(next);}
+            DL_DeliverReadyBatch(batch);
+        }
+    }
+    void DL_DeliverReadyBatch(array<string> batch)
+    {
+        ref map<string,vector> planned=new map<string,vector>;
+        // Reserve every destination before moving any member of this convoy.
+        foreach(string planGroup:batch)
+        {
+            DL_Room plan=m_DL_Rooms.Get(planGroup);if(!plan || plan.deliveryEpoch>0 || plan.air)continue;
+            if(!plan.builtCar && (!plan.staged || !plan.car))continue;
+            vector destination=plan.finalCarPos;if(plan.builtCar)destination=plan.builtCar.GetPosition();
+            if(plan.staged && plan.builtCar && plan.builtCar.HasCrew())
+            {
+                plan.deliveryBlocked="Staging vehicle is unexpectedly occupied; waiting for it to be cleared before delivery.";
+                return;
+            }
+            if(plan.staged && !plan.finalConstructed && !DL_FinalDeliverySpot(plan,planned,destination))
+            {
+                foreach(string blockedGroup:batch){DL_Room blocked=m_DL_Rooms.Get(blockedGroup);if(blocked)blocked.deliveryBlocked="Final arrival is obstructed. Waiting safely in staging for a clear spot.";}
+                return;
+            }
+            planned.Set(planGroup,destination);
+        }
+        // Create each vehicle once, directly at its reserved destination. No network vehicle ever
+        // exists at staging, so there is no staging-origin owner/proxy state to replay later.
+        foreach(string buildGroup:batch)
+        {
+            DL_Room toBuild=m_DL_Rooms.Get(buildGroup);
+            if(!toBuild || !toBuild.staged || toBuild.deliveryEpoch>0 || toBuild.finalConstructed || !toBuild.car)continue;
+            if(!DL_CreateFinalRoomCar(buildGroup,toBuild,planned.Get(buildGroup)))
+            {
+                toBuild.deliveryBlocked="Could not restore the destination vehicle. Remaining protected at staging for retry.";
+                return;
+            }
+        }
+        foreach(string moveGroup:batch)
+        {
+            DL_Room moving=m_DL_Rooms.Get(moveGroup);if(!moving || moving.deliveryEpoch>0 || !moving.builtCar || moving.air)continue;
+            Transport vehicle=moving.builtCar;
+            if(!moving.staged){vehicle.DisableSimulation(true);dBodyActive(vehicle,ActiveState.INACTIVE);SetVelocity(vehicle,vector.Zero);dBodySetAngularVelocity(vehicle,vector.Zero);}
+            if(moving.staged)
+            {
+                moving.carPos=vehicle.GetPosition();moving.carYaw=moving.finalCarYaw;moving.landPos=moving.finalLandPos;moving.landYaw=moving.finalLandYaw;
+            }
+            if(!moving.staged)DL_ArrivalPose.Commit(vehicle,vehicle.GetPosition(),vehicle.GetOrientation());
+            if(moving.staged)
+            {
+                DL_MoveRoomCrew(moving);
+                moving.deliverySeatAfter=GetGame().GetTime()+2000;
+                DL_Log.Info("arrival delivery: destination-born vehicle; crew moved independently for final seating");
+            }
+            moving.deliveryPos=vehicle.GetPosition();moving.deliveryOri=vehicle.GetOrientation();
+            vehicle.SetSynchDirty();moving.deliveryEpoch=Math.Max(1,GetGame().GetTime());moving.deliveryAfter=GetGame().GetTime()+2500;
+            moving.deliveryBlocked="Arrival prepared. Synchronizing the crew...";
+            DL_SendStageControl(moving,vehicle,true,moving.deliveryEpoch);
+            DL_Log.Info("arrival delivery "+moveGroup+" epoch "+moving.deliveryEpoch.ToString()+" at "+vehicle.GetPosition().ToString());
+        }
+        foreach(string waitGroup:batch)
+        {
+            DL_Room waiting=m_DL_Rooms.Get(waitGroup);if(!waiting || !waiting.builtCar || waiting.air)continue;
+            if(waiting.staged)
+            {
+                // Observe natural settling. No repeated teleport or forced owner rewind.
+                waiting.builtCar.Update();waiting.deliveryPos=waiting.builtCar.GetPosition();waiting.deliveryOri=waiting.builtCar.GetOrientation();
+            }
+            else DL_ArrivalPose.Commit(waiting.builtCar,waiting.deliveryPos,waiting.deliveryOri);
+            if(!waiting.staged && waiting.builtCar.CrewDriver() && !waiting.deliveryCorrectionSent)
+            {
+                waiting.builtCar.ForceCorrection();waiting.deliveryCorrectionSent=true;
+            }
+            DL_SendStageControl(waiting,waiting.builtCar,true,waiting.deliveryEpoch);
+            if(GetGame().GetTime()<waiting.deliveryAfter || !DL_StageCrewReady(waiting))return;
+        }
+        foreach(string revealGroup:batch)
+        {
+            DL_Room ready=m_DL_Rooms.Get(revealGroup);if(!ready)continue;
+            // Failed vehicle creation must not strand a restored crew in an assembly area.
+            if(ready.staged && !ready.builtCar)
+            {
+                vector foot=DL_LandNear(ready.finalLandPos,revealGroup);
+                foreach(string walker:ready.here){PlayerBase survivor=DL_FindPlayer(walker);if(survivor)survivor.SetPosition(foot);}
+            }
+            DL_RoomReveal(revealGroup,ready.builtCar);
+        }
+    }
+
+    bool DL_CreateFinalRoomCar(string group,DL_Room room,vector position)
+    {
+        if(room.finalConstructed)return room.builtCar!=null;
+        int made,dropped;m_DL_CarSnap.holdArrival=false;m_DL_CarSnap.surfaceArrival=true;
+        Transport car=m_DL_CarSnap.Build(room.car,position,Vector(room.finalCarYaw,0,0),made,dropped);
+        m_DL_CarSnap.holdArrival=false;m_DL_CarSnap.surfaceArrival=false;
+        if(!car){DL_Log.Warn("arrival final vehicle creation failed; snapshot retained for "+group);return false;}
+        room.builtCar=car;room.finalConstructed=true;
+        DL_GuardVehicle(room,car);car.SetAllowDamage(false);DL_Veh.SetHidden(car,false);
+        DL_ArrivalPose.Resume(car);
+        m_DL_GroupCar.Set(group,car);
+        GetGame().GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ForgetGroupCar,m_DL_Cfg.crewWaitSeconds*2000,false,group,car);
+        if(room.driverToken!=""){DL_Confirm(group,room.driverToken);room.driverToken="";}
+        DL_Log.Info("arrival vehicle born at final point: "+car.GetNetworkIDString()+" "+car.GetPosition().ToString()+", restored "+made.ToString()+", dropped "+dropped.ToString());
+        return true;
+    }
+
+
 	protected ref map<string, ref DL_Room> m_DL_Rooms = new map<string, ref DL_Room>;
 	protected bool m_DL_RoomTicking;
 	protected ref map<string, ref DL_CrewTrip> m_DL_TripOf = new map<string, ref DL_CrewTrip>; // passenger sid -> his car trip
@@ -877,7 +1175,6 @@ modded class MissionServer
 			car = m_DL_CarSnap.Build(d.car, carPos, Vector(carYaw, 0, 0), carMade, carDropped);
 			if (car)
 			{
-				car.SetAllowDamage(false);
 				if (onPoint)
 					pos = carPos + Vector(carYaw - 90, 0, 0).AnglesToVector() * 3;
 				carText = ", with his " + car.GetType() + " (" + carMade.ToString() + "/" + d.car.items.Count().ToString() + " parts/items, " + carDropped.ToString() + " on the ground)";
@@ -927,6 +1224,7 @@ modded class MissionServer
 			return null;
 		}
 		player.DL_MarkTransferArrival();
+		DL_GuardJoin(player,d,car);
 		if (oldChar)
 		{
 			// only now that the new one exists: the stale copy must not live on in this server's database (or he
@@ -957,8 +1255,11 @@ modded class MissionServer
 		NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 6, "DriveLink", "Welcome from " + r.from, "");
 		string sid = identity.GetPlainId();
 		float filmSec = DL_SendFilmLater(sid, d);
+		int protectedStorySeconds = 0;
 		if (!car && d.carGroup == "")
-			DL_StoryScreen(sid, d.journey, filmSec);
+			protectedStorySeconds = DL_StoryScreen(sid, d.journey, filmSec);
+		DL_GuardReady(player,2000+protectedStorySeconds*1000);
+		if(rideCar)DL_GuardObject(m_DL_GuardOf.Get(player),rideCar);
 		if (car)
 		{
 			// seated once his client is in (same juncture path as the seat spike, DL_PlayerSeat.c)
@@ -1084,9 +1385,7 @@ modded class MissionServer
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (pb)
 		{
-			pb.DL_SetHidden(true);
-			if (!staysHidden)
-				g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(pb.DL_SetHidden, 2000 + 1000 * secs, false, false);
+			pb.DL_SetHidden(staysHidden); // living arrivals remain visible and protected
 		}
 		m_DL_StoryCut.Remove(sid);
 		for (int i = 0; i < secs; i++)
@@ -1335,7 +1634,7 @@ modded class MissionServer
 			}
 			// a convoy: each car one length behind the one before it
 			if (d.convoyIdx > 0)
-				room.carPos = room.carPos - Vector(room.carYaw, 0, 0).AnglesToVector() * (10 * d.convoyIdx);
+				room.carPos = room.carPos - Vector(room.carYaw, 0, 0).AnglesToVector() * (Math.Max(12,ap.convoySpacing) * d.convoyIdx);
 			room.carPos[1] = g_Game.SurfaceY(room.carPos[0], room.carPos[2]);
 			room.convoyId = d.convoyId;
 			room.convoyCars = d.convoyCars;
@@ -1362,6 +1661,30 @@ modded class MissionServer
 		}
 		if (newRoom && d.car && d.car.type != "" && !room.boat && !room.air)
 			room.carPos = DL_FreeCarSpot(room.carPos, room.carYaw, d.car.type, group);
+        bool stagingForKind=ap.stagingEnabled && !room.air;
+        if(room.boat && ap.stagingBoatPos[0]==0 && ap.stagingBoatPos[2]==0)stagingForKind=false;
+        if(!room.boat && ap.stagingPos[0]==0 && ap.stagingPos[2]==0)stagingForKind=false;
+        if (newRoom && stagingForKind)
+        {
+            room.finalCarPos=room.carPos;room.finalCarYaw=room.carYaw;room.finalLandPos=room.landPos;room.finalLandYaw=room.landYaw;
+            vector assembly=ap.stagingPos;float assemblyYaw=ap.stagingYaw;
+            if(room.boat){assembly=ap.stagingBoatPos;assemblyYaw=ap.stagingBoatYaw;}
+            if((assembly[0]==0 && assembly[2]==0) || DL_DistanceXZ(assembly,room.finalCarPos)<100)
+            {
+                m_DL_BuildError="Arrival staging needs a configured point at least 100 m from the final arrival";return null;
+            }
+            if(DL_StagingHasObservers(assembly,group))
+            {
+                m_DL_BuildError="Arrival staging is occupied by another player; clear the area and retry";return null;
+            }
+            room.staged=true;room.carYaw=assemblyYaw;room.landYaw=assemblyYaw;
+            float spacing=Math.Max(15,ap.stagingSpacing);
+            assembly=assembly-Vector(assemblyYaw,0,0).AnglesToVector()*(spacing*d.convoyIdx);
+            if(room.boat){room.carPos=DL_WaterNear(assembly,assemblyYaw,group);room.landPos=DL_LandNear(assembly,group);}
+            else {assembly[1]=g_Game.SurfaceY(assembly[0],assembly[2]);vector stageSpot;if(!DL_AssemblyGroundSpot(assembly,assemblyYaw,d,group,spacing,stageSpot)){m_DL_BuildError="No clear, flat ground at the configured staging area";return null;}room.carPos=stageSpot;room.landPos=room.carPos;}
+            if(room.boat && !DL_WaterFree(room.carPos,room.carYaw)){m_DL_BuildError="No clear water at the configured boat staging area";return null;}
+            DL_Log.Info("arrival staging of "+group+" at "+room.carPos.ToString()+"; final "+room.finalCarPos.ToString());
+        }
 		if (d.crewCount > room.expected)
 			room.expected = d.crewCount;
 		if (d.journey != "")
@@ -1401,6 +1724,7 @@ modded class MissionServer
 			return null;
 		}
 		player.DL_MarkTransferArrival();
+		DL_GuardJoin(player,d);
 		if (newRoom)
 			m_DL_Rooms.Set(group, room);
 		if (oldChar)
@@ -1415,7 +1739,7 @@ modded class MissionServer
 		int made = m_DL_Snap.Apply(player, d, dropped);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(m_DL_Snap.FixWeapons, 500, false, player);
 		player.SetAllowDamage(false); // until the black screen lifts (+ arrivalProtectSeconds)
-		player.DL_SetHidden(true);    // nobody nearby sees him appear and get seated; shown again in DL_RoomReveal
+		player.DL_SetHidden(false);   // assembly is visible; staging supplies separation from the final arrival
 		m_DL_Leaving.Remove(sid);
 		if (room.here.Find(sid) < 0)
 			room.here.Insert(sid);
@@ -1480,6 +1804,8 @@ modded class MissionServer
 			DL_ConvoyArrival ca = m_DL_Convoys.Get(room.convoyId);
 			if (room.convoyReady && ca)
 				text = "Waiting for the convoy: " + ca.ready.Count().ToString() + "/" + ca.expected.ToString() + " cars ready";
+            if(room.deliveryBlocked!="")text=room.deliveryBlocked;
+            if(room.builtCar && !room.air && room.deliveryEpoch==0)DL_SendStageControl(room,room.builtCar,true,0);
 			foreach (string m : room.here)
 				DL_SendWait(m, DL_Const.WAIT_SHOW, text, false, room.story);
 		}
@@ -1498,12 +1824,7 @@ modded class MissionServer
 				reveal.Insert(sg);
 		}
 		DL_ConvoyTick(now, reveal);
-		foreach (string rg : reveal)
-		{
-			DL_Room rr = m_DL_Rooms.Get(rg);
-			if (rr)
-				DL_RoomReveal(rg, rr.builtCar);
-		}
+        DL_ReleaseArrivalBatch(reveal);
 		foreach (string gs : startNow)
 		{
 			DL_Room rs = m_DL_Rooms.Get(gs);
@@ -1542,6 +1863,13 @@ modded class MissionServer
 		if (!room)
 			return;
 		room.going = true;
+		if(room.staged)
+		{
+			// Stage the crew and serialized vehicle data, not a live transport.
+			room.seatedAt=GetGame().GetTime()+2000;
+			DL_Log.Info("arrival staging: vehicle snapshot retained; live vehicle deferred until final destination");
+			return;
+		}
 		if (room.air)
 		{
 		}
@@ -1561,12 +1889,16 @@ modded class MissionServer
 		}
 		int made;
 		int dropped;
+        m_DL_CarSnap.holdArrival=true;
 		Transport car = m_DL_CarSnap.Build(room.car, room.carPos, Vector(room.carYaw, 0, 0), made, dropped);
+        m_DL_CarSnap.holdArrival=false;
 		string carText;
 		if (car)
 		{
+			DL_GuardVehicle(room,car);
 			car.SetAllowDamage(false);
-			DL_Veh.SetHidden(car, true);
+			DL_Veh.SetHidden(car, false);
+			if(room.staged){car.DisableSimulation(false);dBodyActive(car,ActiveState.ACTIVE);}
 			if (room.air)
 			{
 				// up in the air: held where it is (no falling) while hidden; let go with its speed at the reveal
@@ -1591,7 +1923,7 @@ modded class MissionServer
 		dlMsg1515 += "/" + room.expected.ToString() + " here, " + carText;
 		DL_Log.Detail(dlMsg1515);
 		int i = 0;
-		if (car)
+		if (car && !room.staged)
 		{
 			array<string> order = new array<string>;
 			if (room.here.Find(group) >= 0)
@@ -1655,12 +1987,10 @@ modded class MissionServer
 			}
 			if (now < at)
 				continue;
-			string dlMsg1579 = "convoy " + id + ": " + ca.ready.Count().ToString();
-			dlMsg1579 += "/" + ca.expected.ToString() + " cars ready, lifting all black screens";
-			DL_Log.Detail(dlMsg1579);
-			foreach (string rg, Transport rc : ca.ready)
-				reveal.Insert(rg);
-			done.Insert(id);
+            if(!ca.releasing){DL_Log.Detail("convoy "+id+": all available cars ready; preparing coordinated delivery");ca.releasing=true;}
+            bool any=false;
+            foreach(string rg,Transport rc:ca.ready)if(m_DL_Rooms.Contains(rg)){reveal.Insert(rg);any=true;}
+            if(!any)done.Insert(id);
 		}
 		foreach (string d : done)
 			m_DL_Convoys.Remove(d);
@@ -1831,7 +2161,7 @@ modded class MissionServer
 			string line = "";
 			for (int k = 0; k < 4; k++)
 			{
-				vector p = base - Vector(yaw, 0, 0).AnglesToVector() * (10 * k);
+				vector p = base - Vector(yaw, 0, 0).AnglesToVector() * (Math.Max(12,ap.convoySpacing) * k);
 				p[1] = g_Game.SurfaceY(p[0], p[2]);
 				string car = "free";
 				string why;
@@ -2003,7 +2333,15 @@ modded class MissionServer
 				n++;
 			}
 			pos[1] = g_Game.SurfaceY(pos[0], pos[2]);
+			if(room.boat)
+			{
+				pos=room.landPos+Vector(room.landYaw+90,0,0).AnglesToVector()*(1.5*n);n++;
+				if(DL_Veh.WaterY(pos[0],pos[2],0.05)>=0)pos=room.landPos;
+				pos[1]=Math.Max(g_Game.SurfaceY(pos[0],pos[2]),room.landPos[1]);
+			}
 			pb.SetPosition(pos);
+			pb.Update();
+			pb.ForceCorrection();
 		}
 	}
 
@@ -2018,6 +2356,13 @@ modded class MissionServer
 		bool serverStarts = car != null && car.GetNetworkMoveStrategy() != NetworkMoveStrategy.PHYSICS;
 		if (car)
 			DL_Veh.SetHidden(car, false);
+        if(car && !room.air && !room.staged)
+        {
+            SetVelocity(car,vector.Zero);dBodySetAngularVelocity(car,vector.Zero);
+            car.Synchronize();car.DisableSimulation(false);dBodyActive(car,ActiveState.ACTIVE);
+            DL_SendStageControl(room,car,false,room.deliveryEpoch);
+        }
+        if(car && room.staged){DL_ArrivalPose.Resume(car);DL_SendStageControl(room,car,false,room.deliveryEpoch);}
 		int seated = 0;
 		foreach (string m : room.here)
 		{
@@ -2030,6 +2375,7 @@ modded class MissionServer
 				seated++;
 			bool engine = car != null && m == group && car.CrewDriver() == pb;
 			DL_SendWait(m, DL_Const.WAIT_DONE, "", engine, "");
+			DL_GuardReady(pb);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendWait, 1500, false, m, DL_Const.WAIT_DONE, "", engine, ""); // in case the first is lost
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, pb);
 		}
@@ -2120,6 +2466,12 @@ modded class MissionServer
 		DL_Room room = m_DL_Rooms.Get(group);
 		if (!room)
 			return;
+		if(room.staged)
+		{
+			room.carPos=room.finalCarPos;room.carYaw=room.finalCarYaw;
+			room.landPos=room.finalLandPos;room.landYaw=room.finalLandYaw;
+			DL_MoveRoomCrew(room);
+		}
 		m_DL_Rooms.Remove(group);
 		string dlMsg2028 = "waiting room of " + group + " closed: " + why;
 		dlMsg2028 += " (" + room.here.Count().ToString() + "/" + room.expected.ToString();
@@ -2132,6 +2484,7 @@ modded class MissionServer
 				continue;
 			pb.DL_SetHidden(false);
 			DL_SendWait(m, DL_Const.WAIT_DONE, "", false, "");
+			DL_GuardReady(pb);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_EndProtection, m_DL_Cfg.arrivalProtectSeconds * 1000, false, pb);
 			NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 10, "DriveLink", "No car: " + why + ". You continue on foot.", "");
 		}
@@ -2206,6 +2559,7 @@ modded class MissionServer
 
 	protected void DL_EndCarProtection(Transport car)
 	{
+		if(m_DL_GuardOf.Contains(car))return;
 		if (car)
 			car.SetAllowDamage(true);
 	}
@@ -2220,6 +2574,7 @@ modded class MissionServer
 	// Object.SetAllowDamage is proto native (3_game/entities/object.c:1192); call it from a script method for the queue.
 	protected void DL_EndProtection(PlayerBase player)
 	{
+		if(m_DL_GuardOf.Contains(player))return;
 		if (player)
 			player.SetAllowDamage(true);
 	}
@@ -2235,6 +2590,7 @@ modded class MissionServer
 		if (m_DL_Tick < m_DL_Cfg.checkEverySeconds)
 			return;
 		m_DL_Tick = 0;
+		DL_GuardTick();
 		DL_CheckZones();
 #ifdef DL_DEV
 		DL_DebugTick();

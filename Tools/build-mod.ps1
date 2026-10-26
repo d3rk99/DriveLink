@@ -1,16 +1,16 @@
-# Packs core DriveLink and its automatic Zen bridge into @DriveLink\Addons (scripts + config, -packonly) and links it into
-# BOTH test servers. Usage: powershell -ExecutionPolicy Bypass -File Tools\build-mod.ps1 [-Dev]
+# Packs core DriveLink, the automatic Zen bridge and travel companion into @DriveLink\Addons.
+# Usage: powershell -ExecutionPolicy Bypass -File Tools\build-mod.ps1 [-Dev]
 #   (none) = the release build: no test switches
 #   -Dev   = adds the DL_DEV define: F9 demo film, debug.json test switches (test car on login, car rebuild zone),
 #            clients log every detail
-param([switch]$Dev)
+param([switch]$Dev,[string]$Destination="C:\DayZMods\Mods\@DriveLink")
 $ErrorActionPreference = "Stop"
 $repo    = Split-Path -Parent $PSScriptRoot
 $source  = Join-Path $repo "Addons\DriveLink"
 if ($Dev) {
   # a copy whose CfgMods declares DL_DEV (the scripts' #ifdef DL_DEV parts); the film's build leftovers stay out
   $stage = Join-Path $env:TEMP "DriveLinkDevBuild\DriveLink"
-  if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+  if (Test-Path -LiteralPath $stage) { if([IO.Path]::GetFullPath($stage) -ne [IO.Path]::GetFullPath((Join-Path $env:TEMP "DriveLinkDevBuild\DriveLink"))){throw "Unexpected dev build path"}; Remove-Item -LiteralPath $stage -Recurse -Force }
   New-Item -ItemType Directory -Force -Path $stage | Out-Null
   Get-ChildItem -LiteralPath $source -Force | Where-Object { $_.Name -ne "gui" } | Copy-Item -Destination $stage -Recurse -Force
   New-Item -ItemType Directory -Force -Path (Join-Path $stage "gui\anim") | Out-Null
@@ -23,14 +23,15 @@ if ($Dev) {
   $source = $stage
   Write-Host "DEV build (DL_DEV)"
 }
-$modRoot = "C:\DayZMods\Mods\@DriveLink"
+$modRoot = $Destination
 $out     = Join-Path $modRoot "Addons"
 $builder = "E:\Steam\steamapps\common\DayZ Tools\Bin\AddonBuilder\AddonBuilder.exe"
 if (!(Test-Path -LiteralPath $builder)) { throw "AddonBuilder not found at $builder" }
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 $builtPbos = @()
 foreach ($addon in @(@{Name='DriveLink';Source=$source},
-    @{Name='DriveLink_ZenLogin';Source=(Join-Path $repo 'Addons\DriveLink_ZenLogin')})) {
+    @{Name='DriveLink_ZenLogin';Source=(Join-Path $repo 'Addons\DriveLink_ZenLogin')},
+    @{Name='DriveLinkRestart';Source=(Join-Path $repo 'Addons\DriveLinkRestart')})) {
 $pbo = Join-Path $out ($addon.Name + '.pbo')
 $started = Get-Date
 # AddonBuilder exits 0 even on "[ERROR]: Build failed" (2026-10-18: the old PBO stayed because a running DayZ
@@ -47,24 +48,8 @@ if (!(Test-Path $pbo) -or (Get-Item $pbo).LastWriteTime -lt $started.AddSeconds(
 Write-Host "Built $pbo ($((Get-Item $pbo).Length) bytes)"
 $builtPbos += $pbo
 }
-# signed with the release key (kept OUTSIDE the repo; a copy in C:\DayZMods\KeyBackups), its public key in keys\,
-# mod.cpp (name, logo, description) at the mod's root
-$signDir = "C:\DayZMods\DriveLink-signing"
-$privKey = Join-Path $signDir "DriveLink.biprivatekey"
-$pubKey  = Join-Path $signDir "DriveLink.bikey"
-$signer  = "E:\Steam\steamapps\common\DayZ Tools\Bin\DsUtils\DSSignFile.exe"
-Get-ChildItem -LiteralPath $out -Filter "*.bisign" | Remove-Item -Force
-if (Test-Path -LiteralPath $privKey) {
-  foreach ($builtPbo in $builtPbos) {
-    & $signer $privKey $builtPbo
-    if ($LASTEXITCODE -ne 0) { throw "DSSignFile failed: $builtPbo" }
-  }
-  $keys = Join-Path $modRoot "keys"
-  New-Item -ItemType Directory -Force -Path $keys | Out-Null
-  Get-ChildItem -LiteralPath $keys -Filter "*.bikey" | Remove-Item -Force
-  Copy-Item -LiteralPath $pubKey -Destination $keys -Force
-  Write-Host "Signed with DriveLink.biprivatekey, keys\DriveLink.bikey"
-} else { Write-Host "WARNING: no $privKey - the PBO is NOT signed" }
+# The user requires Derk signing only; fail closed if that key is unavailable.
+& (Join-Path $PSScriptRoot 'sign-derk.ps1') -ModPath $modRoot
 Copy-Item -LiteralPath (Join-Path $repo "Mod\mod.cpp") -Destination $modRoot -Force
 $link ="E:\Steam\steamapps\common\DayZServer\@DriveLink"
-if (!(Test-Path -LiteralPath $link)) { New-Item -ItemType Junction -Path $link -Target $modRoot | Out-Null; Write-Host "Linked $link" }
+if ($Destination -eq "C:\DayZMods\Mods\@DriveLink" -and !(Test-Path -LiteralPath $link)) { New-Item -ItemType Junction -Path $link -Target $modRoot | Out-Null; Write-Host "Linked $link" }

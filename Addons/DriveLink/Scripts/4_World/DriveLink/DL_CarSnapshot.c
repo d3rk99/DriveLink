@@ -7,6 +7,8 @@
 
 class DL_CarSnapshot
 {
+    bool holdArrival;
+    bool surfaceArrival;
 	static const int FLUIDS = 8; // CarFluid has 8 values (FUEL, OIL, BRAKE, COOLANT, USER1..USER4)
 	protected ref DL_Snapshot m_Items = new DL_Snapshot();
 
@@ -48,6 +50,7 @@ class DL_CarSnapshot
 		Transport car = Transport.Cast(g_Game.CreateObjectEx(d.type, pos, flags));
 		if (!car)
 			return null;
+        if(holdArrival){car.DisableSimulation(true);dBodyActive(car,ActiveState.INACTIVE);SetVelocity(car,vector.Zero);dBodySetAngularVelocity(car,vector.Zero);}
 		car.SetOrientation(ori);
 		made = m_Items.ApplyTree(car, null, d.items, dropped);
 		for (int f = 0; f < FLUIDS && f < d.fluids.Count(); f++)
@@ -70,6 +73,11 @@ class DL_CarSnapshot
 				car.SetHealth(d.zones[z].zone, "Health", d.zones[z].health);
 		}
 		car.SetSynchDirty();
+        if((holdArrival || surfaceArrival) && DL_Veh.KindOf(d.type)!="boat" && DL_Veh.KindOf(d.type)!="plane")
+        {
+            car.PlaceOnSurface();vector clearance=car.GetPosition();clearance[1]=clearance[1]+0.05;car.SetPosition(clearance);
+            SetVelocity(car,vector.Zero);dBodySetAngularVelocity(car,vector.Zero);
+        }
 		return car;
 	}
 
