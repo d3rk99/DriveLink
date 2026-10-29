@@ -6,7 +6,7 @@ class DL_Const
     static const int RPC_STAGE_CONTROL = 4810010;
     static const int RPC_STAGE_ACK = 4810011;
     static const int RPC_STAGE_VISIBLE = 4810012;
-	static const string VERSION = "0.4.9";
+	static const string VERSION = "0.4.9.2";
 	// the hub <-> mod protocol (Hub/src/api.rs PROTOCOL): every hub call carries it; another one = travel off here
 	static const int PROTOCOL = 1;
 	static const string LOG_TAG = "[DriveLink] ";
