@@ -11,6 +11,7 @@ modded class MissionServer
     protected ref DT_Routes m_DT_Routes;
     protected ref DT_Routes m_DT_AutoRoutes;
     protected bool m_DT_HasHubPolicy;
+    protected bool m_DT_HubLacksPolicy;
     protected float m_DT_HubPolicyAt;
     protected string m_DT_HubPolicySignature;
     protected ref map<string,ref DT_Warm> m_DT_Warm=new map<string,ref DT_Warm>;
@@ -35,13 +36,18 @@ modded class MissionServer
     void DT_ApplyHubPolicy(string body)
     {
         // Enforce may deserialize an omitted array as empty. Missing policy must not erase a valid snapshot.
-        if(!body.Contains("\"helperRoutes\""))return;
+        // A Hub older than 0.4.9 answers without helperPolicyVersion; remember it so the player is told to update it.
+        if(!body.Contains("\"helperRoutes\""))
+        {
+            if(!body.Contains("\"helperPolicyVersion\"")&&!m_DT_HubLacksPolicy){m_DT_HubLacksPolicy=true;Print("[DT] HUB_TOO_OLD: the Hub sent no client-switching policy; DriveLink Hub 0.4.9 or newer is required for travel");}
+            return;
+        }
         DT_HubPolicies reply;string err;JsonSerializer parser=new JsonSerializer();
         if(!parser.ReadFromString(reply,body,err)||!reply||reply.helperPolicyVersion!=1||!reply.helperRoutes)return;
         array<string> targets=new array<string>;
         foreach(DT_Route entry:reply.helperRoutes){if(!entry||entry.targetId==""||targets.Find(entry.targetId)>=0)return;targets.Insert(entry.targetId);}
         m_DT_AutoRoutes=new DT_Routes();m_DT_AutoRoutes.routes=reply.helperRoutes;
-        m_DT_HasHubPolicy=true;m_DT_HubPolicyAt=m_DT_Time;
+        m_DT_HasHubPolicy=true;m_DT_HubLacksPolicy=false;m_DT_HubPolicyAt=m_DT_Time;
         string signature;
         foreach(DT_Route route:reply.helperRoutes)signature+=route.targetId+"|"+route.known.ToString()+"|"+route.restart.ToString()+"|"+route.reason+";";
         if(signature==m_DT_HubPolicySignature)return;
@@ -70,7 +76,10 @@ modded class MissionServer
         if(m_DT_HasHubPolicy && m_DT_Time-m_DT_HubPolicyAt>90)return "The Hub's mod report is stale. Wait for a fresh query, then leave and re-enter the travel zone.";
         DT_Route route=DT_FindPolicy(target);
         if(route && route.reason!="")return route.reason+". Wait for the Hub, then leave and re-enter the travel zone.";
-        return "The Hub has not supplied this route's client-mod policy. Update DriveLink Hub and check its Servers page. Your character has not departed.";
+        // The Hub lists every other server it knows, so a missing entry means the zone names an ID the Hub lacks.
+        if(m_DT_HasHubPolicy && !route)return "The Hub has no server with ID '"+target+"'. Set this travel zone's destination to a server ID from the Hub's Servers page (IDs are case-sensitive). Your character has not departed.";
+        if(m_DT_HubLacksPolicy)return "This network's DriveLink Hub is older than 0.4.9 and sends no client-switching policy. Update DriveLink Hub to 0.4.9 or newer. Your character has not departed.";
+        return "The server has not heard from the DriveLink Hub yet. Check that the Hub is running and reachable, then leave and re-enter the travel zone. Your character has not departed.";
     }
     void DT_ApproveCrew(PlayerBase leader,string target,bool restart)
     {
@@ -152,7 +161,7 @@ modded class MissionServer
             DT_AbortUnknownHold(sid);
             m_DL_MustLeaveZone.Set(sid,true);
             DL_CrewNotify(pb,12,"Travel not ready",DT_PolicyReason(zone.to));
-            Print("[DT] POLICY_UNAVAILABLE target="+zone.to+"; source retained; no helper prompt");return false;
+            Print("[DT] POLICY_UNAVAILABLE target="+zone.to+"; source retained; no helper prompt; "+DT_PolicyReason(zone.to));return false;
         }
         if(!DT_RestartNeeded(zone.to))
         {

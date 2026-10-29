@@ -6,6 +6,9 @@ modded class MissionServer
     {
         DL049Check(!FileExist("$profile:DriveLinkRestart/routes.json"),"no manual routes file required");
         DL049Check(!DT_PolicyKnown("livonia"),"unknown route is not classified as changed mods");
+        DL049Check(DT_PolicyReason("livonia").Contains("not heard"),"no Hub reply yet is explained");
+        DT_ApplyHubPolicy("{\"ok\":true,\"serverId\":\"chernarus\",\"servers\":[]}");
+        DL049Check(!DT_PolicyKnown("livonia") && DT_PolicyReason("livonia").Contains("older than 0.4.9"),"pre-0.4.9 Hub reply asks for a Hub update");
         string automatic="{\"ok\":true,\"helperPolicyVersion\":1,\"helperRoutes\":[{\"targetId\":\"livonia\",\"known\":true,\"restart\":false,\"reason\":\"matching mods\"},{\"targetId\":\"namalsk\",\"known\":true,\"restart\":true,\"reason\":\"different mods\"}]}";
         DL_OnHello(true,automatic);
         DL049Check(DT_PolicyKnown("livonia") && !DT_RestartNeeded("livonia"),"hello automatically selects direct Livonia travel");
@@ -13,6 +16,8 @@ modded class MissionServer
         DL049Check(FileExist("$profile:DriveLinkRestart/hub-routes.json"),"Hub policy cache created automatically");
         DL049Check(!FileExist("$profile:DriveLinkRestart/routes.json"),"automatic policy never needs the legacy file");
         DL049Check(!DT_PolicyKnown("unknown-destination"),"missing destination remains unknown");
+        DL049Check(DT_PolicyReason("unknown-destination").Contains("no server with ID 'unknown-destination'"),"missing destination names the ID the Hub lacks");
+        DL049Check(DT_PolicyReason("Livonia").Contains("no server with ID"),"destination IDs are case-sensitive");
         float before=m_DT_Time;m_DT_Time=m_DT_HubPolicyAt+91;
         DL049Check(!DT_PolicyKnown("livonia"),"stale policy cannot approve departure");
         DL049Check(DT_PolicyReason("livonia").Contains("stale"),"stale policy explains waiting for Hub");m_DT_Time=before;
