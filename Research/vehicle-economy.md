@@ -2,7 +2,7 @@
 
 Status: built behind `carEconomy` (default "off") on branch `feature/vehicle-economy`. The CE questions are answered
 headlessly (`Tests/CESpike`), and the two-server scenario runs in `Tests/EconomyTest`. A real player trip with a
-tagged car has not been tested yet (see Results).
+tagged car passed on 2026-10-29 (see Results).
 
 Goal: cars travel between maps without players losing them and without the network gaining cars over time.
 
@@ -156,8 +156,9 @@ Two bugs found and fixed on the way: IDs made in the same moment collided (`Math
 ID, so it's now seeded once with a counter), and the test helper looped over an array returned from a function.
 
 ### Not tested yet
-- A real player trip with `carEconomy` on. It needs the user in game: drive a car across, check that the target
-  logs `vehicle economy: ... arrived (home ...)` and that `drivelink-hub.exe cars` lists it.
+- ~~A real player trip with `carEconomy` on.~~ Passed 2026-10-29: A -> B -> A by car, the car kept its ID and home,
+  the Hub tracked it, and the parked arrival survived 11 min on A, 2 of them with nobody on the server
+  (`Tests/EconomyTest/README.md`, Player trip). A single trip doesn't drop A below `min`, so no veto was involved.
 - T10 (crash before save): the existing `DL_CarGuard` covers the duplicate. The ledger side (a `left` entry kept in
   `car-ledger.json` until the Hub takes it) wasn't exercised.
 - T11 (Hub down): vetoes use the last answer saved in `car-ledger.json`. Untested.

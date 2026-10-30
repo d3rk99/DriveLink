@@ -6,6 +6,8 @@
 #   run    -Server A|B -Steps <name>  start one server with steps\<name>.json as its debug.json (-Wait: until it exits)
 #   carry  copy A's outbox to B's inbox (-From A -To B)
 #   hub / stop / cars
+#   trip   reset, then A + B stay up for a player trip (steps	rip-A.json, trip-B.json), fresh spawns at the west edge
+#   client start the game with the test mod and join A (-Server B joins B)
 # Owns: Tests\EconomyTest\Build\ (gitignored), mpmissions\dlcetest.chernarusplus (A, from Tests\CESpike) and
 # mpmissions\dlcetest2.chernarusplus (B).
 param([Parameter(Mandatory=$true)][string]$Step,[string]$Server='A',[string]$Steps='',[string]$From='A',[string]$To='B',[switch]$Wait,[int]$TimeoutSec=900)
@@ -42,6 +44,15 @@ function Ensure-Mission($s){
  if(!(Test-Path -LiteralPath $a)){throw 'Run Tests\CESpike\run-spike.ps1 once first (it makes the A mission with CE logging and idle mode off)'}
  New-Item -ItemType Directory -Path $m | Out-Null
  Get-ChildItem -LiteralPath $a | Where-Object Name -notlike 'storage_*' | Copy-Item -Destination $m -Recurse
+}
+
+# fresh (and hop/travel) spawns next to the "west" arrival point, so a new character on A is 160 m from the zone to B
+function Set-TripSpawn($s){
+ $f=Join-Path (Mission-Path $s) 'cfgplayerspawnpoints.xml'
+ $t=Get-Content -Raw -LiteralPath $f
+ $one='<generator_posbubbles><group name="DriveLinkTrip"><pos x="190" z="8990" /></group></generator_posbubbles>'
+ $t=[regex]::Replace($t,'(?s)<generator_posbubbles>.*?</generator_posbubbles>',$one)
+ Set-Content -LiteralPath $f -Value $t -Encoding UTF8
 }
 
 function Start-Hub {
@@ -103,7 +114,14 @@ switch($Step){
   New-Item -ItemType Directory -Force -Path $dl | Out-Null
   $cfgFile=Join-Path $dl 'config.json'
   if(!(Test-Path -LiteralPath $cfgFile)){
-   @{hubUrl='http://127.0.0.1:7390';hubKey=$key;serverId=$s.Id;log='verbose';carEconomy='veto'}|ConvertTo-Json|Set-Content -LiteralPath $cfgFile -Encoding ascii
+   # missing fields load as 0, so the timings are spelled out. The zone + arrival (west edge, from the old Chernarus
+   # layout) are for the player trip (trip step): each server sends to the other's "west" point, 160 m from its zone.
+   $other=if($Server -eq 'A'){$servers.B.Id}else{$servers.A.Id}
+   @{hubUrl='http://127.0.0.1:7390';hubKey=$key;serverId=$s.Id;log='verbose';carEconomy='veto';
+     countdownSeconds=5;checkEverySeconds=1;arrivalProtectSeconds=60;crewWaitSeconds=120;
+     zones=@(@{name="To econ test $(if($Server -eq 'A'){'B'}else{'A'})";center=@(50.5,0,8827.1);radius=137;to=$other;arrival='west';distanceKm=0});
+     arrivals=@(@{name='west';pos=@(157.7,0,8950.1);yaw=53})
+   }|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $cfgFile -Encoding ascii
   }
   if($Steps){Copy-Item -LiteralPath (Join-Path $here "steps\$Steps.json") -Destination (Join-Path $dl 'debug.json') -Force}
   $cfg=Join-Path $build "serverDZ-$Server.cfg"
@@ -131,6 +149,22 @@ class Missions { class DayZ { template="$($s.Mission)"; }; };
    Remove-Item -LiteralPath $pidFile -ErrorAction SilentlyContinue
    Write-Host "Server $Server exited"
   }
+ }
+ 'trip' {
+  & $PSCommandPath -Step reset
+  foreach($n in 'A','B'){Set-TripSpawn $servers[$n]}
+  foreach($n in 'A','B'){& $PSCommandPath -Step run -Server $n -Steps "trip-$n"}
+  Write-Host 'A and B are up for the player trip (README.md, Player trip). Join with -Step client once both logs say hello.'
+ }
+ 'client' {
+  if(Get-Process -Name DayZ_x64,DayZ_BE -ErrorAction SilentlyContinue){throw 'Close the running DayZ client first'}
+  $clientRoot='E:\Steam\steamapps\common\DayZ'
+  $cp=Join-Path $build 'client'
+  New-Item -ItemType Directory -Force -Path $cp | Out-Null
+  $args=@('0','1','1','-exe','DayZ_x64.exe','-noPause','-noSplash','-window',('"-mod='+(Join-Path $build '@DriveLink')+'"'),
+   "-profiles=$cp",'-connect=127.0.0.1',"-port=$($servers[$Server].Port)")
+  Start-Process -FilePath (Join-Path $clientRoot 'DayZ_BE.exe') -ArgumentList $args -WorkingDirectory $clientRoot
+  Write-Host "Client joining $Server ($($servers[$Server].Port))"
  }
  default { throw "Unknown step $Step" }
 }

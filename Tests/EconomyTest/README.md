@@ -33,3 +33,41 @@ powershell -ExecutionPolicy Bypass -File Tests\EconomyTest\run-econ.ps1 -Step ca
 | A idle7min (T7) | refill of 4: 2 allowed, 2 vetoed, so A has 6 here + 2 away |
 | B sendback2 -> A receive (T9) | the 2 cars are back home on A, nothing is away |
 | A idle7min (T9) | A has 8 again. CE still counts 6, so its refills are vetoed by the came-home guard |
+
+## Player trip (needs a player)
+
+The same two servers stay up, and a player drives a car from A to B and back. This checks the live trip path with
+`carEconomy: "veto"`: the car is tagged at departure, the Hub tracks it, and it's built on B with its home and a
+45-day lifetime.
+
+```
+powershell -ExecutionPolicy Bypass -File Tests\EconomyTest\run-econ.ps1 -Step build
+powershell -ExecutionPolicy Bypass -File Tests\EconomyTest\run-econ.ps1 -Step trip     # reset, then A + B stay up
+powershell -ExecutionPolicy Bypass -File Tests\EconomyTest\run-econ.ps1 -Step client   # the game joins A
+powershell -ExecutionPolicy Bypass -File Tests\EconomyTest\run-econ.ps1 -Step cars
+powershell -ExecutionPolicy Bypass -File Tests\EconomyTest\run-econ.ps1 -Step stop
+```
+
+- Both servers are Chernarus with the same layout: fresh spawns at x 190, z 8990 on the west edge, the arrival point
+  "west" at x 157.7, z 8950.1, and the leaving zone to the other server 160 m away (x 50.5, z 8827.1, radius 137, 0 km).
+- A gives every normal login an `OffroadHatchback` with the player in the driver seat (`steps\trip-A.json`).
+- Wait for `HUB_POLICY ... known=true restart=false` in both script logs (about 30 s after hello), so the client
+  reconnects directly.
+
+| Step | Pass when |
+|---|---|
+| 1. Join A, drive into the zone (south-west, toward the map edge) and stop 5 s | A logs the departure; you land in the car on B at "west" |
+| 2. On B, wait 2 min | `-Step cars`: the car has home `cher_a`, now `cher_b`; B's log has `vehicle economy: ... arrived (home cher_a)` |
+| 3. Leave the car on B, walk 100 m away, wait 2 min | The car is still there (the 45-day lifetime; before the fix it vanished after about 30 s) |
+| 4. Drive back into B's zone | You land on A in the car; `-Step cars` shows `now cher_a`, nothing away |
+
+### Results 2026-10-29 (Derk, OffroadHatchback)
+| Step | Result |
+|---|---|
+| 1. A -> B by car (20:48) | PASS: tagged `cher_a-705582108-1` (home `cher_a`), A counted it away; built on B 29/29, counted as a visitor |
+| 2. B -> A by car (20:49) | PASS: built on A 29/29 as "own back home", Hub `now cher_a`, away 0 after the next report |
+| 3. Parked arrival on A | PASS: the car stood from 20:50 until at least 21:01, including 2 min with nobody on A (an accidental walk to B and back on foot, 20:59-21:01) |
+| Counts | B back to its own 8, A 8 + the returned car, no vetoes needed, Hub reports accepted every minute |
+
+Right after each build the log reads fuel/oil/coolant 0, then 4 s later the engine runs with the saved fluids. That's the
+known load order, not a loss.
