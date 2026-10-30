@@ -1,3 +1,26 @@
+# DriveLink Hub 0.5.0
+
+Goes with DriveLink mod 0.5. Older protocol-1 mods still connect; they just don't report cars.
+
+## Travelled cars and the vehicle economy
+
+- New ledger of travelled cars (`POST /api/cars`, reported by each server every minute). Each car keeps a home
+  server, so the home map can count it while it is away (mod setting `carEconomy`: `"off"`, `"track"` or `"veto"`).
+- Map page: a "Travelled cars" layer shows where each travelled car was last reported. Blue = on its home map,
+  yellow = visiting. Click a car for its home server, health, fuel and its last 10 trips.
+- Console: `DriveLinkHub.exe cars` lists the ledger.
+- Database migrations 007 (cars) and 008 (car positions and trips) run on the first start.
+
+## Upgrade
+
+Stop the Hub, back up its folder and replace the executable while preserving `hub.json`, the database,
+certificates and custom maps. Update the DriveLink mod on the servers to 0.5 for the car features.
+
+## Validation
+
+22 Rust tests passed. Two local Chernarus servers: 4 cars sent A -> B, restarts, wrecks and returns, with the network
+car total exact in every step, plus one player round trip A -> B -> A by car. Boats and motorbikes are not tested.
+
 # DriveLink Hub 0.4.9-rc1
 
 Release candidate for public testing. Automatic client switching requires the matching DriveLink mod 0.4.9-rc1 or newer, in addition to this Hub.
