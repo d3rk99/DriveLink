@@ -9,6 +9,7 @@ class DL_CarSnapshot
 {
     bool holdArrival;
     bool surfaceArrival;
+	static const float ARRIVAL_LIFETIME = 3888000; // 45 days, the old vanilla vehicle lifetime
 	static const int FLUIDS = 8; // CarFluid has 8 values (FUEL, OIL, BRAKE, COOLANT, USER1..USER4)
 	protected ref DL_Snapshot m_Items = new DL_Snapshot();
 
@@ -37,6 +38,7 @@ class DL_CarSnapshot
 			}
 		}
 		m_Items.CaptureTree(car, null, null, d.items);
+		DL_CarLedger.Stamp(car, d);
 		return d;
 	}
 
@@ -78,6 +80,12 @@ class DL_CarSnapshot
             car.PlaceOnSurface();vector clearance=car.GetPosition();clearance[1]=clearance[1]+0.05;car.SetPosition(clearance);
             SetVelocity(car,vector.Zero);dBodySetAngularVelocity(car,vector.Zero);
         }
+		// types.xml gives every vehicle a CE lifetime of 3 s: CE vehicles belong to an events.xml event, which keeps them.
+		// A car made by script belongs to none until the next restart (CE adopts it from storage then), so CE cleanup
+		// deleted arrivals ~30 s after they were built when no player was near (Tests/EconomyTest, 2026-10-29).
+		car.SetLifetimeMax(ARRIVAL_LIFETIME);
+		car.SetLifetime(ARRIVAL_LIFETIME);
+		DL_CarLedger.Arrived(car, d); // keeps its DriveLink id and home (vehicle economy)
 		return car;
 	}
 

@@ -35,3 +35,5 @@ Addons/DriveLink/gui/anim/wake_ca.paa
 Companion/Helper/Assets/
 Companion/dist/
 Companion/Build/
+Tests/CESpike/Build/
+Tests/EconomyTest/Build/

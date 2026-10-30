@@ -9,6 +9,7 @@
 // settings, firewall) is done in the web app at http://localhost:7290/admin.
 mod admin;
 mod api;
+mod cars;
 mod config;
 mod db;
 mod firewall;
@@ -139,6 +140,7 @@ fn admin(cmd: &str, rest: &[String]) -> Result<(), String> {
     let need_id = || rest.first().cloned().ok_or_else(|| format!("usage: DriveLinkHub.exe {cmd} <steamId>"));
     match cmd {
         "transfers" => db::list_transfers(&c),
+        "cars" => cars::list(&c),
         "return" => db::return_transfer(&mut c, &need_id()?),
         "drop" => db::drop_transfer(&mut c, &need_id()?),
         "dump" => {
@@ -184,8 +186,8 @@ fn main() {
         "install" => service::install(),
         #[cfg(windows)]
         "uninstall" => service::uninstall(),
-        "transfers" | "return" | "drop" | "dump" | "map" => admin(&cmd, &args[1..]),
-        other => Err(format!("unknown command {other:?} (none = run here, install, uninstall, transfers, return <steamId>, drop <steamId>, dump [file])")),
+        "transfers" | "cars" | "return" | "drop" | "dump" | "map" => admin(&cmd, &args[1..]),
+        other => Err(format!("unknown command {other:?} (none = run here, install, uninstall, transfers, cars, return <steamId>, drop <steamId>, dump [file])")),
     };
     if let Err(e) = res {
         eprintln!("{e}");

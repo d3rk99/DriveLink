@@ -130,6 +130,9 @@ class DL_Config
 	// M2: a car that left is moved here (ground height) until its seats are empty and it can be deleted, so nobody
 	// can loot its trunk in the meantime (those items would exist twice). Pick a spot far from players. "0 0 0" = off.
 	vector parkingSpot;
+	// vehicle economy (Research/vehicle-economy.md): "off" | "track" (report travelled cars to the hub, log what it would
+	// veto) | "veto" (a car of ours away keeps its place: CE respawns that would replace it are deleted)
+	string carEconomy = "off";
 	ref DL_TravelRules travel = new DL_TravelRules(); // from the hub with the layout
 	ref array<ref DL_Zone> zones = new array<ref DL_Zone>;
 	ref array<ref DL_ArrivalPoint> arrivals = new array<ref DL_ArrivalPoint>;
@@ -282,6 +285,9 @@ class DL_CarData
 	ref array<ref DL_Zone_Health> zones = new array<ref DL_Zone_Health>;
 	ref array<ref DL_ItemData> items = new array<ref DL_ItemData>;
 	vector vel;               // its velocity when it left, m/s (a plane goes on flying with it)
+	// vehicle economy (DL_CarLedger): its DriveLink id and the server whose Central Economy spawned it ("" = off)
+	string dlid;
+	string home;
 }
 
 // $profile:DriveLink/debug.json - test switches, read only by a dev build (DL_DEV, Tools/build-mod.ps1 -Dev) and only
@@ -300,6 +306,23 @@ class DL_Debug
 	// M2 spike 2: on every login a car of this type (vanilla debug kit: wheels, parts, fluids) appears next to the
 	// player and 3 s later he is put in the driver seat. "" = off.
 	string seatTestCar;
+	// Vehicle economy test (Tests/EconomyTest, no players): cars of econEvent "travel" through files the test runner
+	// copies between two servers ($profile:DriveLink/econ-outbox.json -> the other server's econ-inbox.json).
+	// Seconds after mission start; 0 = off.
+	string econEvent;         // e.g. VehicleOffroadHatchback
+	int econSendAt;           // snapshot + Left + delete econSendCount of this server's own cars of the event
+	int econSendCount;
+	bool econSendForeign;     // send cars from other servers instead (a round trip home)
+	int econReceiveAt;        // build every car in econ-inbox.json (arrivals)
+	int econRuinAt;           // delete econRuinCount travelled cars from other servers (destroyed here)
+	int econRuinCount;
+	int econStatusEvery = 30; // log the event's counts
+	int econExitAt;           // shut down cleanly (the world storage is saved)
+}
+
+class DL_EconBox
+{
+	ref array<ref DL_CarData> cars = new array<ref DL_CarData>;
 }
 
 // Server address entry (from the hub's /api/hello and redirect answers).

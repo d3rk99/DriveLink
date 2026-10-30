@@ -464,6 +464,7 @@ modded class MissionServer
 			m_DL_Cfg.joinId = Math.RandomInt(0, int.MAX).ToString() + "-" + Math.RandomInt(0, int.MAX).ToString() + "-" + g_Game.GetTime().ToString();
 			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
 		}
+		DL_CarLedger.Start(m_DL_Cfg.carEconomy, m_DL_Cfg.serverId);
 		if (m_DL_Cfg.hubKey != "")
 			DL_SendHello();
 #ifdef DL_DEV
@@ -730,12 +731,32 @@ modded class MissionServer
 		}
 		if (r.layout)
 			DL_ApplyLayout(r.layout, "hello");
+		DL_CarLedger.SetServerId(m_DL_Cfg.serverId);
+		if (DL_CarLedger.On() && !m_DL_CarReports)
+		{
+			m_DL_CarReports = true;
+			// the first report after a minute: by then the world storage has loaded every car (their tags come back
+			// in AfterStoreLoad); until then vetoes use the hub's last answer from car-ledger.json
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_ReportCars, DL_CarLedger.REPORT_MS, true);
+		}
 		// from now on: ask for edits every 30 s (only a rev number goes over the wire when nothing changed)
 		if (!m_DL_Polling)
 		{
 			m_DL_Polling = true;
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_PollLayout, 30000, true);
 		}
+	}
+
+	// ---------------- vehicle economy (DL_CarLedger, Research/vehicle-economy.md) ----------------
+
+	protected bool m_DL_CarReports;
+
+	// every 60 s: the travelled cars here and the ones that left; the hub answers how many of ours are away
+	void DL_ReportCars()
+	{
+		string json = DL_CarLedger.ReportJson(m_DL_Cfg.hubKey);
+		if (json != "")
+			DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/cars?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, json, new DL_CarReportWaiter(), "OnAnswer", "cars");
 	}
 
 	// ---------------- zones + arrival points from the hub (map editor) ----------------
@@ -3419,6 +3440,7 @@ modded class MissionServer
 			// The hub holds the car now (inside his trip). Remember it BEFORE it goes (crash guard, DL_CarGuard), and
 			// delete it after he has been removed from the seat (DL_RemoveTraveller runs at 1.5 s).
 			DL_CarGuard.Remember(car);
+			DL_CarLedger.Left(car); // vehicle economy: it stays counted at its home
 			DL_ParkCar(car);
 			DL_Log.Detail(car.GetType() + " " + DL_CarGuard.IdOf(car) + " travels with " + sid + ", removing it here once its seats are empty");
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveCar, 3000, false, car, 0);

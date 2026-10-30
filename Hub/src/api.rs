@@ -108,6 +108,7 @@ pub fn routes(h: Shared) -> Router {
         .route("/api/fail", post(fail))
         .route("/api/layout", post(layout))
         .route("/api/spots", post(spots))
+        .route("/api/cars", post(cars))
         .route("/health", get(health))
         .merge(crate::admin::routes(h.clone()))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY + 1))
@@ -381,6 +382,37 @@ async fn layout(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
             reply(StatusCode::OK, out)
         }
         Ok(l) => reply(StatusCode::OK, json!({"ok": true, "changed": false, "rev": l.map(|l| l.rev).unwrap_or(0),"helperPolicyVersion":1,"helperRoutes":crate::mod_policy::routes(&h,&sid)})),
+        Err(e) => db_error(e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct CarsReq {
+    #[serde(default)]
+    left: Vec<crate::cars::Car>,
+    #[serde(default)]
+    here: Vec<crate::cars::Car>,
+}
+
+// POST /api/cars  vehicle economy (Research/vehicle-economy.md): the travelled cars this server holds and the ones
+// that left it; the answer is how many of its own cars are away, per class (its mod vetoes CE respawns for them).
+async fn cars(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body: Bytes) -> Response {
+    let sid = match check(&h, "/api/cars", &a, &q, &body) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let r: CarsReq = match parse("/api/cars", &body) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let mut db = h.db.lock().unwrap();
+    match crate::cars::report(&mut db, &sid, &r.left, &r.here) {
+        Ok(away) => {
+            for c in r.left.iter() {
+                crate::logf!("car {} ({}) left {sid}", c.dlid, c.kind);
+            }
+            reply(StatusCode::OK, json!({"ok": true, "away": away}))
+        }
         Err(e) => db_error(e),
     }
 }
