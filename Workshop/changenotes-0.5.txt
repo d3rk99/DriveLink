@@ -1,0 +1,7 @@
+[b]DriveLink 0.5[/b]
+[list]
+[*][b]Vehicle economy[/b] (optional, carEconomy in config.json, default "off"): a car keeps its slot on the map it came from while it is away, so driving cars between servers no longer adds cars to the network.
+[*][b]Travelled cars on the Hub's Map page[/b] (needs the updated Hub): where each travelled car was last seen. Click one for its home server, health, fuel and last 10 trips.
+[*][b]Fix:[/b] a vehicle that arrived with a trip could disappear about 30 seconds later when no player was near it.
+[/list]
+Server owners: update the mod on every server and the Hub together. Back up the Hub folder first.

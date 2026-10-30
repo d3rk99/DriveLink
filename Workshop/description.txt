@@ -1,0 +1,131 @@
+[h1]DriveLink — Your journey continues[/h1]
+
+The edge of the map doesn’t have to be the end of the road.
+
+DriveLink connects DayZ servers and maps into a shared travel network. Walk, drive, ride or sail between linked servers with your character, equipment, vehicle and crew.
+
+Server owners choose where players leave, where they arrive and what the journey costs. Connect neighboring regions, build routes between different maps or give your community a larger world to explore.
+
+[h1]Features[/h1]
+
+[list]
+[*]Travel between linked DayZ servers on foot or with supported vehicles.
+[*]Bring your character, carried equipment, vehicle and its contents.
+[*]Travel together in groups, vehicle crews and convoys.
+[*]Create departure zones and arrival points through the Hub’s web interface.
+[*]Configure travel distance, journey time, food, water, fuel use, vehicle wear and travel risks.
+[*]Choose Easy, Medium, Hard or Realism travel presets, or customize the settings.
+[*]Optional vehicle economy keeps car counts fair across maps.
+[*]Watch a pixel art travel sequence while your journey takes place.
+[*]Manage connected servers, travel routes and characters in transit through DriveLink Hub.
+[*]Use the optional Travel Helper to restart DayZ automatically with the destination server’s required mods when a transfer needs a different mod set.
+[/list]
+
+Travel requires participating servers to be connected to the same DriveLink Hub and configured by their administrators.
+
+[h1]Travel Helper — Different maps, different mods[/h1]
+
+Some destinations require mods that your current server does not use. DriveLink Travel Helper adds automatic client switching for these routes.
+
+When a transfer requires a different mod set, the helper closes DayZ and its vanilla launcher normally, displays the travel sequence, then asks Steam to launch DayZ with the destination server’s configured mods and connection details. Your normal DayZ display and profile settings are retained.
+
+Routes with matching mod sets continue to use ordinary DriveLink reconnection without a helper-driven client restart.
+
+[b]Required destination mods must already be downloaded.[/b] The helper does not download missing mods or load and unload mods inside a running DayZ client.
+
+[h1]Installation — Players[/h1]
+
+Subscribe to DriveLink on the Steam Workshop and enable it in your DayZ launcher when joining a server that uses it.
+
+Players do not need DriveLink Hub.
+
+[b]For travel that requires different mods, complete the bundled helper setup once:[/b]
+
+[olist]
+[*]Locate the DriveLink mod folder and open Helper\DriveLink Setup.exe.
+[*]If the vanilla launcher cannot open the mod folder, browse to your Steam library’s steamapps\workshop\content\221100 folder, then locate DriveLink’s Workshop folder and open Helper.
+[*]Check the detected DayZ, Steam and Workshop paths, and replace “Survivor (change me)” with your player name.
+[*]Public is selected by default. Choose Local only if the destination test servers run on your own PC. Review the displayed network and servers.
+[*]Windows startup is enabled by default. Read and accept the background-application disclosure, then select Install and start.
+[/olist]
+
+Your server administrator must provide the correct helper network configuration for their server network.
+
+After setup, launch DayZ normally. The helper starts with Windows and waits in the tray. No shortcut, service or administrator access is needed.
+
+If a transfer needs the helper and it is unavailable, DriveLink displays setup instructions before departure. Your character receives temporary damage protection during this setup wait. You can cancel the prompt and remain on the source server.
+
+Steam must be running and signed in. Restart and connection times depend on Steam, BattlEye, your hardware and the destination server.
+
+[h1]Removing the Travel Helper[/h1]
+
+Right-click the DriveLink tray icon and choose “Uninstall DriveLink Travel Helper…”, or open Windows Settings > Apps > Installed apps > DriveLink Travel Helper > Uninstall.
+
+Uninstall stops the agent and deletes its files and startup entry. DayZ settings and Workshop mods stay in place.
+
+“Exit for this Windows session” only stops it until you next sign in.
+
+[h1]Installation — DriveLink Hub[/h1]
+
+Setup Tutorial
+https://www.youtube.com/watch?v=vAcOJVjgk4A
+https://github.com/d3rk99/DriveLink/releases
+
+DriveLink Hub is a separate Windows application required by server owners. Run one Hub for your linked server network on a machine that every participating server can reach. It can run on one of your server machines.
+
+[olist]
+[*]Download the DriveLink Hub release package and extract it into its own folder.
+[*]Start DriveLinkHub.exe. The first launch creates hub.json and generates a server key and web administration password.
+[*]On the Hub machine, open http://localhost:7290/admin in your browser.
+[*]Open the Setup page. Set the Hub address that your servers will connect to and configure the firewall rules for your network.
+[*]Copy the hubUrl and hubKey settings shown on the Setup page. You will use these on each DayZ server.
+[*]Keep the Hub running while your network is operating.
+[/olist]
+
+The default ports are 7290 for HTTP and 7291 for HTTPS. Accessing the administration page from another machine requires the web administration password.
+
+Optional: run DriveLinkHub.exe install from an administrator terminal to install the Hub as a Windows service.
+
+[b]Updating:[/b] stop the Hub, back up its folder and replace only DriveLinkHub.exe. A Hub started in an empty folder is a new network with new keys.
+
+[h1]Installation — DayZ Servers[/h1]
+
+[olist]
+[*]Install the Workshop mod on every participating server and add its folder to the server’s -mod= list. Players must load the mod too.
+[*]Copy the included public .bikey files from the mod’s keys folder into your server’s keys folder.
+[*]Start the server once to generate <profiles>\DriveLink\config.json.
+[*]Enter the hubUrl and hubKey values from the Hub’s Setup page, then restart the server.
+[*]In the Hub’s Servers page, approve the server under “Asking to join” and verify its connection details.
+[*]Repeat for the other servers in your network.
+[*]Use the Hub’s Map page to create departure zones, choose destination servers and place arrival points. Configure your travel rules before opening the routes to players.
+[*]Leave Client switching on Automatic in the Hub’s server editor. The Hub compares each server’s mod list and uses the helper only where they differ, so the server’s Steam query port must be reachable from the Hub.
+[/olist]
+
+Keep DriveLink Hub and the mod on every participating server updated together. Incompatible builds disable travel until the versions match.
+
+[h1]Vehicle economy (optional)[/h1]
+
+Without it, a car that drives away is replaced on its old map, so the network gains a car with every trip. Set carEconomy in <profiles>\DriveLink\config.json on every server:
+
+[list]
+[*][b]"off"[/b] (default): vanilla spawns.
+[*][b]"track"[/b]: the Hub records travelled cars and shows them on its Map page (click a car for its home server and trips).
+[*][b]"veto"[/b]: tracking, plus a map does not refill the slots of its cars that are away. Only new economy spawns are removed, never player cars.
+[/list]
+
+[h1]Work in Progress — Public Testing[/h1]
+
+DriveLink and its Travel Helper are under active development.
+
+Back up your server data before testing. Report problems with the relevant server, Hub and helper logs.
+
+Compatibility with every modded vehicle, scripted item or server configuration is not guaranteed.
+
+Vehicle economy is tested with cars only, not yet with boats or motorbikes.
+
+[h1]Credits[/h1]
+
+DriveLink by Derk.
+
+Travel sequence artwork includes MiniDayZ assets © Bohemia Interactive.
+DayZ © Bohemia Interactive.
