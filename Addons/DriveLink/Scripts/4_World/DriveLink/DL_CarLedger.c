@@ -25,6 +25,11 @@ class DL_CarTag
 	string dlid;
 	string type;
 	string home;
+	// filled in for each report (the hub's Map page): where the car stands, body health 0..1, fuel 0..1 (-1 = none)
+	float x;
+	float z;
+	float health = -1;
+	float fuel = -1;
 }
 
 // a live car's tag (held by DL_CarLedger, not on the entity: Transport can't be modded)
@@ -523,6 +528,14 @@ class DL_CarLedger
 				t.home = HomeOf(c);
 			}
 			t.type = c.GetType();
+			vector p = c.GetPosition();
+			t.x = p[0];
+			t.z = p[2];
+			t.health = c.GetHealth01("", "");
+			t.fuel = -1;
+			Car car = Car.Cast(c);
+			if (car)
+				t.fuel = car.GetFluidFraction(CarFluid.FUEL);
 			string pid = PidOf(c);
 			if (pid != "")
 				t.pid = pid;

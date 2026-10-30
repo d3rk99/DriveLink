@@ -73,6 +73,9 @@ owed to their home, and the network total stays exact.
   protocol is unchanged.
 - Hub: `Hub/src/cars.rs`, migration `007_cars.sql`, `POST /api/cars` (reported every 60 s, the first report
   1 min after hello so storage has loaded), and `drivelink-hub.exe cars` to list the ledger.
+- Hub Map page (migration 008): each report carries the cars' positions, health and fuel. The Hub keeps the last one
+  per car plus a `car_trips` row per trip, and `/admin/api/cars` feeds a "Travelled cars" layer (click a car for its
+  home and trips).
 
 Result: the network total for each class stays at the sum of nominals, however cars move.
 

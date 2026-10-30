@@ -54,6 +54,9 @@ Ports: **7290** (HTTP) and **7291** (HTTPS, self-signed unless you set `tlsCert`
      distance in km (0 = free and instant). Zones can be circles or squares / strips (a whole map border).
    - **Arrival points**: where players come out, facing which way. A car that comes along stands at its car spot
      (convoys line up behind it); a boat goes on the nearest free water, or a boat spot you pin.
+   - **Travelled cars** (servers with `carEconomy` "track" or "veto"): every car that has travelled, where its server
+     last reported it (every minute). Blue = this server's own, yellow = visiting. Click one for its home server,
+     health, fuel and its last 10 trips.
 
 Players subscribe to [DriveLink on Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3824238331)
 and load the server's required mods. Matching-mod routes do not need the Windows helper. Routes that switch

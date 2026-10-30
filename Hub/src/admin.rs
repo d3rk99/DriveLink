@@ -42,6 +42,7 @@ pub fn routes(h: Shared) -> Router<Shared> {
         .route("/admin/api/settings", post(save_settings))
         .route("/admin/api/firewall", get(firewall_state))
         .route("/admin/api/firewall/apply", post(firewall_apply))
+        .route("/admin/api/cars", get(cars))
         .route("/admin/api/players", get(crate::players::list))
         .route("/admin/api/players/{sid}", get(crate::players::detail))
         .route("/admin/api/players/{sid}/action", post(crate::players::action))
@@ -94,6 +95,15 @@ impl IntoResponse for Json {
 
 fn bad(msg: impl Into<String>) -> Response {
     (StatusCode::BAD_REQUEST, msg.into()).into_response()
+}
+
+// Map page car layer: travelled cars where their server last reported them, with their trips (src/cars.rs).
+async fn cars(State(h): State<Shared>) -> Response {
+    let db = h.db.lock().unwrap();
+    match crate::cars::for_map(&db) {
+        Ok(cars) => Json(json!({"cars": cars})).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("database: {e}")).into_response(),
+    }
 }
 
 fn hub_port(listen: &str) -> u16 {
