@@ -1,4 +1,4 @@
-# DriveLink Hub - next release (not released yet)
+# DriveLink Hub 0.5.1
 
 ## Hub updates
 
