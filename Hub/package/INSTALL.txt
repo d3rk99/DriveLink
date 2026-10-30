@@ -30,6 +30,12 @@ Hub and the DriveLink mod at 0.4.9-rc1 or newer. Updating only the Hub does not
 remove helper prompts in an older mod.
 Default ports: TCP 7290 HTTP and TCP 7291 HTTPS.
 
+UPDATES
+From 0.5.1 the Hub updates itself: Setup page, "Hub updates". Default: it tells you
+when a new version is out (Update now button). "Install it by itself" installs fixes
+for the same version line on its own and restarts the Hub in a few seconds; if the new
+version does not start, the old one is put back. DriveLinkHub.old.exe is the previous one.
+
 AUTOMATIC CLIENT SWITCHING
 The Hub queries each server's advertised client mods through its UDP Steam
 query port. Keep that port reachable from the Hub. In Servers, leave Client

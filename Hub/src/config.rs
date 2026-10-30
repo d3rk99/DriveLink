@@ -240,6 +240,12 @@ pub struct Config {
     /// show the plane tools on the Map page (plane zones, plane entry): LM's Planes support, on hold
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub experimental_planes: bool,
+    /// hub updates from GitHub releases (src/update.rs): "off" | "notify" | "auto"; "" = notify
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub auto_update: String,
+    /// where to look for the latest release instead of GitHub's API (testing); "" = GitHub
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub update_url: String,
 }
 
 /// Fills in an admin password when there is none; returns it when it was just made.
@@ -285,6 +291,8 @@ pub fn load_or_create(path: &Path) -> Result<(Config, bool), String> {
                 public_host: String::new(),
                 home_server: String::new(),
                 experimental_planes: false,
+                auto_update: String::new(),
+                update_url: String::new(),
             };
             save(path, &c)?;
             return Ok((c, true));
@@ -312,6 +320,9 @@ impl Config {
     pub fn validate(&self) -> Result<(), String> {
         if self.server_key.len() < 16 {
             return Err(r#""serverKey" is too short (16+ characters)"#.into());
+        }
+        if !["", "off", "notify", "auto"].contains(&self.auto_update.as_str()) {
+            return Err(r#""autoUpdate" is "off", "notify" or "auto""#.into());
         }
         if self.listen.is_empty() && self.listen_tls.is_empty() {
             return Err(r#"set "listen" (HTTP) and/or "listenTls" (HTTPS)"#.into());

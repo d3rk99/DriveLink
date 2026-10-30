@@ -1,3 +1,21 @@
+# DriveLink Hub - next release (not released yet)
+
+## Hub updates
+
+- The Hub checks GitHub releases every 6 hours and shows a newer version on the Setup page ("Hub updates", plus an
+  "update" mark on the Setup tab). hub.json `autoUpdate`: `"notify"` (default), `"auto"` or `"off"`.
+- **Update now** downloads `DriveLinkHub.exe`, checks it against `SHA256SUMS.txt`, runs it once to confirm its
+  version, keeps the old exe as `DriveLinkHub.old.exe` and restarts into the new one (console or Windows service).
+- `"auto"` installs updates of the same major.minor that speak the same protocol by itself, once no trip started or
+  arrived for 5 minutes. Bigger versions are only shown: they go with a mod update.
+- If the new version does not start, the old one is put back (the failed one stays as `DriveLinkHub.failed.exe`)
+  and that version is never installed by itself again.
+- `DriveLinkHub.exe version` prints the version and protocol.
+
+Tested on this PC with a local release server, in a console and as the Windows service: 0.5.0 -> 0.5.1 by itself
+(about 1 s down), a broken 0.5.2 rolled back (console: within a second; service: about 30 s, while it waits to see
+whether the new one keeps running) and was not retried, and a bad checksum was refused.
+
 # DriveLink Hub 0.5.0
 
 Goes with DriveLink mod 0.5. Older protocol-1 mods still connect; they just don't report cars.

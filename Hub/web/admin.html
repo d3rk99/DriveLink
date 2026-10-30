@@ -70,7 +70,7 @@
   <button class="nav tab-nav" data-view="servers">Servers<span id="pendBadge"></span></button>
   <button class="nav tab-nav" data-view="players">Players</button>
   <button class="nav tab-nav" data-view="map">Map</button>
-  <button class="nav tab-nav" data-view="setup">Setup</button>
+  <button class="nav tab-nav" data-view="setup">Setup<span id="updBadge"></span></button>
 </div>
 <div id="page" style="display:none"><div class="wrap" id="pageBody"></div></div>
 <div id="app">
@@ -635,6 +635,7 @@ async function refresh() {
   S = n;
   if (view === "map") S.servers.forEach(s => { if (keep[s.id]) s.layout = keep[s.id]; });
   $("pendBadge").innerHTML = S.pending.length ? `<span class="badge">${S.pending.length}</span>` : "";
+  $("updBadge").innerHTML = S.hub.update && S.hub.update.latest ? `<span class="badge" title="Hub ${esc(S.hub.update.latest)} is out">update</span>` : "";
 }
 
 // ---------- Servers ----------
@@ -904,7 +905,8 @@ function renderSetup() {
     <div class="btns"><button class="primary" id="hSave">Save settings</button><button id="hShow">${showKey ? "Hide" : "Show"} key</button><button class="danger" id="hNewKey">Make a new key</button></div>
     <div class="hint" style="margin-top:6px">Hub address: ${esc(hub.listen || "-")} (HTTP)${hub.listenTls ? ", " + esc(hub.listenTls) + " (HTTPS)" : ""}. Changing ports needs a hub restart (hub.json).</div>
     <div class="status" id="pageMsg"></div>
-  </div>`;
+  </div>
+  <div class="box"><h2>4. Hub updates</h2><div id="updBody" class="hint">Loading…</div></div>`;
   b.innerHTML = h;
   wireCopy(b);
   $("goServers").onclick = e => { e.preventDefault(); setView("servers"); };
@@ -919,6 +921,60 @@ function renderSetup() {
     try { await post("/admin/api/settings", { newServerKey: true }); showKey = true; await refresh(); renderSetup(); pageMsg("New key made. Put it in every DayZ server's config.json."); } catch (e) { pageMsg(e.message, true); }
   };
   loadFirewall();
+  loadUpdate();
+}
+
+// ---------- Hub updates (src/update.rs) ----------
+let upd = null;
+async function loadUpdate() {
+  try { upd = await (await fetch("/admin/api/update", { cache: "no-store" })).json(); } catch { upd = null; }
+  renderUpdate();
+}
+function renderUpdate(msg, bad) {
+  const e = $("updBody");
+  if (!e || !upd) return;
+  const st = upd.status, busy = { checking: "Checking…", downloading: "Downloading…", installing: "Installing…", restarting: "Restarting…" }[st.state];
+  let h = `<div>This hub: <b>${esc(st.current)}</b>. `;
+  if (st.latest) h += `<span class="warn">Hub <b>${esc(st.latest)}</b> is out</span>${st.notesUrl ? ` (<a href="${esc(st.notesUrl)}" target="_blank" rel="noopener" style="color:var(--accent)">what's new</a>)` : ""}.`;
+  else if (st.checkedAt) h += `<span class="ok">Up to date.</span>`;
+  h += `${st.checkedAt ? ` <span class="hint">Checked ${esc(st.checkedAt)}.</span>` : ""}</div>`;
+  if (st.latest && !st.patch) h += `<div class="hint" style="margin-top:4px">This is a bigger update: update the DriveLink mod on your DayZ servers with it. Automatic updates leave it to you.</div>`;
+  h += `<div class="grid2" style="margin-top:8px"><div><label>When a new hub version comes out</label><select id="updMode">
+      <option value="notify">Tell me here (don't install)</option>
+      <option value="auto">Install it by itself (fixes for this version only)</option>
+      <option value="off">Don't check</option></select></div></div>
+    <div class="hint">Install by itself takes ${esc(st.current.split(".").slice(0, 2).join("."))}.x updates only, waits until no trip started or arrived for 5 minutes, and restarts the hub (a few seconds; trips in progress are kept). If the new version doesn't start, the old one is put back.</div>
+    <div class="btns"><button id="updCheck" ${busy ? "disabled" : ""}>Check now</button>${st.latest ? `<button class="primary" id="updNow" ${busy ? "disabled" : ""}>Update now to ${esc(st.latest)}</button>` : ""}${busy ? ` <span class="hint">${busy}</span>` : ""}</div>`;
+  if (st.error) h += `<div class="status badtxt">${esc(st.error)}</div>`;
+  if (msg) h += `<div class="status ${bad ? "badtxt" : "ok"}">${esc(msg)}</div>`;
+  e.innerHTML = h;
+  e.className = "";
+  $("updMode").value = upd.mode;
+  $("updMode").onchange = async ev => {
+    try { await post("/admin/api/settings", { autoUpdate: ev.target.value }); upd.mode = ev.target.value; renderUpdate("Saved."); } catch (x) { renderUpdate(x.message, true); }
+  };
+  $("updCheck").onclick = async () => {
+    upd.status.state = "checking"; renderUpdate();
+    try { upd = await post("/admin/api/update/check"); await refresh(); renderUpdate(); } catch (x) { await loadUpdate(); renderUpdate(x.message, true); }
+  };
+  const now = $("updNow");
+  if (now) now.onclick = async () => {
+    if (!confirm(`Update the hub to ${st.latest} now? It restarts (a few seconds): DayZ servers retry, trips in progress are kept.` + (st.patch ? "" : "\n\nThis is a bigger update: the DayZ servers need the matching DriveLink mod."))) return;
+    upd.status.state = "downloading"; renderUpdate();
+    try { await post("/admin/api/update/install"); waitForRestart(st.latest); } catch (x) { await loadUpdate(); renderUpdate(x.message, true); }
+  };
+}
+// after "Update now": wait until the hub answers with the new version, then reload the page
+async function waitForRestart(want) {
+  renderUpdate(`Restarting into ${want}…`);
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const n = await (await fetch("/admin/api/state", { cache: "no-store" })).json();
+      if (n.hub.version === want) { location.reload(); return; }
+    } catch {}
+  }
+  renderUpdate(`The hub did not come back as ${want} within 2 minutes. See hub.log next to DriveLinkHub.exe.`, true);
 }
 
 function renderFirewall(msg, bad) {

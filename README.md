@@ -131,7 +131,19 @@ Zones, arrival points and travel rules come from the hub and are rewritten in co
 
 ## Updating
 
-Back up the Hub folder and server profiles before updating. Replace the Hub executable while it is stopped,
+From Hub 0.5.1 the Hub can update itself: Setup page -> **Hub updates**. It checks GitHub releases every 6 hours.
+
+- **Tell me here** (default): a newer version shows on the Setup page, with an **Update now** button.
+- **Install it by itself**: fixes for the same version line (0.5.x) install on their own once no trip started or
+  arrived for 5 minutes. A bigger version (0.6) is only shown, since it goes with a mod update.
+- **Don't check**.
+
+An update downloads `DriveLinkHub.exe`, checks it against the release's `SHA256SUMS.txt`, keeps the old exe as
+`DriveLinkHub.old.exe` and restarts the Hub (console or Windows service) in a few seconds. Trips in progress are kept.
+If the new version does not start, the old one is put back and that version is not installed by itself again.
+Hubs older than 0.5.1 have to be updated by hand once.
+
+By hand: Back up the Hub folder and server profiles before updating. Replace the Hub executable while it is stopped,
 preserving `hub.json`, its database, certificates and custom maps. Avoid starting an upgrade in an empty folder:
 that creates a separate network with fresh credentials rather than loading the existing one.
 

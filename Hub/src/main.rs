@@ -3,6 +3,7 @@
 //   DriveLinkHub.exe                    run in this console (Ctrl+C stops it)
 //   DriveLinkHub.exe install|uninstall  Windows service (administrator terminal)
 //   DriveLinkHub.exe transfers | return <steamId> | drop <steamId> | dump [file]   admin commands
+//   DriveLinkHub.exe version            "<version> protocol <n>" (the updater runs it on a new exe before using it)
 //   -config <file>                      another hub.json (default: next to the exe)
 //
 // First start writes hub.json with a random server key and keeps running: everything else (servers, zones, hub
@@ -23,6 +24,7 @@ mod mod_policy;
 #[cfg(windows)]
 mod service;
 mod tls;
+mod update;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -49,6 +51,7 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
     let cfg_path = CONFIG.get().cloned().unwrap_or_else(|| PathBuf::from("hub.json"));
     let dir = cfg_path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     log::init(dir.join("hub.log"), console);
+    update::set_console(console);
     let (mut cfg, created) = config::load_or_create(&cfg_path)?;
     if let Some(p) = config::ensure_admin_password(&cfg_path, &mut cfg)? {
         logf!("web app password made (needed from other PCs only; change it on the Setup page): {p}");
@@ -81,6 +84,7 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(async move {
         let mod_queries = tokio::spawn(mod_policy::run(hub.clone()));
+        let updates = tokio::spawn(update::run(hub.clone()));
         let app = api::routes(hub.clone());
         let handle = axum_server::Handle::<SocketAddr>::new();
         let mut tasks = Vec::new();
@@ -102,7 +106,7 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
             tasks.push(tokio::spawn(srv));
             where_.push(format!("https://{addr}"));
         }
-        logf!("DriveLink Hub (rust) listening on {}, {} servers, database {}", where_.join(" + "), cfg.servers.len(), db_path.display());
+        logf!("DriveLink Hub {} (rust) listening on {}, {} servers, database {}", update::VERSION, where_.join(" + "), cfg.servers.len(), db_path.display());
         if let Some(w) = where_.first() {
             logf!("web app (servers, map, setup): {}/admin", w.replace("0.0.0.0", "localhost"));
         }
@@ -110,12 +114,17 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = stop.changed() => {}
+                _ = update::RESTART.notified() => {}
             }
         } else {
-            let _ = stop.changed().await;
+            tokio::select! {
+                _ = stop.changed() => {}
+                _ = update::RESTART.notified() => {}
+            }
         }
         logf!("DriveLink Hub stopping");
         mod_queries.abort();
+        updates.abort();
         handle.graceful_shutdown(Some(Duration::from_secs(5)));
         for t in tasks {
             if let Ok(Err(e)) = t.await {
@@ -186,8 +195,13 @@ fn main() {
         "install" => service::install(),
         #[cfg(windows)]
         "uninstall" => service::uninstall(),
+        "version" => {
+            println!("{} protocol {}", update::VERSION, api::PROTOCOL);
+            Ok(())
+        }
+        "finish-update" => update::finish(&args[1..]),
         "transfers" | "cars" | "return" | "drop" | "dump" | "map" => admin(&cmd, &args[1..]),
-        other => Err(format!("unknown command {other:?} (none = run here, install, uninstall, transfers, cars, return <steamId>, drop <steamId>, dump [file])")),
+        other => Err(format!("unknown command {other:?} (none = run here, install, uninstall, version, transfers, cars, return <steamId>, drop <steamId>, dump [file])")),
     };
     if let Err(e) = res {
         eprintln!("{e}");

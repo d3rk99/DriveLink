@@ -100,3 +100,50 @@ fn service_main(_args: Vec<OsString>) {
     };
     set(ServiceState::Stopped, ServiceControlAccept::empty(), code);
 }
+
+/// "DriveLinkHub.exe finish-update service" (src/update.rs), started by the old hub just before it stops: wait for the
+/// service to stop, start it on the new exe, and go back to the old exe if the new one doesn't stay up for 30 s.
+pub fn restart_after_update() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    let cfg = crate::CONFIG.get().cloned().unwrap_or_else(|| dir.join("hub.json"));
+    crate::log::init(cfg.parent().unwrap_or(&dir).join("hub.log"), false);
+    let mgr = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT).map_err(|e| e.to_string())?;
+    let svc = mgr.open_service(NAME, ServiceAccess::QUERY_STATUS | ServiceAccess::START).map_err(|e| format!("no {NAME} service ({e})"))?;
+    let state = || svc.query_status().map(|s| s.current_state).unwrap_or(ServiceState::Stopped);
+    let wait_for = |want: ServiceState, secs: u64| {
+        for _ in 0..secs * 2 {
+            if state() == want {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        false
+    };
+    if !wait_for(ServiceState::Stopped, 60) {
+        crate::logf!("update: the old hub did not stop within 60 s; start the {NAME} service by hand");
+        return Err("old service did not stop".into());
+    }
+    let start_and_hold = || -> bool {
+        if svc.start::<&str>(&[]).is_err() {
+            return false;
+        }
+        // running, and still running 30 s later (a bad hub.json, port or database stops it at once)
+        wait_for(ServiceState::Running, 30) && {
+            std::thread::sleep(Duration::from_secs(30));
+            state() == ServiceState::Running
+        }
+    };
+    if start_and_hold() {
+        crate::logf!("update: the {NAME} service runs on the new hub");
+        return Ok(());
+    }
+    crate::logf!("update: the new hub did not stay running; going back to the old one");
+    wait_for(ServiceState::Stopped, 30);
+    crate::update::roll_back(cfg.parent().unwrap_or(&dir))?;
+    if svc.start::<&str>(&[]).is_err() {
+        return Err(format!("could not start the {NAME} service again; start it by hand"));
+    }
+    crate::logf!("update: rolled back, the {NAME} service runs on the old hub (the new one is DriveLinkHub.failed.exe)");
+    Ok(())
+}

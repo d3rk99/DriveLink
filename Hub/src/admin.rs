@@ -2,7 +2,7 @@
 //   Map      - leaving zones + arrival points per server (layouts table); servers pick edits up within ~30 s
 //   Servers  - add / edit / remove DayZ servers, approve new ones that asked to join (saved to hub.json at once)
 //   Players  - who is where, trips, snapshot contents; move / release / drop (src/players.rs)
-//   Setup    - what a DayZ server needs in its config.json, hub settings, Windows Firewall rules
+//   Setup    - what a DayZ server needs in its config.json, hub settings, Windows Firewall rules, hub updates
 // Password = hub.json adminPassword (browser login box, any user name); none needed on the hub's own machine.
 use crate::api::Shared;
 use crate::config::ServerEntry;
@@ -43,6 +43,9 @@ pub fn routes(h: Shared) -> Router<Shared> {
         .route("/admin/api/firewall", get(firewall_state))
         .route("/admin/api/firewall/apply", post(firewall_apply))
         .route("/admin/api/cars", get(cars))
+        .route("/admin/api/update", get(update_status))
+        .route("/admin/api/update/check", post(update_check))
+        .route("/admin/api/update/install", post(update_install))
         .route("/admin/api/players", get(crate::players::list))
         .route("/admin/api/players/{sid}", get(crate::players::detail))
         .route("/admin/api/players/{sid}/action", post(crate::players::action))
@@ -106,6 +109,34 @@ async fn cars(State(h): State<Shared>) -> Response {
     }
 }
 
+fn update_json(h: &Shared) -> Value {
+    let mode = h.cfg().auto_update;
+    json!({"status": crate::update::status(), "mode": if mode.is_empty() { "notify".to_string() } else { mode }})
+}
+
+async fn update_status(State(h): State<Shared>) -> Response {
+    Json(update_json(&h)).into_response()
+}
+
+async fn update_check(State(h): State<Shared>) -> Response {
+    let hh = h.clone();
+    match tokio::task::spawn_blocking(move || crate::update::check_and_maybe_install(&hh, false)).await {
+        Ok(Ok(())) => Json(update_json(&h)).into_response(),
+        Ok(Err(e)) => bad(e),
+        Err(e) => bad(e.to_string()),
+    }
+}
+
+async fn update_install(State(h): State<Shared>) -> Response {
+    crate::logf!("setup page: update now");
+    let hh = h.clone();
+    match tokio::task::spawn_blocking(move || crate::update::install_now(&hh)).await {
+        Ok(Ok(())) => Json(update_json(&h)).into_response(),
+        Ok(Err(e)) => bad(e),
+        Err(e) => bad(e.to_string()),
+    }
+}
+
 fn hub_port(listen: &str) -> u16 {
     listen.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0)
 }
@@ -161,6 +192,7 @@ async fn state(State(h): State<Shared>) -> Response {
         "servers": servers, "maps": maps, "tools": tools.map(|t| t.display().to_string()), "pending": pending,
         "hub": {
             "serverKey": cfg.server_key, "lanIp": lan, "publicHost": cfg.public_host, "homeServer": cfg.home_server, "experimentalPlanes": cfg.experimental_planes,
+            "version": crate::update::VERSION, "update": crate::update::status(),
             "httpPort": hub_port(&cfg.listen), "httpsPort": hub_port(&cfg.listen_tls), "listen": cfg.listen, "listenTls": cfg.listen_tls,
             "dayzPath": cfg.dayz_path, "dayzToolsPath": cfg.dayz_tools_path, "hasPassword": !cfg.admin_password.is_empty(),
         },
@@ -369,6 +401,7 @@ struct SettingsForm {
     dayz_path: Option<String>,
     dayz_tools_path: Option<String>,
     home_server: Option<String>,
+    auto_update: Option<String>,
     new_server_key: bool,
 }
 
@@ -401,6 +434,9 @@ async fn save_settings(State(h): State<Shared>, body: Bytes) -> Response {
                 return Err(format!("unknown server {v:?}"));
             }
             c.home_server = v.to_string();
+        }
+        if let Some(v) = &f.auto_update {
+            c.auto_update = v.trim().to_string();
         }
         if f.new_server_key {
             c.server_key = crate::config::random_key();
