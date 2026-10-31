@@ -45,6 +45,7 @@ class DL_Party
 	ref array<string> leaders = new array<string>;  // drivers (convoy) or walkers, in the order they came
 	ref map<string, string> prices = new map<string, string>; // leader -> his trip's price text
 	int since;                                      // g_Game.GetTime() the countdown (re)started
+	bool anyway;                                    // a leader short of supplies who goes anyway: nobody joins him
 }
 
 // M3, target side: a passenger who arrived before his driver's car exists here.
@@ -415,6 +416,11 @@ modded class MissionServer
 	static const int DL_GROUP_MAX = 8;
 	protected ref map<string, bool> m_DL_Leaving = new map<string, bool>;  // steamIds being sent away (zone check skips them)
 	protected ref map<string, bool> m_DL_MustLeaveZone = new map<string, bool>; // trip failed: no new countdown until he steps out
+	// travel anyway (allowAnyway): refused leaders who were offered it, and who took it (steam id -> that zone)
+	protected ref map<string, ref DL_Zone> m_DL_AnywayOffer = new map<string, ref DL_Zone>;
+	protected ref map<string, ref DL_Zone> m_DL_Anyway = new map<string, ref DL_Zone>;
+	// travel time on: the party as it left (vehicles, seats, worn items), sent for the main menu scene (DL_MenuScene)
+	protected ref map<string, ref DL_SceneHold> m_DL_SceneOf = new map<string, ref DL_SceneHold>;
 	static const float DL_AIR_HEIGHT = 300;      // a plane comes in this high above the ground (plane entry not set)
 	static const float DL_AIR_MIN_SPEED = 45;    // m/s (162 km/h): at least this, so it doesn't stall
 	protected ref map<string, ref DL_ServerInfo> m_DL_GoHome = new map<string, ref DL_ServerInfo>; // died here, not the starting server: his respawn goes there
@@ -1127,7 +1133,10 @@ modded class MissionServer
 		if (p && p.action == "redirect" && p.resp && p.resp.target)
 		{
 			DL_Log.Info(identity.GetPlainId() + " belongs on " + p.resp.target.name + ", redirecting");
-			NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 8, "DriveLink", "Your character is on " + p.resp.target.name + ". Taking you there...", "");
+			string why = "Your character is on " + p.resp.target.name + ". Taking you there...";
+			if (p.resp.newPlayer)
+				why = "New characters start on " + p.resp.target.name + ". Taking you there...";
+			NotificationSystem.SendNotificationToPlayerIdentityExtended(identity, 8, "DriveLink", why, "");
 			DL_SendRedirect(identity, p.resp.target, "owner");
 			if (player)
 			{
@@ -2618,6 +2627,7 @@ modded class MissionServer
 #endif
 		DL_TakeFilmVotes();
 		DL_TakeDeaths();
+		DL_TakeAnyway();
 	}
 
 	protected void DL_CheckZones()
@@ -2638,6 +2648,8 @@ modded class MissionServer
 			if (!z || !pb.IsAlive())
 			{
 				m_DL_MustLeaveZone.Remove(sid);
+				m_DL_AnywayOffer.Remove(sid);
+				m_DL_Anyway.Remove(sid);
 				continue;                       // out of the zone: DL_TendParties drops him
 			}
 			// a failed trip doesn't retry by itself (test 2026-10-18: "Travel failed" every 5 s while standing in it)
@@ -2659,19 +2671,19 @@ modded class MissionServer
 			// that can't pay doesn't get one
 			DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, DL_CarOf(pb) != null, DL_CarOf(pb));
 			string missing = DL_TravelCost.Shortfall(price, DL_CrewOf(pb), DL_CarOf(pb), m_DL_Snap, m_DL_CarSnap);
-			if (missing != "" && DL_RefusesShortTrips())
+			if (missing != "" && DL_RefusesShortTrips() && !DL_GoesAnyway(sid, z))
 			{
 				m_DL_MustLeaveZone.Set(sid, true);
 				string dlMsg2184 = sid + " can't pay the trip to " + z.to + " (";
 				dlMsg2184 += price.Text() + "): " + missing;
 				DL_Log.Info(dlMsg2184);
-				DL_CrewNotify(pb, 12, "Not enough for " + z.name, price.Text() + ". Missing: " + missing + ". Step out of the zone and come back when you have it.");
+				DL_ShowShort(pb, z, price, "Step out of the zone and come back when you have it.");
 				continue;
 			}
 			string priceText = "";
 			if (price)
 				priceText = price.Text();
-			DL_JoinParty(pb, z, priceText, now);
+			DL_JoinParty(pb, z, priceText, now, missing != "" && DL_RefusesShortTrips());
 		}
 		DL_TendParties(now);
 	}
@@ -2720,20 +2732,20 @@ modded class MissionServer
 
 	// into the zone: with the party counting down there (same kind, room left) - its countdown starts again - or a
 	// new one
-	protected void DL_JoinParty(PlayerBase pb, DL_Zone z, string priceText, int now)
+	protected void DL_JoinParty(PlayerBase pb, DL_Zone z, string priceText, int now, bool anyway = false)
 	{
 		string sid = pb.GetIdentity().GetPlainId();
 		bool convoy = DL_CarOf(pb) != null;
 		string kind = DL_PartyKind(pb);
 		DL_Party party;
-		if (DL_Together(convoy))
+		if (DL_Together(convoy) && !anyway)
 		{
 			foreach (DL_Party p : m_DL_Parties)
 			{
 				int room = DL_GroupMax();
 				if (p.convoy)
 					room = DL_ConvoyMax();
-				if (p.zone == z && p.kind == kind && p.leaders.Count() < room)
+				if (p.zone == z && p.kind == kind && p.leaders.Count() < room && !p.anyway)
 				{
 					party = p;
 					break;
@@ -2748,6 +2760,7 @@ modded class MissionServer
 			party.zone = z;
 			party.convoy = convoy;
 			party.kind = kind;
+			party.anyway = anyway;
 			m_DL_Parties.Insert(party);
 		}
 		party.leaders.Insert(sid);
@@ -2900,7 +2913,7 @@ modded class MissionServer
 				dlMsg2406 += price.Text() + "): " + missing + " - the ";
 				dlMsg2406 += DL_PartyWord(party) + " goes without him";
 				DL_Log.Info(dlMsg2406);
-				DL_CrewNotify(gu.leader, 12, "Not enough for " + z.name, price.Text() + ". Missing: " + missing + ". The others went on.");
+				DL_ShowShort(gu.leader, z, price, "The others went on.");
 				continue;
 			}
 			going.Insert(gu);
@@ -2939,6 +2952,7 @@ modded class MissionServer
 			film.biomeFrom = DL_MyBiome();
 			film.biomeVia = z.viaBiome;
 		}
+		DL_RememberScene(going);
 		string pid = m_DL_Cfg.serverId + "-" + party.id.ToString() + "-" + g_Game.GetTime().ToString();
 		foreach (DL_PartyUnit pu : going)
 		{
@@ -3069,6 +3083,123 @@ modded class MissionServer
 		return !m_DL_Cfg.travel || m_DL_Cfg.travel.mode != "weakened";
 	}
 
+	// he chose to travel anyway through this zone (the "not enough" dialog)
+	protected bool DL_GoesAnyway(string sid, DL_Zone z)
+	{
+		DL_Zone az;
+		return m_DL_Cfg.travel && m_DL_Cfg.travel.allowAnyway && m_DL_Anyway.Find(sid, az) && az == z;
+	}
+
+	// The "not enough supplies" dialog for the crew of pb: what each one has and needs, the hub's odds of surviving,
+	// and (allowAnyway) a button for pb to travel anyway. The hub is asked first; without an answer the odds are unknown.
+	protected void DL_ShowShort(PlayerBase pb, DL_Zone z, DL_TravelPrice price, string tail)
+	{
+		if (!pb || !pb.GetIdentity() || !price)
+			return;
+		Transport car = DL_CarOf(pb);
+		array<PlayerBase> crew = DL_CrewOf(pb);
+		DL_OddsReq q = DL_TravelCost.Supplies(price, crew, car, m_DL_Snap, m_DL_CarSnap);
+		q.serverId = m_DL_Cfg.serverId;
+		q.key = m_DL_Cfg.hubKey;
+		q.kind = DL_PartyKind(pb);
+		DL_ShortInfo info = new DL_ShortInfo();
+		info.zone = z.name;
+		info.price = price.Text();
+		if (car)
+			info.vehicle = DL_Veh.Kind(car);
+		info.people = q.people;
+		info.fuel = q.fuel;
+		info.needFuel = q.needFuel;
+		info.needSpare = q.needSpare;
+		info.spareOk = q.spareOk;
+		info.leader = pb.GetIdentity().GetName();
+		info.tail = tail;
+		string sid = pb.GetIdentity().GetPlainId();
+		if (m_DL_Cfg.travel && m_DL_Cfg.travel.allowAnyway)
+			m_DL_AnywayOffer.Set(sid, z);
+		string json;
+		string err;
+		if (!JsonFileLoader<DL_OddsReq>.MakeData(q, json, err, false))
+		{
+			DL_Log.Warn("odds json: " + err);
+			DL_SendShort(sid, info, false, "");
+			return;
+		}
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/odds?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, json, new DL_OddsWaiter(this, sid, info), "OnAnswer", "odds " + sid);
+	}
+
+	// the hub's odds came (or not): the dialog goes to everyone in the crew; only the leader gets the buttons
+	void DL_SendShort(string sid, DL_ShortInfo info, bool ok, string body)
+	{
+		if (ok)
+		{
+			DL_OddsResp r;
+			string err;
+			JsonSerializer js = new JsonSerializer();
+			if (js.ReadFromString(r, body, err) && r && r.ok && r.odds)
+			{
+				for (int i = 0; i < info.people.Count() && i < r.odds.Count(); i++)
+					info.people[i].odds = r.odds[i];
+			}
+		}
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb || !pb.GetIdentity())
+			return;
+		bool offer = m_DL_AnywayOffer.Contains(sid);
+		array<PlayerBase> crew = DL_CrewOf(pb);
+		string odds = "";
+		foreach (DL_OddsPerson op : info.people)
+			odds += " " + op.name + " " + op.odds.ToString() + "%";
+		DL_Log.Info(sid + " short of supplies for " + info.zone + ": odds" + odds + ", travel anyway offered " + offer.ToString());
+		for (int c = 0; c < crew.Count(); c++)
+		{
+			PlayerBase m = crew[c];
+			if (!m || !m.GetIdentity())
+				continue;
+			info.you = c;
+			info.canGo = offer && m == pb;
+			string json;
+			string jerr;
+			if (!JsonFileLoader<DL_ShortInfo>.MakeData(info, json, jerr, false))
+				continue;
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write(json);
+			rpc.Send(null, DL_Const.RPC_SHORT, true, m.GetIdentity());
+		}
+	}
+
+	// answers to the dialog: "go" lets him into the zone's countdown once more, short or not
+	protected void DL_TakeAnyway()
+	{
+		array<string> q = DL_AnywayAnswers.Queue();
+		if (q.Count() == 0)
+			return;
+		array<string> answers = new array<string>;
+		answers.Copy(q);
+		q.Clear();
+		foreach (string a : answers)
+		{
+			array<string> parts = new array<string>;
+			a.Split("|", parts);
+			if (parts.Count() != 2)
+				continue;
+			string sid = parts[0];
+			DL_Zone z;
+			if (!m_DL_AnywayOffer.Find(sid, z))
+				continue;                       // no offer (or he left the zone): nothing to answer
+			m_DL_AnywayOffer.Remove(sid);
+			PlayerBase pb = DL_FindPlayer(sid);
+			if (parts[1] != "1" || !pb || DL_ZoneFor(pb) != z || !m_DL_Cfg.travel || !m_DL_Cfg.travel.allowAnyway)
+			{
+				DL_Log.Info(sid + " stays (travel anyway declined)");
+				continue;
+			}
+			DL_Log.Info(sid + " travels anyway through " + z.name);
+			m_DL_Anyway.Set(sid, z);
+			m_DL_MustLeaveZone.Remove(sid);  // the next zone check starts his countdown
+		}
+	}
+
 	// pb plus, when he drives a car, every other player in it (seat order)
 	protected array<PlayerBase> DL_CrewOf(PlayerBase pb)
 	{
@@ -3181,18 +3312,23 @@ modded class MissionServer
 		// the price again: someone may have eaten, drunk or burnt fuel during the countdown
 		DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, car != null, car);
 		string missing = DL_TravelCost.Shortfall(price, crew, car, m_DL_Snap, m_DL_CarSnap);
-		if (missing != "" && DL_RefusesShortTrips())
+		bool anyway = DL_GoesAnyway(sid, z);
+		m_DL_Anyway.Remove(sid);
+		if (missing != "" && DL_RefusesShortTrips() && !anyway)
 		{
 			m_DL_MustLeaveZone.Set(sid, true);
 			string dlMsg2683 = sid + " can't pay the trip to " + z.to + " any more (";
 			dlMsg2683 += price.Text() + "): " + missing;
 			DL_Log.Info(dlMsg2683);
-			DL_CrewNotify(pb, 12, "Not enough for " + z.name, price.Text() + ". Missing: " + missing + ".");
+			DL_ShowShort(pb, z, price, "");
 			return;
 		}
-		// weakened mode: the road is played now, once for the whole crew (Research/travel-cost-design.md section 4)
+		if (missing != "" && anyway)
+			DL_Log.Info(sid + " is short (" + missing + ") and travels anyway: the road decides");
+		// weakened mode: the road is played now, once for the whole crew (Research/travel-cost-design.md section 4).
+		// Travelling anyway (refuse mode) plays it the same way.
 		DL_Journey journey;
-		if (price && !DL_RefusesShortTrips())
+		if (price && (!DL_RefusesShortTrips() || (anyway && missing != "")))
 		{
 			journey = DL_Journey.Run(m_DL_Cfg.travel, z, crew, car, m_DL_Snap, m_DL_CarSnap, true);
 			string jtext = journey.Story();
@@ -3218,6 +3354,14 @@ modded class MissionServer
 			film.biomeVia = z.viaBiome;
 		}
 		m_DL_SlotOf.Remove(sid);
+		array<ref DL_PartyUnit> sceneUnits = new array<ref DL_PartyUnit>;
+		DL_PartyUnit su = new DL_PartyUnit();
+		su.leader = pb;
+		su.car = car;
+		foreach (PlayerBase sm : crew)
+			su.crew.Insert(sm);
+		sceneUnits.Insert(su);
+		DL_RememberScene(sceneUnits);
 		// a crew in one car is a party too (the hub's Players page keeps them together)
 		if (crew.Count() > 1)
 		{
@@ -3415,6 +3559,8 @@ modded class MissionServer
 		JsonSerializer js = new JsonSerializer();
 		if (ok)
 			js.ReadFromString(r, body, err);
+		DL_SceneHold scene = m_DL_SceneOf.Get(sid);
+		m_DL_SceneOf.Remove(sid);
 		DL_CrewTrip trip = m_DL_TripOf.Get(sid);
 		if (trip)
 		{
@@ -3459,7 +3605,9 @@ modded class MissionServer
 		}
 		if (r.readyIn > 0)
 		{
-			// travel time: he is on the road. Back to the main menu with the time; every server refuses him until then
+			// travel time: he is on the road. Back to the main menu with the time; every server refuses him until then.
+			// The menu shows him on the road with whoever travels with him (DL_MenuScene).
+			DL_SendScene(sid, scene, r.target.name, r.readyIn);
 			DL_SendKick(sid, "On the road to " + r.target.name + ": about " + DL_TravelCost.Duration(r.readyIn) + ". Join " + r.target.name + " when that time has passed (no server lets you in before).");
 			DL_Log.Info(sid + " is on the road to " + r.target.name + " for " + r.readyIn.ToString() + " s");
 		}
@@ -3473,6 +3621,87 @@ modded class MissionServer
 		// give the RPC a moment to reach the client, then remove the character WITHOUT killing it (nothing may
 		// stay behind: no body, no dropped gear)
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveTraveller, 1500, false, sid);
+	}
+
+	// ---------------- main menu scene (travel time) ----------------
+
+	// the items attached to e (clothes on a character, parts on a vehicle), with their slots
+	protected void DL_SceneItems(EntityAI e, array<ref DL_MenuItem> into)
+	{
+		if (!e || !e.GetInventory())
+			return;
+		for (int i = 0; i < e.GetInventory().AttachmentCount(); i++)
+		{
+			EntityAI a = e.GetInventory().GetAttachmentFromIndex(i);
+			if (!a)
+				continue;
+			DL_MenuItem it = new DL_MenuItem();
+			it.type = a.GetType();
+			InventoryLocation il = new InventoryLocation();
+			if (a.GetInventory().GetCurrentInventoryLocation(il) && il.GetSlot() >= 0)
+				it.slot = InventorySlots.GetSlotName(il.GetSlot());
+			into.Insert(it);
+		}
+	}
+
+	// the party as it leaves (travel time only): each member gets the same scene, with his own place in it
+	protected void DL_RememberScene(array<ref DL_PartyUnit> units)
+	{
+		if (!m_DL_Cfg.travel || !m_DL_Cfg.travel.timeEnabled || !units)
+			return;
+		DL_MenuScene scene = new DL_MenuScene();
+		array<string> sids = new array<string>;
+		foreach (DL_PartyUnit u : units)
+		{
+			int vi = -1;
+			if (u.car)                               // boats too: the menu puts them on its map's water spot
+			{
+				DL_MenuVehicle mv = new DL_MenuVehicle();
+				mv.type = u.car.GetType();
+				DL_SceneItems(u.car, mv.parts);
+				vi = scene.vehicles.Count();
+				scene.vehicles.Insert(mv);
+			}
+			foreach (PlayerBase pb : u.crew)
+			{
+				if (!pb || !pb.GetIdentity())
+					continue;
+				DL_MenuMember mm = new DL_MenuMember();
+				mm.name = pb.GetIdentity().GetName();
+				mm.charType = pb.GetType();
+				DL_SceneItems(pb, mm.worn);
+				if (vi >= 0)
+				{
+					mm.vehicle = vi;
+					mm.seat = u.car.CrewMemberIndex(pb);
+				}
+				scene.members.Insert(mm);
+				sids.Insert(pb.GetIdentity().GetPlainId());
+			}
+		}
+		DL_SceneHold hold = new DL_SceneHold();
+		hold.scene = scene;
+		hold.sids = sids;
+		foreach (string sid : sids)
+			m_DL_SceneOf.Set(sid, hold);
+	}
+
+	protected void DL_SendScene(string sid, DL_SceneHold hold, string target, int seconds)
+	{
+		if (!hold || !hold.scene)
+			return;
+		hold.scene.target = target;
+		hold.scene.seconds = seconds;
+		hold.scene.you = hold.sids.Find(sid);
+		string json;
+		string err;
+		if (!JsonFileLoader<DL_MenuScene>.MakeData(hold.scene, json, err, false))
+		{
+			DL_Log.Warn("menu scene json: " + err);
+			return;
+		}
+		DL_SendFilmRpc(sid, json, DL_Const.RPC_MENU_SCENE);
+		DL_Log.Detail(sid + "'s menu scene sent: " + hold.scene.vehicles.Count().ToString() + " vehicles, " + hold.scene.members.Count().ToString() + " people");
 	}
 
 	// Derk 2026-10-18: move the departed car (with the logging-out driver still in it) out of everyone's reach until
@@ -3635,6 +3864,21 @@ class DL_DiedResp
 {
 	bool ok;
 	ref DL_ServerInfo home;   // the starting server, when he must start his next life there (not this server)
+}
+
+class DL_SceneHold
+{
+	ref DL_MenuScene scene;
+	ref array<string> sids;   // steam ids, in the order of scene.members
+}
+
+class DL_OddsWaiter : Managed
+{
+	protected MissionServer m_M;
+	protected string m_Sid;
+	protected ref DL_ShortInfo m_Info;
+	void DL_OddsWaiter(MissionServer m, string sid, DL_ShortInfo info) { m_M = m; m_Sid = sid; m_Info = info; }
+	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_SendShort(m_Sid, m_Info, ok, body); }
 }
 
 class DL_DiedWaiter : Managed

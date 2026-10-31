@@ -78,6 +78,9 @@ modded class DayZGame
 	protected ref DL_TransitionFilm m_DL_Transition;
 	protected bool m_DL_TransitionKey;
 	protected bool m_DL_TransferLogin;
+	protected int m_DL_SceneId;                                  // the menu scene being received in parts
+	protected ref array<string> m_DL_SceneParts = new array<string>;
+	protected int m_DL_SceneGot;
 
 	bool DL_IsTransferLogin()
 	{
@@ -145,6 +148,11 @@ modded class DayZGame
 			DL_Transition().Receive(ctx);
 			return;
 		}
+		if (rpc_type == DL_Const.RPC_MENU_SCENE && IsClient())
+		{
+			DL_TakeScenePart(ctx);
+			return;
+		}
 		if (rpc_type == DL_Const.RPC_KICK && IsClient())
 		{
 			DL_ClearTransferLogin();
@@ -197,6 +205,46 @@ modded class DayZGame
 			return;
 		}
 		super.OnRPC(sender, target, rpc_type, ctx);
+	}
+
+	// RPC_MENU_SCENE: int id, int part, int parts, string chunk; complete = saved for the main menu (DL_MenuScene)
+	protected void DL_TakeScenePart(ParamsReadContext ctx)
+	{
+		int id;
+		int part;
+		int parts;
+		string chunk;
+		if (!ctx.Read(id) || !ctx.Read(part) || !ctx.Read(parts) || !ctx.Read(chunk) || parts < 1 || part < 0 || part >= parts)
+			return;
+		if (id != m_DL_SceneId || m_DL_SceneParts.Count() != parts)
+		{
+			m_DL_SceneId = id;
+			m_DL_SceneParts.Clear();
+			for (int i = 0; i < parts; i++)
+				m_DL_SceneParts.Insert("");
+			m_DL_SceneGot = 0;
+		}
+		if (m_DL_SceneParts[part] == "")
+			m_DL_SceneGot++;
+		m_DL_SceneParts[part] = chunk;
+		if (m_DL_SceneGot < parts)
+			return;
+		string json = "";
+		foreach (string pc : m_DL_SceneParts)
+			json += pc;
+		m_DL_SceneParts.Clear();
+		m_DL_SceneId = 0;
+		DL_MenuScene scene;
+		string err;
+		JsonSerializer js = new JsonSerializer();
+		if (!js.ReadFromString(scene, json, err) || !scene || !scene.members)
+		{
+			DL_Log.Warn("menu scene unreadable: " + err);
+			return;
+		}
+		scene.until = DL_MenuScene.Now() + scene.seconds;
+		scene.Save();
+		DL_Log.Detail("menu scene saved: " + scene.vehicles.Count().ToString() + " vehicles, " + scene.members.Count().ToString() + " people, " + scene.seconds.ToString() + " s to " + scene.target);
 	}
 
 	// Called from the main menu once we are disconnected (5_Mission DL_MainMenu).

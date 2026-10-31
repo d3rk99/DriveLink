@@ -10,6 +10,10 @@ modded class MissionMainMenu
 	static const int DL_SETTLE_MS = 3000;   // wait at least this long in the menu
 	static const int DL_GIVE_UP_MS = 15000; // connect anyway after this long
 	protected int m_DL_Waited;
+	// travel time: "On the road to X: about 1 h 12 min left" at the top while the trip lasts (DL_MenuScene)
+	protected ref DL_MenuScene m_DL_Road;
+	protected TextWidget m_DL_RoadText;
+	protected float m_DL_RoadTick;
 
 	override void OnInit()
 	{
@@ -29,10 +33,44 @@ modded class MissionMainMenu
 		}
 		else if (GetDayZGame().DL_HasNotice())
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_Notice, 500, false);
+		if (!GetDayZGame().DL_HasPending())
+			m_DL_Road = DL_MenuScene.Load();
+	}
+
+	override void OnUpdate(float timeslice)
+	{
+		super.OnUpdate(timeslice);
+		if (!m_DL_Road)
+			return;
+		m_DL_RoadTick -= timeslice;
+		if (m_DL_RoadTick > 0)
+			return;
+		m_DL_RoadTick = 1;
+		if (!m_DL_RoadText)
+		{
+			WorkspaceWidget ws = g_Game.GetWorkspace();
+			if (!ws)
+				return;
+			int w;
+			int h;
+			GetScreenSize(w, h);
+			int flags = WidgetFlags.VISIBLE | WidgetFlags.EXACTPOS | WidgetFlags.EXACTSIZE | WidgetFlags.IGNOREPOINTER | WidgetFlags.CENTER | WidgetFlags.VCENTER;
+			m_DL_RoadText = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, h * 0.015, w, h * 0.06, flags, ARGB(255, 240, 220, 160), 29000));
+			if (!m_DL_RoadText)
+				return;
+		}
+		int left = m_DL_Road.Left();
+		if (left > 0)
+			m_DL_RoadText.SetText("On the road to " + m_DL_Road.target + ": about " + DL_TravelCost.Duration(left) + " left");
+		else
+			m_DL_RoadText.SetText("You have arrived: join " + m_DL_Road.target);
 	}
 
 	override void OnMissionFinish()
 	{
+		if (m_DL_RoadText)
+			m_DL_RoadText.Unlink();
+		m_DL_RoadText = null;
 		GetDayZGame().DL_Transition().MissionFinishing();
 		super.OnMissionFinish();
 	}
