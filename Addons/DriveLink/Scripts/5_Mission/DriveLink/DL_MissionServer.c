@@ -2809,7 +2809,7 @@ modded class MissionServer
 	// every tick: drop who left (the zone, the car, the wheel), send the parties whose countdown ran out
 	protected void DL_TendParties(int now)
 	{
-		array<DL_Party> go = new array<DL_Party>;
+		array<ref DL_Party> go = new array<ref DL_Party>;   // ref: holds each party after it leaves m_DL_Parties
 		for (int i = m_DL_Parties.Count() - 1; i >= 0; i--)
 		{
 			DL_Party party = m_DL_Parties[i];
@@ -2858,6 +2858,11 @@ modded class MissionServer
 	// the countdown of a party ran out: one unit = the usual trip; more = one road for all, each unit sent as usual
 	protected void DL_DepartParty(DL_Party party)
 	{
+		if (!party)
+		{
+			DL_Log.Warn("DL_DepartParty: no party (departure dropped)");
+			return;
+		}
 		DL_Zone z = party.zone;
 		array<ref DL_PartyUnit> units = new array<ref DL_PartyUnit>;
 		foreach (string l : party.leaders)

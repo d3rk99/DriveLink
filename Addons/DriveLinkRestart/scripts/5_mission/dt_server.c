@@ -214,7 +214,8 @@ modded class MissionServer
     }
     override protected void DL_DepartParty(DL_Party party)
     {
-        if(!party||m_DT_Cancelled.Contains(party))return;
+        if(!party){Print("[DT] DEPART_PARTY_NULL");return;}
+        if(m_DT_Cancelled.Contains(party))return;
         bool ready=true;
         foreach(string sid:party.leaders)if(!DT_Ensure(DL_FindPlayer(sid),party.zone,party))ready=false;
         if(ready)
