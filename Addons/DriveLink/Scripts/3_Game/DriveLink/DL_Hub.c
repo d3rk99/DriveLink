@@ -78,6 +78,7 @@ class DL_ArriveResp
 	string from;
 	string arrival;
 	int bytes;                // length of the snapshot /api/payload will send (to spot a cut-off body)
+	bool newPlayer;           // "redirect": his first login anywhere; new characters start on the starting server
 	ref DL_PlayerData payload; // NOT in the hub's JSON: filled from the /api/payload body by DL_Hub.ParsePayload
 	ref DL_ServerInfo target;
 }
@@ -100,6 +101,55 @@ class DL_DepartResp
 	string token;
 	int readyIn;              // seconds on the road (0 = he goes straight to the target)
 	ref DL_ServerInfo target;
+}
+
+// A crew short of supplies (refuse mode): what each one has and needs, and his chance of surviving the trip if they
+// go anyway. POST /api/odds sends it to the hub (it works out "odds" with this server's travel rules, Hub/src/odds.rs);
+// RPC_SHORT sends it with the hub's answer to the crew's clients as JSON (DL_ShortInfo, the dialog).
+class DL_OddsPerson
+{
+	string name;
+	float health;             // 0..100
+	float food;               // kcal he can eat on the way (bars, stomach, what he carries; the driver also the trunk)
+	float needFood;
+	float water;              // ml
+	float needWater;
+	int odds = -1;            // % to arrive alive (from the hub; -1 = unknown)
+}
+
+class DL_OddsReq
+{
+	string serverId;
+	string key;
+	float km;
+	string kind;              // "foot" | "land" | "water" | "air"
+	ref array<ref DL_OddsPerson> people = new array<ref DL_OddsPerson>;
+	float fuel;               // litres: tank + gasoline canisters
+	float needFuel;
+	bool needSpare;           // the trip needs a spare wheel or a tyre repair kit (refuse mode rule)
+	bool spareOk;             // ... and they have one, or need none
+}
+
+class DL_OddsResp
+{
+	bool ok;
+	ref array<int> odds;
+}
+
+class DL_ShortInfo
+{
+	string zone;              // the zone's name
+	string price;             // the trip (DL_TravelPrice.Text)
+	string vehicle;           // "" on foot, else the vehicle's kind ("car", "boat" ...)
+	ref array<ref DL_OddsPerson> people;
+	float fuel;
+	float needFuel;
+	bool needSpare;
+	bool spareOk;
+	int you = -1;             // index of the receiving player in people
+	bool canGo;               // he leads the trip and the server allows travelling anyway
+	string leader;            // who decides (the driver / the walker)
+	string tail;              // a last line (e.g. "The others went on.")
 }
 
 // Calls back <target>.<fn>(bool ok, string body) once, on success, error or timeout.

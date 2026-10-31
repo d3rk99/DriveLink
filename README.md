@@ -56,7 +56,9 @@ Ports: **7290** (HTTP) and **7291** (HTTPS, self-signed unless you set `tlsCert`
      (convoys line up behind it); a boat goes on the nearest free water, or a boat spot you pin.
    - **Travelled cars** (servers with `carEconomy` "track" or "veto"): every car that has travelled, where its server
      last reported it (every minute). Blue = this server's own, yellow = visiting. Click one for its home server,
-     health, fuel and its last 10 trips.
+     health, fuel and its last 10 trips. Only cars that have been through a leaving zone are shown, and only from
+     servers whose config.json has `"carEconomy": "track"` or `"veto"` (the default `"off"` sends no reports; the
+     Map page says so).
 
 Players subscribe to [DriveLink on Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3824238331)
 and load the server's required mods. Matching-mod routes do not need the Windows helper. Routes that switch
@@ -102,7 +104,12 @@ Rules for trips that **start** on that server, per 10 km of the zone's distance.
 | **Realism** | Real-world numbers (Research/travel-presets.md), walking pace, real road risks |
 
 - **When a player is short**: refuse the trip, or let them go and the road decides (they may arrive weakened, lose
-  the car, or die on the way).
+  the car, or die on the way). A refused player sees a table of what each person has and what the trip needs, with
+  their chance of surviving it (worked out by the hub from health and supplies).
+- **When a trip is refused**: optionally let the player **travel anyway** from that dialog; the trip is then played like
+  arrive-weakened mode.
+- **Road events every** (km, 1-1000, default 10): every % chance (finds, infected, flats, drowning) is rolled once per
+  leg of this length. Costs stay per 10 km.
 - Food in kcal, water in ml (a full DayZ bar is 5000 of each; a can of beans is 800 kcal, a water bottle 1 L).
 - Fuel: flat litres per 10 km, or each vehicle's own in-game consumption.
 - On the road (arrive-weakened mode) players may find gas stations, food and water; closed cans count when someone
@@ -113,7 +120,8 @@ Rules for trips that **start** on that server, per 10 km of the zone's distance.
 ### Starting server (hub, Servers page)
 
 Whoever dies on any other server starts their next life here: the respawn is sent to it and they spawn fresh on its
-coast. Off = everyone respawns where they died.
+coast. A new player's first login on any other server is sent here too. Off = everyone respawns where they died and
+new players start where they join.
 
 ### config.json (on each DayZ server)
 

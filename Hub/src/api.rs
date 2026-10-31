@@ -36,6 +36,9 @@ pub struct Hub {
     pub spots: Mutex<HashMap<String, Value>>,
     pub client_mods: Mutex<HashMap<String, crate::mod_policy::Observation>>,
     pub mod_query_notify: tokio::sync::Notify,
+    /// server id -> its last car report (POST /api/cars): when, and how many travelled cars it holds. The Map page
+    /// says when a server sends none (carEconomy "off" in its config.json), instead of showing an empty map.
+    pub car_reports: Mutex<HashMap<String, (String, usize)>>,
 }
 
 /// The protocol this hub speaks with the DayZ mod (DL_Const.PROTOCOL): requests, answers and the snapshot format.
@@ -109,6 +112,7 @@ pub fn routes(h: Shared) -> Router {
         .route("/api/layout", post(layout))
         .route("/api/spots", post(spots))
         .route("/api/cars", post(cars))
+        .route("/api/odds", post(odds))
         .route("/health", get(health))
         .merge(crate::admin::routes(h.clone()))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY + 1))
@@ -405,6 +409,7 @@ async fn cars(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body: 
         Ok(r) => r,
         Err(r) => return r,
     };
+    h.car_reports.lock().unwrap().insert(sid.clone(), (chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true), r.here.len()));
     let mut db = h.db.lock().unwrap();
     match crate::cars::report(&mut db, &sid, &r.left, &r.here) {
         Ok(away) => {
@@ -415,6 +420,24 @@ async fn cars(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body: 
         }
         Err(e) => db_error(e),
     }
+}
+
+// POST /api/odds  {serverId,key,km,kind,people:[{name,health,food,needFood,water,needWater}],fuel,needFuel,spareOk}
+// a player short of supplies: each person's chance (%) to arrive alive if they travel anyway (src/odds.rs), with
+// this server's travel rules
+async fn odds(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body: Bytes) -> Response {
+    let sid = match check(&h, "/api/odds", &a, &q, &body) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let trip: crate::odds::Trip = match parse("/api/odds", &plain_numbers(&String::from_utf8_lossy(&body)).into_bytes()) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let travel = h.cfg().server(&sid).map(|s| s.travel.clone()).unwrap_or_default();
+    let odds = crate::odds::survival(&travel, &trip);
+    crate::logf!("odds on {sid}: {} km by {}, {} people -> {odds:?} %", trip.km, if trip.kind.is_empty() { "foot" } else { &trip.kind }, trip.people.len());
+    reply(StatusCode::OK, json!({"ok": true, "odds": odds}))
 }
 
 #[derive(Deserialize)]
@@ -599,6 +622,18 @@ async fn arrive(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body
             crate::logf!("arrive {} on {here}: owned by {o}, redirect", r.steam_id);
             return reply(StatusCode::OK, json!({"ok": true, "action": "redirect", "target": server_out(&h, o)}));
         }
+    }
+    // first time the hub sees him: with a starting server set, his first life starts there, not where he joined
+    let home = h.cfg().home_server.clone();
+    if owner.is_none() && !home.is_empty() && home != here && h.cfg().server(&home).is_some() {
+        if let Err(e) = set_owner(&tx, &r.steam_id, Some(&home)).and_then(|_| touch(&tx, &r, &here)) {
+            return db_error(e);
+        }
+        if let Err(e) = tx.commit() {
+            return db_error(e);
+        }
+        crate::logf!("arrive {} on {here}: new player, sent to the starting server {home}", r.steam_id);
+        return reply(StatusCode::OK, json!({"ok": true, "action": "redirect", "newPlayer": true, "target": server_out(&h, &home)}));
     }
     if let Err(e) = set_owner(&tx, &r.steam_id, Some(&here)).and_then(|_| touch(&tx, &r, &here)) {
         return db_error(e);

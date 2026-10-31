@@ -25,6 +25,10 @@ class DL_Const
 	static const int RPC_FILM_VOTE = 4810006;  // client -> server: he pressed Space to skip the film (or it ended)
 	static const int RPC_FILM_SKIP = 4810007;  // server -> clients watching one film: votes, total, skip now
 	static const int RPC_CREW_WAIT = 4810004;  // server -> client: crew waiting room (phase, here, expected, text, start engine)
+	static const int RPC_SHORT = 4810013;      // server -> client: short of supplies, DL_ShortInfo as JSON (the dialog)
+	static const int RPC_GO_ANYWAY = 4810014;  // client -> server (his player): bool, travel anyway or not
+	static const int RPC_MENU_SCENE = 4810015; // server -> client: who travels with him, for the main menu (DL_MenuScene),
+	                                           // in parts like RPC_FILM
 	static const int WAIT_SHOW = 1;            // black screen + "n/m connected"
 	static const int WAIT_DONE = 2;            // lift the black screen (and the driver starts the engine)
 	static const string SLOT_CARGO = "#cargo";
@@ -65,8 +69,10 @@ class DL_TravelRules
 	float fuelScale = 1;
 	float fuelBoatScale = 1;
 	float swimFoodX = 1.5;    // swimming (a boat party with no boat): food and water x this of the foot rates
-	float drownPct = 6;       // weakened: chance to drown per 10 km swum, x2 the 2nd 10 km, x3 the 3rd ...
-	// weakened: what the road may give, chance per 10 km (before anything runs out)
+	float drownPct = 6;       // weakened: chance to drown per event leg swum, x2 the 2nd leg, x3 the 3rd ...
+	float eventKm = 10;       // the road is played in legs of this many km: every chance is rolled once per leg
+	bool allowAnyway;         // refuse mode: a refused player can choose to travel anyway (played like weakened)
+	// weakened: what the road may give, chance per event leg (before anything runs out)
 	float findGasPct = 6;     // a working gas station (a fuel dock for boats): every tank + gasoline canister full
 	float findFoodPct = 8;    // food: a few items into the trunk / their bags
 	float findWaterPct = 12;  // a well (rain at sea): everyone drinks, every bottle / canteen filled
@@ -80,7 +86,7 @@ class DL_TravelRules
 	float biteDeathPct = 10;
 	float starveDeathPct = 20;
 	float spareNeededKm;      // refuse mode: car trips longer than this need a spare wheel or a TireRepairKit (0 = off)
-	float flatPct = 3;        // weakened mode (step 4): flat tyre chance per 10 km
+	float flatPct = 3;        // weakened mode (step 4): flat tyre chance per event leg
 	string biome;             // this server's look in the road film: forest|field|desert|snow, "" = from the map
 	// group travel (Research/group-travel.md), parties leaving here; 0 = the default
 	bool noGroups;            // walkers who enter a zone together do NOT travel as a group
@@ -91,6 +97,14 @@ class DL_TravelRules
 	// the road film of trips that END here
 	bool filmOff;             // story text only
 	bool voteSkipOff;         // no skipping (else everyone watching presses Space)
+
+	// km per road event leg; an older hub sends none (0) = the old 10 km
+	float EventKm()
+	{
+		if (eventKm < 1)
+			return 10;
+		return Math.Min(eventKm, 1000);
+	}
 }
 
 // Where you come out when you arrive from another server.

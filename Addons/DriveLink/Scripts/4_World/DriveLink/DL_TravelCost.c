@@ -209,6 +209,66 @@ class DL_TravelCost
 	}
 
 
+	// The same count as Shortfall, as numbers: each person's food / water against the trip's, the vehicle's fuel,
+	// the spare wheel rule. For the "not enough" dialog and the hub's odds (/api/odds).
+	static DL_OddsReq Supplies(DL_TravelPrice p, array<PlayerBase> crew, Transport car, DL_Snapshot snap, DL_CarSnapshot carSnap)
+	{
+		DL_OddsReq q = new DL_OddsReq();
+		if (!p)
+			return q;
+		q.km = p.km;
+		DL_CarData cd;
+		if (car && p.byCar)
+			cd = carSnap.Capture(car);
+		array<ref DL_PlayerData> snaps = new array<ref DL_PlayerData>;
+		array<PlayerBase> who = new array<PlayerBase>;
+		foreach (PlayerBase cp : crew)
+		{
+			if (!cp)
+				continue;
+			snaps.Insert(snap.Capture(cp));
+			who.Insert(cp);
+		}
+		array<DL_CarData> partyTrunks = new array<DL_CarData>;
+		if (cd)
+			partyTrunks.Insert(cd);
+		float keep = PartyKeep(snaps, partyTrunks);
+		float canisters = 0;
+		for (int i = 0; i < who.Count(); i++)
+		{
+			DL_CarData trunk;
+			if (i == 0)
+				trunk = cd;
+			float food;
+			float water;
+			float canL;
+			Count(snaps[i], trunk, food, water, canL, keep);
+			canisters += canL;
+			DL_OddsPerson op = new DL_OddsPerson();
+			op.name = "you";
+			if (who[i].GetIdentity())
+				op.name = who[i].GetIdentity().GetName();
+			op.health = who[i].GetHealth("", "Health");
+			op.food = Math.Floor(food);
+			op.needFood = Math.Ceil(p.foodKcal);
+			op.water = Math.Floor(water);
+			op.needWater = Math.Ceil(p.waterMl);
+			q.people.Insert(op);
+		}
+		q.spareOk = true;
+		if (car && p.byCar)
+		{
+			q.fuel = Math.Floor(FuelLOf(car) + canisters);
+			q.needFuel = Math.Ceil(p.fuelL);
+			if (p.spareKm > 0)
+			{
+				q.needSpare = true;
+				q.spareOk = HasSpareOrKit(car, cd, snaps);
+			}
+		}
+		return q;
+	}
+
 	// ---------------- spare wheel / tyre repair kit ----------------
 
 	// the wheel types this car runs on (its CarWheel attachments), e.g. HatchbackWheel

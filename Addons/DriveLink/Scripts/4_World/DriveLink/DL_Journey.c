@@ -1,5 +1,5 @@
 // DriveLink travel step 4 (Research/travel-cost-design.md section 4 + 4b): "arrive weakened" mode. The source server
-// plays the road ONCE for the whole party before anyone leaves, in 10 km legs: fuel (luck when it runs dry, else the
+// plays the road ONCE for the whole party before anyone leaves, in legs of eventKm (hub Travel settings, 10 km by default): fuel (luck when it runs dry, else the
 // car is left), flat tyres (spare wheel / repair kit, else the car is left), infected on the walked legs, food and
 // water (what nothing could pay = hunger/thirst damage, past half of the cost a chance to die). Everything happens to
 // the SNAPSHOTS (DL_PlayerData / DL_CarData), the live characters are untouched. The result travels in each
@@ -54,7 +54,7 @@ class DL_Journey
 	float swumKm;             // a boat party with no boat (seat) left swims; the walk legs of the water
 	bool water;               // a party of boats (parties are by kind: boats only travel with boats)
 	bool air;                 // a party of planes: no flats, nothing to find up there, no fuel but what they carry
-	// swimming: the chance to drown on a 10 km leg grows with every 10 km already swum (drownPct, x2, x3 ...);
+	// swimming: the chance to drown on a leg grows with every leg already swum (drownPct, x2, x3 ...);
 	// beside a boat of the party (holding on) half that, hurt (health under 50) half as much again
 	static const float SWIM_SPEED_X = 0.5;    // at half the walking speed
 	int seconds;              // on the road (travel time on), else 0
@@ -93,15 +93,23 @@ class DL_Journey
 		return null;
 	}
 
-	// the chance (percent) that swimmer tv drowns on this leg (f = its share of 10 km)
-	protected float DrownPct(DL_TravelRules t, DL_Traveller tv, float f)
+	// the chance (percent) that swimmer tv drowns on this leg (g = its share of a full event leg)
+	protected float DrownPct(DL_TravelRules t, DL_Traveller tv, float g)
 	{
-		float pct = t.drownPct * f * (1 + swumKm / 10.0);
+		float pct = t.drownPct * g * (1 + swumKm / t.EventKm());
 		if (!carLost)
 			pct *= 0.5;                       // a boat of the party is there to hold on to
 		if (tv.d && tv.d.health < 50)
 			pct *= 1.5;
 		return Math.Min(pct, 90);
+	}
+
+	// health under 50 (of 100): death chances from bites and hunger x1.5, like drowning (the hub's odds use the same)
+	static float HurtX(DL_PlayerData d)
+	{
+		if (d && d.health < 50)
+			return 1.5;
+		return 1;
 	}
 
 	static bool Roll(float pct)
@@ -243,14 +251,18 @@ class DL_Journey
 		}
 		float km = z.distanceKm;
 		float done = 0;
+		float evKm = t.EventKm();
+		if (km / evKm > 2000)
+			evKm = km / 2000;                // a very long trip in 1 km legs: at most 2000 legs
 		while (done < km - 0.001)
 		{
-			float leg = Math.Min(10.0, km - done);
-			float f = leg / 10.0;
+			float leg = Math.Min(evKm, km - done);
+			float f = leg / 10.0;            // costs and wear are per 10 km
+			float g = leg / evKm;            // chances are per event leg
 			float at = done + leg;
 			// the road gives: a gas station, food, water (weakened mode; not when everyone is dead)
 			if (weakened && j.Alive() > 0 && !(j.air && j.Driving() > 0 && j.In(-1).Count() == 0))
-				j.Finds(t, f, done);         // not while flying
+				j.Finds(t, g, done);         // not while flying
 			// each car: a driver, fuel, wear, a flat
 			foreach (DL_JVehicle cv : j.vehicles)
 			{
@@ -258,7 +270,7 @@ class DL_Journey
 					continue;
 				if (!j.TakeWheel(cv, done))
 					continue;
-				j.DriveLeg(t, cv, f, done, at, weakened);
+				j.DriveLeg(t, cv, f, g, done, at, weakened);
 			}
 			bool walking = j.In(-1).Count() > 0;
 			// food + water for this leg: in a seat at car rates, walking at foot rates; own gear first, then the trunks.
@@ -299,7 +311,7 @@ class DL_Journey
 				// in the water: drowning (the longer the swim, the likelier), no infected out here
 				if (!seated && j.water)
 				{
-					if (weakened && Roll(j.DrownPct(t, tv, f)))
+					if (weakened && Roll(j.DrownPct(t, tv, g)))
 					{
 						tv.dead = true;
 						j.story.Insert(j.Who(tv) + " drowned " + Math.Round(at).ToString() + " km in.");
@@ -308,11 +320,12 @@ class DL_Journey
 					continue;
 				}
 				// on foot: the infected
-				if (!seated && weakened && Roll(t.bitePct * f))
+				if (!seated && weakened && Roll(t.bitePct * g))
 				{
+					float biteDeath = t.biteDeathPct * HurtX(tv.d); // hurt before the bite: likelier to die of it
 					tv.d.health = Math.Max(1, tv.d.health - 30);
 					tv.d.blood = Math.Max(2500, tv.d.blood - 750);
-					if (Roll(t.biteDeathPct))
+					if (Roll(biteDeath))
 					{
 						tv.dead = true;
 						j.story.Insert(j.Who(tv) + " died from a bite " + Math.Round(at).ToString() + " km in.");
@@ -360,9 +373,10 @@ class DL_Journey
 			if (frac <= 0.001)
 				continue;
 			anyHungry = true;
+			float starveDeath = t.starveDeathPct * HurtX(th.d);
 			th.d.health = Math.Max(1, th.d.health - frac * 40);
 			th.d.blood = Math.Max(2500, th.d.blood - frac * 1500);
-			if (weakened && frac > 0.5 && Roll(t.starveDeathPct))
+			if (weakened && frac > 0.5 && Roll(Math.Min(starveDeath, 100)))
 			{
 				th.dead = true;
 				j.story.Insert(j.Who(th) + " didn't make it: there wasn't enough food and water.");
@@ -653,8 +667,9 @@ class DL_Journey
 		return " of " + CarOf(v);
 	}
 
-	// one 10 km leg of car v: fuel (its own, a jerry can from the convoy, luck, else it stays), wear, a flat
-	protected void DriveLeg(DL_TravelRules t, DL_JVehicle v, float f, float done, float at, bool weakened)
+	// one leg of car v (f = its share of 10 km for fuel + wear, g = its share of an event leg for the flat):
+	// fuel (its own, a jerry can from the convoy, luck, else it stays), wear, a flat
+	protected void DriveLeg(DL_TravelRules t, DL_JVehicle v, float f, float g, float done, float at, bool weakened)
 	{
 		DL_TravelPrice cp = new DL_TravelPrice();
 		cp.byCar = true;
@@ -708,7 +723,7 @@ class DL_Journey
 		}
 		DL_TravelCost.ChargeCar(v.car, v.live, cp, drvD);
 		if (weakened)
-			FlatTyre(t, f, v, at);
+			FlatTyre(t, g, v, at);
 	}
 
 	protected static string Cap(string s)

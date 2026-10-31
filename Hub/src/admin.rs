@@ -104,7 +104,10 @@ fn bad(msg: impl Into<String>) -> Response {
 async fn cars(State(h): State<Shared>) -> Response {
     let db = h.db.lock().unwrap();
     match crate::cars::for_map(&db) {
-        Ok(cars) => Json(json!({"cars": cars})).into_response(),
+        Ok(cars) => {
+            let reports: serde_json::Map<String, Value> = h.car_reports.lock().unwrap().iter().map(|(k, (at, n))| (k.clone(), json!({"at": at, "here": n}))).collect();
+            Json(json!({"cars": cars, "reports": reports})).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("database: {e}")).into_response(),
     }
 }

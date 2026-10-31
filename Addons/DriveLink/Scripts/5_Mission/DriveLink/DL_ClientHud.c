@@ -29,6 +29,8 @@ modded class MissionGameplay
 	protected bool m_DL_F9WasDown;
 	protected TextWidget m_DL_Title;
 	protected bool m_DL_TextLow;        // the black screen's texts moved under the film
+	protected ref DL_ShortInfo m_DL_Short; // "not enough supplies" (RPC_SHORT): shown once no other menu is open
+	protected ref DL_ShortMenu m_DL_ShortMenu; // held here: the UI manager does not keep a script menu alive
 
 	override void OnMissionStart()
 	{
@@ -141,6 +143,22 @@ modded class MissionGameplay
 			}
 			return;
 		}
+		if (rpc_type == DL_Const.RPC_SHORT)
+		{
+			string sj;
+			if (!ctx.Read(sj))
+				return;
+			DL_ShortInfo si;
+			string serr;
+			JsonSerializer sjs = new JsonSerializer();
+			if (!sjs.ReadFromString(si, sj, serr) || !si || !si.people)
+			{
+				DL_Log.Warn("bad 'not enough supplies' message: " + serr);
+				return;
+			}
+			m_DL_Short = si;
+			return;
+		}
 		if (rpc_type != DL_Const.RPC_COUNTDOWN)
 			return;
 		int seconds;
@@ -232,6 +250,12 @@ modded class MissionGameplay
 			DL_WaitHide();
 		if (m_DL_StartEngine && !m_DL_WaitWanted && !filmOn)
 			DL_TryStartEngine();
+		if (m_DL_Short && !m_DL_WaitShown && !g_Game.GetUIManager().GetMenu())
+		{
+			m_DL_ShortMenu = new DL_ShortMenu(m_DL_Short);
+			m_DL_Short = null;
+			g_Game.GetUIManager().ShowScriptedMenu(m_DL_ShortMenu, null);
+		}
 		if (m_DL_FlyT > 0)
 		{
 			// the pilot's client simulates the plane: hold its speed until its own flight model has it

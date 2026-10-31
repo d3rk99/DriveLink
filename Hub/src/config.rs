@@ -61,8 +61,14 @@ pub struct TravelRules {
     pub fuel_scale: f64,      // x the in-game consumption
     pub fuel_boat_scale: f64, // boats: x this too (the game's boat burns far less than a real outboard)
     pub swim_food_x: f64,     // a boat party with no boat swims: food + water x this of the foot rates
-    pub drown_pct: f64,       // weakened: drown chance per 10 km swum (x2 the 2nd 10 km, x3 the 3rd ...)
-    // weakened: what the road gives, chance per 10 km
+    pub drown_pct: f64,       // weakened: drown chance per event leg swum (x2 the 2nd leg, x3 the 3rd ...)
+    /// the road is played in legs of this many km: every chance below (finds, attacks, flats, drowning) is rolled
+    /// once per leg. Costs (food, water, fuel, wear) stay per 10 km.
+    pub event_km: f64,
+    /// refuse mode: a player who is refused sees his supplies, what he needs and his chance of surviving, and can
+    /// travel anyway (that trip is played like weakened mode)
+    pub allow_anyway: bool,
+    // weakened: what the road gives, chance per event leg
     pub find_gas_pct: f64,    // a working gas station / fuel dock: every tank + gasoline canister full
     pub find_food_pct: f64,   // food items into the trunk / bags
     pub find_water_pct: f64,  // a well / rain: everyone drinks, every bottle filled
@@ -74,12 +80,12 @@ pub struct TravelRules {
     pub speed_car_kmh: f64,
     // weakened mode: the road's chances, in %
     pub luck_gas_pct: f64,       // out of fuel: chance to find some and keep the car
-    pub bite_pct: f64,           // per 10 km walked: infected attack (bleeding)
+    pub bite_pct: f64,           // per event leg walked: infected attack (bleeding)
     pub bite_death_pct: f64,     // of those attacks: dies
     pub starve_death_pct: f64,   // short more than half of the food or water cost: dies
     /// refuse mode: car trips longer than this need a spare wheel or a TireRepairKit aboard (0 = off)
     pub spare_needed_km: f64,
-    /// weakened mode (step 4): chance of a flat tyre per 10 km, higher on worn wheels
+    /// weakened mode (step 4): chance of a flat tyre per event leg, higher on worn wheels
     pub flat_pct: f64,
     /// the server's look in the road film: forest | field | desert | snow, "" = from the map
     pub biome: String,
@@ -113,6 +119,8 @@ impl Default for TravelRules {
             fuel_boat_scale: 1.0,
             swim_food_x: 1.5,
             drown_pct: 6.0,
+            event_km: 10.0,
+            allow_anyway: false,
             find_gas_pct: 6.0,
             find_food_pct: 8.0,
             find_water_pct: 12.0,
@@ -175,6 +183,7 @@ impl TravelRules {
                   &mut self.find_gas_pct, &mut self.find_food_pct, &mut self.find_water_pct] {
             *v = pct(*v);
         }
+        self.event_km = if self.event_km.is_finite() && self.event_km > 0.0 { self.event_km.clamp(1.0, 1000.0) } else { 10.0 };
         self.spare_needed_km = if self.spare_needed_km.is_finite() { self.spare_needed_km.clamp(0.0, 100000.0) } else { 0.0 };
         let mult = |v: f64, d: f64| if v.is_finite() { v.clamp(0.0, 20.0) } else { d };
         self.fuel_scale = mult(self.fuel_scale, 1.0);

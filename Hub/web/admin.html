@@ -203,7 +203,7 @@ function buildMap() {
 }
 
 // ---------- travelled cars (vehicle economy, src/cars.rs): where their server last reported them ----------
-let CARS = [], carLayer = null, carMarkers = {};
+let CARS = [], CAR_REPORTS = {}, carLayer = null, carMarkers = {};
 const utc = t => t ? new Date(t.replace(" ", "T") + "Z").toLocaleString() : "";
 const pct = v => v == null || v < 0 ? "-" : `${Math.round(v * 100)}%`;
 function carIcon(home) {
@@ -236,7 +236,8 @@ function drawCars() {
 function renderCarList() {
   const here = carsHere(), road = CARS.filter(c => c.state === "in_transit").length;
   $("clist").innerHTML = (here.map(c => `<div class="item" data-car="${esc(c.dlid)}"><span><span class="dot" style="background:${c.home === cur ? "#4fb3ff" : "#ffcc4d"}"></span>${esc(c.type)}</span><span class="hint">${c.home === cur ? "home" : "from " + esc(srvName(c.home))}</span></div>`).join("")
-    || `<div class="hint">No travelled cars on this server.</div>`)
+    || (CAR_REPORTS[cur] ? `<div class="hint">No travelled cars on this server (last report ${esc(new Date(CAR_REPORTS[cur].at).toLocaleString())}). Only cars that have been through a leaving zone are shown.</div>`
+      : `<div class="hint badtxt">This server has sent no car report since the hub started. Set <b>"carEconomy": "track"</b> (or "veto") in its config.json and restart it; cars show here once they have travelled.</div>`))
     + `<div class="hint" style="margin-top:6px"><span class="dot" style="background:#4fb3ff"></span>this server's own <span class="dot" style="background:#ffcc4d;margin-left:8px"></span>visiting${road ? ` · ${road} on the road` : ""}. Positions update every minute (servers with carEconomy "track" or "veto").</div>`;
   document.querySelectorAll("[data-car]").forEach(el => el.onclick = () => {
     const c = CARS.find(x => x.dlid === el.dataset.car), m = carMarkers[el.dataset.car];
@@ -246,7 +247,7 @@ function renderCarList() {
   });
 }
 async function loadCars() {
-  try { const r = await fetch("/admin/api/cars", { cache: "no-store" }); if (r.ok) CARS = (await r.json()).cars || []; } catch {}
+  try { const r = await fetch("/admin/api/cars", { cache: "no-store" }); if (r.ok) { const j = await r.json(); CARS = j.cars || []; CAR_REPORTS = j.reports || {}; } } catch {}
   if (view === "map" && S && srv()) { drawCars(); renderCarList(); }
 }
 $("carsOn").onchange = drawCars;
@@ -707,7 +708,7 @@ function renderServers() {
   if (S.servers.length) {
     const home = S.hub.homeServer || "";
     h += `<div class="box"><h2>Starting server</h2>
-      <div class="hint">Whoever dies on any other server (in the game, or on the road there) starts his next life here: his respawn is sent to this server and he spawns fresh on its coast. Off = everyone respawns on the server he died on.</div>
+      <div class="hint">Whoever dies on any other server (in the game, or on the road there) starts his next life here: his respawn is sent to this server and he spawns fresh on its coast. A new player's first login on any other server is sent here too, so every first life starts here. Off = everyone respawns on the server he died on and new players start where they join.</div>
       <div class="grid2" style="margin-top:6px"><div><select id="sHome"><option value="" ${home ? "" : "selected"}>Off: respawn where you die</option>${S.servers.map(s => `<option value="${esc(s.id)}" ${home === s.id ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select></div>
       <div><button class="primary" id="sHomeSave">Save starting server</button></div></div><div class="status" id="sHomeMsg"></div></div>`;
   }
@@ -769,11 +770,11 @@ const TRAVEL_FIELDS = [
   ["fuelBoatScale", "Boats: fuel x", "per-vehicle fuel, boats only, on top"], ["wearEnginePct", "Engine wear", "% health per 10 km"], ["wearWheelsPct", "Wheel wear", "% health per 10 km, every wheel"],
   ["speedFootKmh", "Speed on foot", "km/h (travel time)"], ["speedCarKmh", "Speed by car", "km/h (travel time)"],
   ["luckGasPct", "Find fuel when out", "% chance (weakened)"], ["biteDeathPct", "Attack kills", "% of attacks (weakened)"],
-  ["bitePct", "Infected attack", "% per 10 km walked (weakened)"], ["starveDeathPct", "Starve / thirst kills", "% when over half short (weakened)"],
-  ["spareNeededKm", "Spare wheel needed above", "km, 0 = off (refuse mode: spare wheel or tyre repair kit aboard)"], ["flatPct", "Flat tyre", "% per 10 km (weakened)"],
-  ["findGasPct", "Find a gas station", "% per 10 km by vehicle: every tank + jerry can filled (weakened)"],
-  ["findFoodPct", "Find food", "% per 10 km: a few items into the trunk / bags (weakened)"], ["findWaterPct", "Find water", "% per 10 km: a well (rain at sea), everyone drinks, bottles filled (weakened)"],
-  ["swimFoodX", "Swimming: food + water x", "of the foot rates (boat lost at sea)"], ["drownPct", "Drowning", "% per 10 km swum, grows the longer the swim (weakened)"],
+  ["bitePct", "Infected attack", "% per event leg walked (weakened)"], ["starveDeathPct", "Starve / thirst kills", "% when over half short (weakened)"],
+  ["spareNeededKm", "Spare wheel needed above", "km, 0 = off (refuse mode: spare wheel or tyre repair kit aboard)"], ["flatPct", "Flat tyre", "% per event leg (weakened)"],
+  ["findGasPct", "Find a gas station", "% per event leg by vehicle: every tank + jerry can filled (weakened)"],
+  ["findFoodPct", "Find food", "% per event leg: a few items into the trunk / bags (weakened)"], ["findWaterPct", "Find water", "% per event leg: a well (rain at sea), everyone drinks, bottles filled (weakened)"],
+  ["swimFoodX", "Swimming: food + water x", "of the foot rates (boat lost at sea)"], ["drownPct", "Drowning", "% per event leg swum, grows the longer the swim (weakened)"],
 ];
 // difficulty presets (Research/travel-presets.md): they fill the form, Save applies them. Food in kcal, water in ml
 // per 10 km (a full DayZ bar is 5000 of each); per-vehicle fuel uses each vehicle's in-game consumption (L/100 km)
@@ -819,6 +820,8 @@ function travelBox(f) {
       <span class="hint" id="tPresetNow">${presetOf(t) ? "Now: " + TRAVEL_PRESETS[presetOf(t)].label + ". " + esc(TRAVEL_PRESETS[presetOf(t)].hint) : "Now: custom"}</span></div>
     <div class="grid2" style="margin-top:6px">
       <div><label>When a player is short of food, water or fuel</label><select id="tMode"><option value="refuse" ${t.mode !== "weakened" ? "selected" : ""}>Refuse the trip</option><option value="weakened" ${t.mode === "weakened" ? "selected" : ""}>Travel anyway, arrive weakened (the road decides)</option></select></div>
+      <div><label>When a trip is refused</label><select id="tAnyway"><option value="0" ${!t.allowAnyway ? "selected" : ""}>Refused: the player has to come back with more</option><option value="1" ${t.allowAnyway ? "selected" : ""}>The player may travel anyway (sees his chance of surviving; the road decides)</option></select></div>
+      <div><label>Road events every <span class="hint">(km, 1-1000: every % chance below is rolled once per leg of this length; costs stay per 10 km)</span></label><input id="tEventKm" type="number" min="1" max="1000" step="any" value="${t.eventKm ?? 10}"></div>
       <div><label>Look in the road film (where trips start/end here)</label><select id="tBiome">${["", "forest", "field", "desert", "snow"].map(b => `<option value="${b}" ${(t.biome || "") === b ? "selected" : ""}>${b ? b[0].toUpperCase() + b.slice(1) : "From the map"}</option>`).join("")}</select></div>
       <div><label>Fuel</label><select id="tFuelMode"><option value="0" ${!t.fuelPerVehicle ? "selected" : ""}>Flat: the litres per 10 km below, every vehicle (motorbikes 40 %)</option><option value="1" ${t.fuelPerVehicle ? "selected" : ""}>Per vehicle: its in-game consumption x the factor below</option></select></div>
       <div><label>Travel time</label><select id="tTime"><option value="0" ${!t.timeEnabled ? "selected" : ""}>Off: arrive at once</option><option value="1" ${t.timeEnabled ? "selected" : ""}>On: on the road for distance / speed, no login anywhere meanwhile</option></select></div>
@@ -865,7 +868,8 @@ function wireTravel(f) {
     const t = { mode: $("tMode").value, timeEnabled: $("tTime").value === "1", biome: $("tBiome").value,
       noGroups: $("tGroups").value === "0", noConvoys: $("tConvoys").value === "0", groupMax: Math.round(+$("tGroupMax").value || 8),
       convoyMax: Math.round(+$("tConvoyMax").value || 4), convoyWaitSeconds: Math.round(+$("tConvoyWait").value || 120),
-      filmOff: $("tFilm").value === "0", voteSkipOff: $("tSkip").value === "0", fuelPerVehicle: $("tFuelMode").value === "1" };
+      filmOff: $("tFilm").value === "0", voteSkipOff: $("tSkip").value === "0", fuelPerVehicle: $("tFuelMode").value === "1",
+      allowAnyway: $("tAnyway").value === "1", eventKm: +$("tEventKm").value || 10 };
     TRAVEL_FIELDS.forEach(([k]) => t[k] = +$("t_" + k).value);
     try {
       const out = await post(`/admin/api/servers/${encodeURIComponent(f.id)}/travel`, t);

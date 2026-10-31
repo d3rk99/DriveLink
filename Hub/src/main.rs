@@ -19,6 +19,7 @@ mod log;
 mod maps;
 mod net;
 mod numfix;
+mod odds;
 mod players;
 mod mod_policy;
 #[cfg(windows)]
@@ -79,6 +80,7 @@ pub fn serve(console: bool, mut stop: tokio::sync::watch::Receiver<bool>) -> Res
         spots: Default::default(),
         client_mods: Default::default(),
         mod_query_notify: Default::default(),
+        car_reports: Default::default(),
     });
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
