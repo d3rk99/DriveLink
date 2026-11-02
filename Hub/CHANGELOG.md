@@ -1,3 +1,16 @@
+# DriveLink Hub 0.5.2
+
+## Staging area
+
+- Map page: one **Staging area** per server (a purple pin, "Staging area" box). Travelling groups wait there out of
+  sight: groups leaving while their trip film plays, and arriving cars and bikes while they are put together (tick
+  "Put arriving vehicles together at the staging area first" on an arrival point). Groups using it at the same time
+  are set side by side.
+- It may be **off the edge of the map**; it must be **dry land** (a spot under water is refused by the server).
+- Sent to the servers with the layout (`"staging": [x, 0, z]`); database migration 009 adds it. The arrival points'
+  own staging pick-points are gone from the page (still read by the mod when a server has no staging area).
+- Needs DriveLink mod builds from 2026-11-01 on to use it; older mods ignore it. No protocol change.
+
 # DriveLink Hub 0.5.1
 
 ## Hub updates
