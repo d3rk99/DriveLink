@@ -2,7 +2,9 @@
 // chance of surviving the trip (the hub works it out, Hub/src/odds.rs), then a table of what each one has and what the
 // trip needs, then the buttons: the leader of the trip may travel anyway when the server allows it (Travel rules:
 // allowAnyway), everyone else just closes it. Widgets made in code like the waiting room (DL_ClientHud), inside a
-// UIScriptedMenu for the mouse cursor and input focus (3_game/tools/uiscriptedmenu.c LockControls / UnlockControls).
+// UIScriptedMenu for the mouse cursor (3_game/tools/uiscriptedmenu.c LockControls / UnlockControls). It takes the
+// mouse only: the keyboard stays with the game (UseKeyboard false, vanilla missiongameplay.c handles such a menu), so
+// a driver keeps steering a convoy while it is open, and it sits small on the left with the road in view.
 // The buttons get their own handler (ScriptedWidgetEventHandler.OnClick) so the clicks don't depend on how the engine
 // routes events to a menu built without a layout file.
 class DL_ShortButtons : ScriptedWidgetEventHandler
@@ -46,6 +48,7 @@ class DL_ShortMenu extends UIScriptedMenu
 	protected ButtonWidget m_Go;
 	protected ButtonWidget m_Stay;
 	protected bool m_Answered;
+	protected bool m_KeysHeld = true;         // Y / N count once both were up (a key held from before doesn't answer)
 
 	void DL_ShortMenu(DL_ShortInfo info)
 	{
@@ -133,6 +136,17 @@ class DL_ShortMenu extends UIScriptedMenu
 		return b;
 	}
 
+	// the mouse for the buttons, the keyboard (and a gamepad) stays with the game: driving goes on
+	override bool UseKeyboard()
+	{
+		return false;
+	}
+
+	override bool UseGamepad()
+	{
+		return false;
+	}
+
 	override Widget Init()
 	{
 		WorkspaceWidget ws = g_Game.GetWorkspace();
@@ -144,18 +158,21 @@ class DL_ShortMenu extends UIScriptedMenu
 		if (!layoutRoot || !m_Info)
 			return layoutRoot;
 		array<ref DL_ShortRow> rows = Rows();
-		float rh = sh * 0.03;                        // a table row (the default font is about 3/4 of its box)
+		float rh = sh * 0.026;                       // a table row (the default font is about 3/4 of its box)
 		if (rows.Count() > 15)
-			rh = sh * 0.45 / rows.Count();
-		float pw = Math.Min(sw * 0.62, sh * 1.25);
+			rh = sh * 0.4 / rows.Count();
+		float pw = Math.Min(sw * 0.36, sh * 0.72);
 		float pad = rh * 0.8;
-		float ph = pad * 2 + rh * 1.2 + rh * 1.7 + rh * 1.0 + rh * 1.3 + rh * (rows.Count() + 1) + rh * 0.6 + rh * 1.0 + rh * 1.6;
+		float ph = pad * 2 + rh * 1.2 + rh * 1.7 + rh * 1.0 + rh * 1.3 + rh * (rows.Count() + 1) + rh * 0.6 + rh * 1.0 + rh * 1.6 + rh * 1.2;
 		if (m_Info.tail != "" || !m_Info.canGo)
 			ph += rh * 1.1;
-		float px = (sw - pw) / 2;
-		float py = Math.Max(sh * 0.04, (sh - ph) / 2);
-		Box(layoutRoot, 0, 0, sw, sh, ARGB(140, 0, 0, 0), 0);          // dim the game
-		Box(layoutRoot, px, py, pw, ph, ARGB(235, 18, 21, 25), 1);      // the panel
+		int nVeh = 0;
+		if (m_Info.vehicles)
+			nVeh = m_Info.vehicles.Count();
+		ph += rh * 1.15 * nVeh;
+		float px = sw * 0.025;                       // on the left, the road in view (no dimming)
+		float py = Math.Max(sh * 0.04, Math.Min(sh * 0.2, sh - ph - sh * 0.04));
+		Box(layoutRoot, px, py, pw, ph, ARGB(225, 18, 21, 25), 1);      // the panel
 		Box(layoutRoot, px, py, pw, rh * 0.12, ARGB(255, 240, 90, 80), 2);
 		float y = py + pad;
 		float iw = pw - pad * 2;
@@ -170,11 +187,21 @@ class DL_ShortMenu extends UIScriptedMenu
 			chance = "Your chance of surviving the trip: " + mine.ToString() + "%";
 		Text(layoutRoot, ix, y, iw, rh * 1.5, chance, ChanceColor(mine), true);
 		y += rh * 1.7;
+		// each vehicle's chance to make it all the way (fuel, a flat without a spare, a worn-out engine)
+		for (int vi = 0; vi < nVeh; vi++)
+		{
+			DL_OddsVehicle ov = m_Info.vehicles[vi];
+			string vline = ov.name + " makes it all the way: unknown";
+			if (ov.odds >= 0)
+				vline = ov.name + " makes it all the way: " + ov.odds.ToString() + "%";
+			Text(layoutRoot, ix, y, iw, rh * 1.05, vline, ChanceColor(ov.odds), true);
+			y += rh * 1.15;
+		}
 		Text(layoutRoot, ix, y, iw, rh * 0.9, "Trip: " + m_Info.price, ARGB(255, 170, 170, 170), true);
 		y += rh * 1.3;
 		// the table: what you have | what the trip needs
-		float c1 = iw * 0.50;
-		float c2 = iw * 0.25;
+		float c1 = iw * 0.46;
+		float c2 = iw * 0.27;
 		Box(layoutRoot, ix, y, iw, rh * 1.05, ARGB(255, 40, 45, 52), 2);
 		Text(layoutRoot, ix + rh * 0.3, y, c1, rh, "", ARGB(255, 200, 200, 200), false);
 		Text(layoutRoot, ix + c1, y, c2, rh, "You have", ARGB(255, 200, 200, 200), true);
@@ -200,15 +227,36 @@ class DL_ShortMenu extends UIScriptedMenu
 			y += rh * 1.1;
 		}
 		float bh = rh * 1.6;
-		float bw = iw * 0.36;
+		float bw = iw * 0.42;
 		if (m_Info.canGo)
 		{
-			m_Go = Button(layoutRoot, ix + iw * 0.5 - bw - rh * 0.4, y, bw, bh, "Travel anyway", ARGB(255, 150, 60, 50));
-			m_Stay = Button(layoutRoot, ix + iw * 0.5 + rh * 0.4, y, bw, bh, "Don't go", ARGB(255, 60, 70, 80));
+			m_Go = Button(layoutRoot, ix + iw * 0.5 - bw - rh * 0.4, y, bw, bh, "[Y] Travel anyway", ARGB(255, 150, 60, 50));
+			m_Stay = Button(layoutRoot, ix + iw * 0.5 + rh * 0.4, y, bw, bh, "[N] Don't go", ARGB(255, 60, 70, 80));
 		}
 		else
-			m_Stay = Button(layoutRoot, ix + (iw - bw) / 2, y, bw, bh, "OK", ARGB(255, 60, 70, 80));
+			m_Stay = Button(layoutRoot, ix + (iw - bw) / 2, y, bw, bh, "[N] OK", ARGB(255, 60, 70, 80));
+		y += bh + rh * 0.4;
+		Text(layoutRoot, ix, y, iw, rh * 0.8, "You keep control of your vehicle while this is open.", ARGB(255, 150, 150, 150), true);
 		return layoutRoot;
+	}
+
+	// Y = travel anyway, N = don't go (the keyboard stays with the game, so they are read straight from it)
+	override void Update(float timeslice)
+	{
+		super.Update(timeslice);
+		if (m_Answered)
+			return;
+		bool y = KeyState(KeyCode.KC_Y) != 0;
+		bool n = KeyState(KeyCode.KC_N) != 0;
+		if (m_KeysHeld)
+		{
+			m_KeysHeld = y || n;
+			return;
+		}
+		if (y && m_Info && m_Info.canGo)
+			DL_Clicked(m_Go);
+		else if (n)
+			DL_Clicked(m_Stay);
 	}
 
 	// a click on our buttons, from their handler or the menu's own OnClick

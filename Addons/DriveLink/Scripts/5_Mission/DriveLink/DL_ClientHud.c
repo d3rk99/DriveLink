@@ -31,10 +31,18 @@ modded class MissionGameplay
 	protected bool m_DL_TextLow;        // the black screen's texts moved under the film
 	protected ref DL_ShortInfo m_DL_Short; // "not enough supplies" (RPC_SHORT): shown once no other menu is open
 	protected ref DL_ShortMenu m_DL_ShortMenu; // held here: the UI manager does not keep a script menu alive
+	protected ref DL_TrailClient m_DL_Trail = new DL_TrailClient(); // the interactive trail: ready-up, film, votes
+	// The main menu's road scene is for a trip in progress only. A player who is in the game a while without being sent
+	// back to the menu (he arrived, or never travelled) gets the vanilla menu next time: the saved scene goes. Not at
+	// once: a traveller who joins too early is let in and sent back to the menu a moment later, his scene must stay.
+	protected float m_DL_SceneCheckIn = -1;
+	static const float DL_SCENE_STALE_AFTER = 15;   // s; an early joiner is sent back within ~4 s
 
 	override void OnMissionStart()
 	{
 		super.OnMissionStart();
+		DL_MenuScene.s_Fresh = false;
+		m_DL_SceneCheckIn = DL_SCENE_STALE_AFTER;
 		GetDayZGame().Event_OnRPC.Insert(DL_OnRpc);
 		GetDayZGame().DL_Transition().MissionStarted("gameplay");
 		GetDayZGame().DL_Transition().Arrived();
@@ -49,6 +57,8 @@ modded class MissionGameplay
 			GetDayZGame().DL_ClearTransferLogin();
 		if (m_DL_Film)
 			m_DL_Film.Stop();
+		if (m_DL_Trail)
+			m_DL_Trail.Stop();
 		DL_WaitHide();
 		if (m_DL_WaitRoot)
 			m_DL_WaitRoot.Unlink();
@@ -57,6 +67,8 @@ modded class MissionGameplay
 
 	protected void DL_OnRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
 	{
+		if (m_DL_Trail && m_DL_Trail.OnRpc(rpc_type, ctx))
+			return;
 		if (rpc_type == DL_Const.RPC_FLY)
 		{
 			vector fv;
@@ -188,6 +200,15 @@ modded class MissionGameplay
 	override void OnUpdate(float timeslice)
 	{
 		super.OnUpdate(timeslice);
+		if (m_DL_SceneCheckIn > 0)
+		{
+			m_DL_SceneCheckIn -= timeslice;
+			if (m_DL_SceneCheckIn <= 0 && !DL_MenuScene.s_Fresh && FileExist(DL_MenuScene.FILE))
+			{
+				DL_MenuScene.Clear();
+				DL_Log.Detail("menu scene: in the game, no trip on: the main menu is the vanilla one again");
+			}
+		}
 		if(m_DL_InputRecoveryRemaining>0)
 		{
 			m_DL_InputRecoveryRemaining-=timeslice;
@@ -203,6 +224,8 @@ modded class MissionGameplay
 				DL_Log.Info("arrival input refreshed; previous game focus "+focused.ToString());
 			}
 		}
+		if (m_DL_Trail)
+			m_DL_Trail.Update(timeslice);
 		if (m_DL_PendingFilm != "" && GetDayZGame().DL_Transition().ReadyForArrival())
 		{
 			string readyFilm = m_DL_PendingFilm;
@@ -401,7 +424,7 @@ modded class MissionGameplay
 		for (int i = 0; i < m_DL_StoryLines.Count(); i++)
 		{
 			m_DL_StoryLines[i].SetPos(0, storyTop + i * lineH * 1.15);
-			m_DL_StoryLines[i].Show(!low || storyTop + (i + 1) * lineH * 1.15 < h * 0.99); // under the film: what fits
+			m_DL_StoryLines[i].Show(!low); // under the film: none (the film's caption shows the event now, the bar how far)
 		}
 	}
 

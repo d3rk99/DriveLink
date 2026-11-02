@@ -40,12 +40,16 @@ class DL_FilmPerson
 	bool swimming;                 // in the water (a boat left behind): head and shoulders over a ripple
 	protected bool m_SwimCut;
 	protected ImageWidget m_Ripple;
+	protected Widget m_Parent;
+	protected float m_Size;
 	protected float m_RipPx;
 	ref array<vector> path = new array<vector>;
 
 	void DL_FilmPerson(Widget parent, int sort, float px, DL_FilmActor a, string zedSkin)
 	{
 		float size = 32 * px;
+		m_Parent = parent;
+		m_Size = size;
 		if (zedSkin != "")
 		{
 			zed = true;
@@ -428,6 +432,27 @@ class DL_FilmPerson
 		s.Cell(frame * 32, row * 32, 32, 32);
 		s.MoveTo(sx, sy);
 	}
+
+	// one more layer over the rest (a trail card's gas masks)
+	void AddLayer(string tex)
+	{
+		if (!m_Parent || zed)
+			return;
+		DL_Sprite s = new DL_Sprite(m_Parent, CHR + tex + "_ca.paa", 8, m_Size, m_Size, 128, 1024);
+		s.Show(shown);
+		layers.Insert(s);
+	}
+
+	// see-through (a trail card's "hit": he blinks)
+	void SetAlpha(float a)
+	{
+		foreach (DL_Sprite s : layers)
+			s.SetAlpha(a);
+		if (hand)
+			hand.SetAlpha(a);
+		if (back)
+			back.SetAlpha(a);
+	}
 }
 
 // a roadside thing (prop from the atlas, or a wreck) that scrolls with the ground
@@ -567,6 +592,28 @@ class DL_FilmPlayer
 	protected bool m_Convoy;           // more than one car: the tall window, cars in a line
 	protected float m_LeadY;           // the lead car's place
 	protected float m_Bottom;          // the window's bottom edge, fraction of the screen height (text goes below)
+	// the trip's progress under the window: the vehicle moves along a bar; left behind on the road it stays where it
+	// was left and a survivor walks on along the bar
+	static const float BAR_CAR_TURN = -90;     // the top-down sprites drive down the screen: turned to face right
+	protected Widget m_Bar;
+	protected Widget m_BarFill;
+	protected ref DL_Sprite m_BarCar;
+	protected ref DL_FilmPerson m_BarWalker;
+	protected float m_BarW;
+	protected float m_BarH;
+	protected float m_BarM;                    // margin at either end of the track
+	protected float m_BarPx;                   // the walker's pixel size
+	protected float m_BarCarW;                 // the vehicle's display box (before it is turned)
+	protected float m_BarCarH;
+	protected float m_BarCarAt = -1;           // where the vehicle was left (fraction of the trip), -1 = still in it
+	protected float m_BarFrac;
+	protected string m_BarTex;                 // the lead vehicle's sprite sheet and cell (SetCar)
+	protected float m_BarTexW;
+	protected float m_BarTexH;
+	protected float m_BarCW;
+	protected float m_BarCH;
+	protected ref array<float> m_KmBefore = new array<float>;   // km travelled before each scene
+	protected float m_KmAll;
 	protected bool m_Leaving;          // walking round the car they leave behind
 	protected bool m_Water;            // a boat trip: open water instead of the road (until the boats are left)
 	protected bool m_Sky;              // a plane trip: high above the ground and the clouds (until it comes down)
@@ -600,6 +647,13 @@ class DL_FilmPlayer
 	static const float LOT_PUMP_Y = 178;
 	protected ref DL_FilmThing m_Roof;
 	protected ref DL_FilmThing m_Pump;    // MiniDayZ water pump (a well find on land)
+	// a food find on land, picked at random: a wreck to search, a crate, a bush or a tree by the road
+	protected ref DL_FilmThing m_FoodWreck;
+	protected ref DL_FilmThing m_FoodProp;
+	protected DL_FilmPerson m_Seeker;     // who goes over to it (a well or a food find) and comes back
+	protected DL_FilmCar m_SeekerCar;     // his car (null = he was walking)
+	protected float m_SeekerX;            // where a walker goes back to
+	protected float m_SeekerY;
 	protected ref DL_FilmThing m_Lot;
 	protected DL_FilmThing m_FindAt;      // the thing of this find scene they stop at
 	protected float m_FindOffset;         // ... where on it (film px below its centre)
@@ -633,6 +687,75 @@ class DL_FilmPlayer
 	protected string m_LastJson;
 	protected Widget m_TransitionParent;
 	protected bool m_TransitionLoop;
+	// the interactive trail (film.skip "trail"): the server sends the road a chapter at a time. Out of scenes the film
+	// doesn't end, it rolls on (m_Waiting) until the next chapter comes (Append) or the last one is marked (SetHold false)
+	protected bool m_Hold;
+	protected bool m_Waiting;
+	// the trail's card scenes (DL_TrailCard.scene / DL_TrailOutcome.anim; art: Tools/anim_trail.py)
+	static const string TRAIL_TEX = "DriveLink/gui/anim/trail_ca.paa";
+	protected ref array<ref DL_FilmPerson> m_Npcs = new array<ref DL_FilmPerson>;   // bandits, a stranger
+	protected ref array<ref DL_FilmPerson> m_Horde = new array<ref DL_FilmPerson>;
+	protected ref array<ref DL_FilmThing> m_Blocks = new array<ref DL_FilmThing>;   // barriers, sandbags
+	protected ref DL_FilmThing m_Deer;
+	protected ref DL_FilmThing m_Camp;
+	protected ref DL_FilmThing m_Meat;
+	protected ref DL_FilmThing m_Steam;
+	protected ref DL_FilmThing m_Splash;     // fording: the wake under the car (splash_ca row 0) ...
+	protected ref DL_FilmThing m_SplashL;    // ... and the sprays thrown out to its sides (rows 1, 2)
+	protected ref DL_FilmThing m_SplashR;
+	protected DL_FilmThing m_River;          // the river shown: one of these three (banks of mud, snow or sand)
+	protected ref DL_FilmThing m_RiverField;
+	protected ref DL_FilmThing m_RiverSnow;
+	protected ref DL_FilmThing m_RiverDesert;
+	protected ref array<ref DL_FilmThing> m_RiverProps = new array<ref DL_FilmThing>;   // sign, log, reeds x2, debris
+	protected ImageWidget m_Flash2;          // the other side's muzzle flash
+	protected bool m_Staged;                 // a card's stage is up: the road stands, the cars moved up the window
+	protected float m_LeadHome;              // the lead car's place before
+	protected int m_DeerDir;                 // 0 faces left, 1 right
+	protected int m_DeerMode;                // 0 grazing (now and then it looks up), 1 running, 2 down, 3 alert
+	protected float m_DeerVx;
+	protected int m_SteamMode;               // 0 none, 1 steam, 2 black smoke (from the front car's bonnet)
+	protected int m_HordeMode;               // 0 milling about, 1 stepping aside, 2 gone past
+	protected ref array<string> m_Act = new array<string>;   // the outcome's steps
+	protected int m_ActI;
+	protected float m_ActT;
+	protected bool m_ActNew;
+	protected float m_WorkAt;                // fix: when he got to the bonnet (-1 = still walking)
+	protected float m_HitT;
+	protected bool m_Carry;
+	protected int m_Plow;                    // 1 plowing through the horde, 2 fording, 3 stalling in the water
+	protected bool m_Wading;
+	protected float m_ClearT;
+	protected DL_FilmPerson m_Joiner;
+	static const string TRAIL2_TEX = "DriveLink/gui/anim/trail2_ca.paa";
+	protected ref DL_FilmThing m_Cross;      // the fork's side road
+	protected ref DL_FilmThing m_Sign;
+	protected ref DL_FilmThing m_Ring;       // the waypoint the compass finds, on the road ahead
+	protected ref DL_FilmThing m_Lake;
+	protected ref DL_FilmThing m_Wreck;      // the helicopter
+	protected ref DL_FilmThing m_Column;     // its smoke
+	protected ref DL_FilmThing m_Mud;
+	protected ref DL_FilmThing m_Spray;      // mud from the spinning wheels
+	protected ref DL_FilmThing m_Beam;       // headlights at night: the darkness around the lead car, its cones cut out
+	protected ref DL_FilmThing m_Glow;       // and their light, a soft brightening over the cones
+	protected ref DL_FilmThing m_Rod;
+	protected ref DL_FilmThing m_Fish;
+	protected ref DL_FilmThing m_Bubble;     // "?", "!" or a fever over someone
+	protected DL_FilmPerson m_BubbleOn;      // over him (null = over the front car)
+	protected float m_BubbleT;               // seconds it stays (-1 = until taken away)
+	protected ref array<ref DL_FilmThing> m_Gas = new array<ref DL_FilmThing>;
+	protected ImageWidget m_Dark;            // night over the film (with the headlights on: the part above them)
+	protected ImageWidget m_DarkB;           // with the headlights on: the night below, left and right of their cones
+	protected ImageWidget m_DarkL;
+	protected ImageWidget m_DarkR;
+	protected float m_DarkA;
+	protected float m_DarkTo;
+	protected ref DL_Strip m_Snow;           // the blizzard: snow blowing over everything, and a white haze
+	protected ImageWidget m_Haze;
+	protected float m_SnowA;
+	protected float m_SnowTo;
+	protected DL_FilmPerson m_Sick;          // the fever card's member
+	protected bool m_Spin;                   // the wheels spin in the mud
 
 	// Prototype: only the cosmetic connecting scene loops; arrival films keep their normal lifecycle.
 	void TransitionParent(Widget parent)
@@ -702,6 +825,8 @@ class DL_FilmPlayer
 		m_Film = f;
 		m_Voted = false;
 		m_VoteOut = false;
+		m_Hold = f.skip == "trail";
+		m_Waiting = false;
 		if (!Build())
 			return;
 		m_Playing = true;
@@ -715,11 +840,49 @@ class DL_FilmPlayer
 		DL_Log.Detail(dlMsg667);
 	}
 
+	// the trail: more road (a chapter, or what a choice did); km = the whole trip now (a detour makes it longer)
+	void Append(array<ref DL_FilmEvent> evs, float km)
+	{
+		if (!m_Playing || !m_Film)
+			return;
+		foreach (DL_FilmEvent e : evs)
+			m_Film.events.Insert(e);
+		if (km > 0)
+			m_Film.km = km;
+		RecountKm();
+	}
+
+	// km travelled so far in the film
+	float Km()
+	{
+		return m_Km;
+	}
+
+	// the trail: false = the last chapter is in, the film ends after it
+	void SetHold(bool on)
+	{
+		m_Hold = on;
+	}
+
+	// the trail: out of scenes, rolling on until the next chapter
+	bool Waiting()
+	{
+		return m_Playing && m_Waiting;
+	}
+
 	void Stop()
 	{
 		if (m_Root)
 			m_Root.Unlink();
 		m_Root = null;
+		if (m_Bar)
+			m_Bar.Unlink();
+		m_Bar = null;
+		m_BarFill = null;
+		m_BarCar = null;
+		m_BarWalker = null;
+		m_BarTex = "";
+		m_BarCarAt = -1;
 		m_Playing = false;
 		m_Crew.Clear();
 		m_Props.Clear();
@@ -735,6 +898,25 @@ class DL_FilmPlayer
 		m_Puff = null;
 		m_Fuel = null;
 		m_Flash = null;
+		m_Npcs.Clear();
+		m_Horde.Clear();
+		m_Blocks.Clear();
+		m_Deer = null;
+		m_Camp = null;
+		m_Meat = null;
+		m_Steam = null;
+		m_Splash = null;
+		m_SplashL = null;
+		m_SplashR = null;
+		m_River = null;
+		m_RiverField = null;
+		m_RiverSnow = null;
+		m_RiverDesert = null;
+		m_RiverProps.Clear();
+		m_Flash2 = null;
+		m_Joiner = null;
+		m_Staged = false;
+		m_Act.Clear();
 	}
 
 	// ---------------- build ----------------
@@ -779,7 +961,9 @@ class DL_FilmPlayer
 			winY = sh * 0.02;
 		}
 		float winX = (sw - winW) / 2;
-		m_Bottom = (winY + winH) / sh;
+		float barH = sh * 0.05;
+		float barY = winY + winH + sh * 0.008;
+		m_Bottom = (barY + barH) / sh;
 		m_Root = ws.CreateWidget(FrameWidgetTypeID, winX, winY, winW, winH, DL_FilmSpike.Flags() | WidgetFlags.CLIPCHILDREN, ARGB(255, 255, 255, 255), 31500, m_TransitionParent);
 		if (!m_Root)
 			return false;
@@ -865,8 +1049,8 @@ class DL_FilmPlayer
 		array<string> wrecks = {"wreck_blue_ca", "wreck_gray_ca", "wreck_green_ca", "wreck_red_ca", "wreck_police_ca"};
 		foreach (string wr : wrecks)
 		{
-			DL_FilmThing wt = new DL_FilmThing(m_Root, 4, DIR + wr + ".paa", m_Px, 60, 76, 128, 128);
-			wt.sprite.Cell(4, 0, 60, 76);
+			DL_FilmThing wt = new DL_FilmThing(m_Root, 4, DIR + wr + ".paa", m_Px, 48, 76, 128, 128);
+			wt.sprite.Cell(4, 0, 48, 76);   // 4..51: the sheet's second wreck starts at 58
 			m_Wrecks.Insert(wt);
 		}
 		m_Tool = new DL_FilmThing(m_Root, 9, DIR + "props_ca.paa", m_Px, 64, 64, 256, 256, 0.4);
@@ -884,6 +1068,9 @@ class DL_FilmPlayer
 		m_Roof.sprite.Cell(0, 0, LOT_W, LOT_H);
 		m_Pump = new DL_FilmThing(m_Root, 3, DIR + "waterpump_ca.paa", m_Px, 20, 28, 32, 32, 1);
 		m_Pump.sprite.Cell(0, 0, 20, 28);
+		m_FoodWreck = new DL_FilmThing(m_Root, 3, DIR + "wreck_gray_ca.paa", m_Px, 48, 76, 128, 128);
+		m_FoodWreck.sprite.Cell(4, 0, 48, 76);   // 4..51: the sheet's second wreck starts at 58
+		m_FoodProp = new DL_FilmThing(m_Root, 3, DIR + "props_ca.paa", m_Px, 64, 64, 256, 256, 0.7);
 		m_Flash = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 255, 235, 130), 9, 0, 0, 3 * m_Px, 3 * m_Px);
 		m_Flash.Show(false);
 		m_Puff.SetSort(SORT_TOP);
@@ -927,7 +1114,7 @@ class DL_FilmPlayer
 		m_Caption = TextWidget.Cast(ws.CreateWidget(TextWidgetTypeID, 0, winH - band * 0.93, winW, band * 0.87, flags, ARGB(255, 240, 225, 190), SORT_TEXT + 1, m_Root));
 		// how to skip, top of the window: everyone must vote on a trip, Space alone for the F9 demo
 		m_SkipText = null;
-		if (m_Film.skip != "none")
+		if (m_Film.skip != "none" && m_Film.skip != "trail")
 		{
 			float sh2 = winH * 0.045;
 			DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(120, 0, 0, 0), SORT_TEXT, 0, 0, winW, sh2 * 1.2);
@@ -945,8 +1132,121 @@ class DL_FilmPlayer
 			if (!m_Water && !m_Sky)
 				SpawnProp(Math.RandomFloat(0, m_ViewH));
 		}
+		BuildStage();
 		m_Speed = 0;
+		BuildBar(winX, barY, winW, barH);
 		return true;
+	}
+
+	// ---------------- progress bar ----------------
+
+	protected void BuildBar(float x, float y, float w, float h)
+	{
+		WorkspaceWidget ws = g_Game.GetWorkspace();
+		RecountKm();
+		m_BarW = w;
+		m_BarH = h;
+		m_BarM = h * 0.9;
+		m_BarFrac = 0;
+		m_Bar = ws.CreateWidget(FrameWidgetTypeID, x, y, w, h, DL_FilmSpike.Flags(), ARGB(255, 255, 255, 255), 31500, m_TransitionParent);
+		if (!m_Bar)
+			return;
+		float trackY = h * 0.66;
+		float trackH = Math.Max(3, h * 0.12);
+		DL_FilmSpike.Image(m_Bar, DL_FilmSpike.PLAIN, ARGB(220, 45, 45, 45), 1, m_BarM, trackY, w - m_BarM * 2, trackH);
+		m_BarFill = DL_FilmSpike.Image(m_Bar, DL_FilmSpike.PLAIN, ARGB(255, 230, 190, 90), 2, m_BarM, trackY, 1, trackH);
+		// the lead vehicle, side on; on foot from the start: no vehicle, the walker only
+		if (m_Cars.Count() > 0 && m_BarTex != "")
+		{
+			float sc = h * 1.25 / m_BarCH;
+			m_BarCarW = m_BarCW * sc;
+			m_BarCarH = m_BarCH * sc;
+			m_BarCar = new DL_Sprite(m_Bar, m_BarTex, 4, m_BarCarW, m_BarCarH, m_BarTexW, m_BarTexH);
+			m_BarCar.Cell(0, 0, m_BarCW, m_BarCH);
+			m_BarCar.Rotate(BAR_CAR_TURN);
+			m_BarCar.Show(true);
+		}
+		else
+			m_BarCarAt = 0;
+		m_BarPx = h * 1.05 / 32;
+		if (m_Film.crew.Count() > 0)
+		{
+			m_BarWalker = new DL_FilmPerson(m_Bar, 5, m_BarPx, m_Film.crew[0], "");
+			m_BarWalker.dir = 2;                     // to the right
+			m_BarWalker.marching = true;
+			m_BarWalker.Show(m_BarCarAt >= 0);
+		}
+	}
+
+	protected void RecountKm()
+	{
+		m_KmBefore.Clear();
+		m_KmAll = 0;
+		foreach (DL_FilmEvent e : m_Film.events)
+		{
+			m_KmBefore.Insert(m_KmAll);
+			if (e.kind == "drive" || e.kind == "walk" || e.kind == "swim")
+				m_KmAll += e.km;
+		}
+		if (m_Hold)
+			m_KmAll = Math.Max(m_KmAll, m_Film.km);     // the trail: the road still to come counts
+	}
+
+	// how far along the trip the film is (0..1): the km of the scenes played, the one playing in part
+	protected float BarFrac()
+	{
+		if (m_KmAll <= 0 || m_Scene < 0)
+			return 0;
+		if (m_Scene >= m_Film.events.Count())
+			return 1;
+		DL_FilmEvent e = m_Film.events[m_Scene];
+		float km = m_KmBefore[m_Scene];
+		if (e.kind == "drive" || e.kind == "walk" || e.kind == "swim")
+			km += e.km * Math.Clamp(m_SceneT / DL_Film.SceneSeconds(e), 0, 1);
+		return Math.Clamp(km / m_KmAll, 0, 1);
+	}
+
+	protected void BarUpdate(float dt)
+	{
+		if (!m_Bar)
+			return;
+		float f = BarFrac();
+		if (f > m_BarFrac)
+			m_BarFrac = f;
+		float trackW = m_BarW - m_BarM * 2;
+		float px = m_BarM + trackW * m_BarFrac;
+		if (m_BarFill)
+			m_BarFill.SetSize(Math.Max(1, trackW * m_BarFrac), Math.Max(3, m_BarH * 0.12));
+		// every vehicle left behind on the road (the film's own mark for it): the vehicle stays where it was left, the
+		// walker takes over (a "walk" event alone missed a truck given up after a breakdown)
+		if (m_BarCarAt < 0 && m_Cars.Count() > 0)
+		{
+			bool allLeft = true;
+			foreach (DL_FilmCar fc : m_Cars)
+			{
+				if (fc && !fc.inWorld)
+					allLeft = false;
+			}
+			if (allLeft)
+			{
+				m_BarCarAt = m_BarFrac;
+				if (m_BarWalker)
+					m_BarWalker.Show(true);
+			}
+		}
+		if (m_BarCar)
+		{
+			float carX = px;
+			if (m_BarCarAt >= 0)
+				carX = m_BarM + trackW * m_BarCarAt;
+			m_BarCar.MoveTo(carX - m_BarCarW / 2, m_BarH * 0.5 - m_BarCarH / 2);
+		}
+		if (m_BarWalker && m_BarCarAt >= 0)
+		{
+			m_BarWalker.x = px / m_BarPx;
+			m_BarWalker.y = m_BarH * 0.45 / m_BarPx;
+			m_BarWalker.Update(dt, m_BarPx, 0, 0);
+		}
 	}
 
 	// a car of the film: DL_FilmCast.CarSprite "look@colour" -> that body pre-painted in that colour
@@ -1061,6 +1361,14 @@ class DL_FilmPlayer
 
 	protected void SetCar(DL_FilmCar c, string tex, float texW, float texH, float cw, float ch, float sx, float sy)
 	{
+		if (m_BarTex == "")
+		{
+			m_BarTex = tex;                      // the first one made is the lead
+			m_BarTexW = texW;
+			m_BarTexH = texH;
+			m_BarCW = cw;
+			m_BarCH = ch;
+		}
 		c.w = cw * sx;
 		c.h = ch * sy;
 		c.sprite = new DL_Sprite(m_Root, tex, 6, c.w * m_Px, c.h * m_Px, texW, texH);
@@ -1496,6 +1804,23 @@ class DL_FilmPlayer
 				m_Zed.Show(false);
 		}
 		DL_FilmEvent e = Ev();
+		if (!e && m_Hold)
+		{
+			// the trail: no more road yet - roll on as they are (the cars driving, the walkers walking)
+			m_Scene = m_Film.events.Count() - 1;
+			m_Waiting = true;
+			m_Target = WALK;
+			if (m_Water)
+				m_Target = SWIM;
+			foreach (DL_FilmCar wc : m_Cars)
+			{
+				if (!wc.inWorld && Riders(wc).Count() > 0 && Walkers() == 0)
+					m_Target = DRIVE;
+			}
+			if (m_Staged)
+				m_Target = 0;                     // a card's stage: they stand and wait for the outcome
+			return;
+		}
 		if (!e)
 		{
 			m_Ending = true;
@@ -1509,13 +1834,28 @@ class DL_FilmPlayer
 		if (!m_V || m_V.inWorld)
 			m_V = FirstCar();
 		m_Donor = FilmCar(e.donor);
-		if (e.kind == "flat" || e.kind == "fuel" || e.kind == "attack" || e.kind == "died" || e.kind == "move" || e.kind == "find")
+		if (e.kind == "flat" || e.kind == "fuel" || e.kind == "attack" || e.kind == "died" || e.kind == "move" || e.kind == "find" || e.kind == "act")
 		{
 			m_Actor = Who(e.who);
+			if (e.kind == "died")
+			{
+				// a card's outcome may have put him down already: not someone else then
+				foreach (DL_FilmPerson dp : m_Crew)
+				{
+					if (dp.name == e.who)
+						m_Actor = dp;
+				}
+			}
 			if (m_Actor)
 				e.who = m_Actor.name;
 		}
+		if (m_Staged && (e.kind == "drive" || e.kind == "walk" || e.kind == "swim" || e.kind == "find" || e.kind == "flat" || e.kind == "fuel"))
+			Unstage(false);
 		Caption(Line(e));
+		if (e.kind == "card")
+			StageUp(e.detail, e.who);
+		else if (e.kind == "act")
+			ActStart(e);
 		if (e.kind == "drive")
 		{
 			LeaveEmptyCars();
@@ -1597,11 +1937,13 @@ class DL_FilmPlayer
 	// the road gives (gas station, food, water): they stop a moment, then go on at the speed they had
 	protected void SceneFind(DL_FilmEvent e)
 	{
-		if (m_Step == 0 && !m_Water && (e.detail == "gas" || e.detail == "water") && m_Speed > 5)
+		if (m_Step == 0 && !m_Water && (e.detail == "gas" || e.detail == "water" || e.detail == "food") && m_Speed > 5)
 		{
 			// on land: the gas station (or the well's pump) comes up the road; they slow down and stop beside it
 			m_FindResume = m_Target;
 			float below = m_ViewH + 40;
+			if (!FirstCar() && e.detail != "gas")
+				below = Math.Min(below, m_WalkY + 90);   // on foot: close by, not a long wait at walking pace
 			if (e.detail == "gas")
 			{
 				// the lot joins the road on its right edge; the canopy runs off the screen
@@ -1616,7 +1958,7 @@ class DL_FilmPlayer
 				m_FindAt = m_Lot;
 				m_FindOffset = LOT_PUMP_Y - LOT_H / 2;  // they stop with the lead car level with the pumps
 			}
-			else
+			else if (e.detail == "water")
 			{
 				m_Pump.x = 52;
 				m_Pump.y = below;
@@ -1625,6 +1967,11 @@ class DL_FilmPlayer
 				m_FindAt = m_Pump;
 				m_FindOffset = 0;
 			}
+			else
+				m_FindAt = FoodSpot(below);
+			if (e.detail != "gas")
+				ClearVerge(m_FindAt.y);
+			m_Seeker = null;
 			m_Target = Math.Min(m_Target, DRIVE * 0.6);
 			m_Step = 10;
 			m_StepT = 0;
@@ -1748,6 +2095,105 @@ class DL_FilmPlayer
 			}
 			return;
 		}
+		if (m_Step == 11 && (e.detail == "water" || e.detail == "food") && m_FindAt && m_FindAt.used && m_StepT > 0.5 && (!FirstCar() || Halted()))
+		{
+			// one of them gets out (or steps out of the line), goes over to it, and comes back
+			m_SeekerCar = FirstCar();
+			m_Seeker = null;
+			// the one the caption names, from his own car (a convoy: any of them); else the lead car's driver
+			if (m_Actor && !m_Actor.down && m_Actor.car >= 0 && m_Actor.car < m_Cars.Count() && !m_Cars[m_Actor.car].inWorld)
+			{
+				m_SeekerCar = m_Cars[m_Actor.car];
+				m_Seeker = m_Actor;
+				GetOutOne(m_Seeker, m_SeekerCar, -1);
+			}
+			else if (m_Actor && !m_Actor.down && m_Actor.shown && m_Actor.car < 0)
+			{
+				m_SeekerCar = null;
+				m_Seeker = m_Actor;
+				m_SeekerX = m_Seeker.x;
+				m_SeekerY = m_Seeker.y;
+			}
+			else if (m_SeekerCar)
+			{
+				m_Seeker = DriverOf(m_SeekerCar);
+				if (m_Seeker)
+					GetOutOne(m_Seeker, m_SeekerCar, -1);
+			}
+			else
+			{
+				foreach (DL_FilmPerson wp : m_Crew)
+				{
+					if (!m_Seeker && !wp.down && wp.shown && wp.car < 0)
+						m_Seeker = wp;
+				}
+				if (m_Seeker)
+				{
+					m_SeekerX = m_Seeker.x;
+					m_SeekerY = m_Seeker.y;
+				}
+			}
+			if (m_Seeker)
+			{
+				m_Seeker.marching = false;
+				m_Seeker.Go(m_FindAt.x + m_FindAt.w / 2 + 6, m_FindAt.y + 4);
+				m_Step = 40;
+				m_StepT = 0;
+				return;
+			}
+		}
+		if (m_Step == 40)
+		{
+			if (!m_Seeker || !m_Seeker.Busy() || m_StepT > 8)
+			{
+				if (m_Seeker)
+				{
+					m_Seeker.dir = 3;                  // facing it (it is on the left of the road)
+					m_Seeker.pose = DL_FilmPerson.USE; // pumping / searching
+				}
+				m_Step = 41;
+				m_StepT = 0;
+			}
+			return;
+		}
+		if (m_Step == 41)
+		{
+			if (m_StepT > 1.8)
+			{
+				if (m_Seeker)
+				{
+					m_Seeker.pose = DL_FilmPerson.NORMAL;
+					if (m_SeekerCar)
+						Board(m_SeekerCar);
+					else
+						m_Seeker.Go(m_SeekerX, m_SeekerY);
+				}
+				m_Step = 42;
+				m_StepT = 0;
+			}
+			return;
+		}
+		if (m_Step == 42)
+		{
+			bool back = !m_Seeker || m_StepT > 8;
+			if (!back && m_SeekerCar)
+				back = Boarded(m_SeekerCar);
+			else if (!back)
+				back = !m_Seeker.Busy();
+			if (back)
+			{
+				m_Target = m_FindResume;
+				if (m_Target < 1)
+					m_Target = DRIVE;
+				foreach (DL_FilmPerson rp : m_Crew)
+				{
+					if (!rp.down && rp.shown && rp.car < 0)
+						rp.marching = true;
+				}
+				m_Step = 12;
+			}
+			return;
+		}
 		if (m_Step == 11 && !(e.detail == "gas" && FirstCar()))
 		{
 			if (m_StepT > 3.2)
@@ -1783,6 +2229,37 @@ class DL_FilmPlayer
 			}
 			NextStep();
 		}
+	}
+
+	// what they search for food, coming up the road on the left: a wreck, a crate, a bush or a tree (at random)
+	protected DL_FilmThing FoodSpot(float y)
+	{
+		int pick = Math.RandomInt(0, 4);
+		if (pick == 0)
+		{
+			m_FoodWreck.x = 40;
+			m_FoodWreck.y = y + m_FoodWreck.h / 2;
+			m_FoodWreck.used = true;
+			m_FoodWreck.sprite.Show(true);
+			return m_FoodWreck;
+		}
+		int prop = P_CRATE;
+		if (pick == 2)
+			prop = P_BUSH;
+		else if (pick == 3)
+			prop = P_BROADLEAF;
+		if (BiomeHere() == "snow" && prop == P_BROADLEAF)
+			prop = P_SNOWPINE;
+		else if (BiomeHere() == "desert" && prop != P_CRATE)
+			prop = P_DRYBUSH;
+		int pcx = prop % 4;
+		int pcy = prop / 4;
+		m_FoodProp.sprite.Cell(pcx * 64, pcy * 64, 64, 64);
+		m_FoodProp.x = 46;
+		m_FoodProp.y = y + m_FoodProp.h / 2;
+		m_FoodProp.used = true;
+		m_FoodProp.sprite.Show(true);
+		return m_FoodProp;
 	}
 
 	// the gas station filler walks to the next car's filler cap (right side), round the cars in the way
@@ -1978,6 +2455,10 @@ class DL_FilmPlayer
 			return "Blew a tyre. " + who + " put on the spare.";
 		if (e.kind == "flat" && e.detail == "kit")
 			return "Blew a tyre. " + who + " patched it.";
+		if (e.kind == "flat" && e.detail == "engine")
+			return "The engine is giving out. " + who + " patches it up with the blowtorch.";
+		if (e.kind == "flat" && e.detail == "enginedead")
+			return "The engine gave out - no blowtorch. The car stays here.";
 		if (e.kind == "flat")
 			return "Blew a tyre - no spare. The car stays here.";
 		if (e.kind == "fuel" && e.detail == "found")
@@ -1997,6 +2478,19 @@ class DL_FilmPlayer
 			if (m_Convoy)
 				return "Out of gas. Nothing found: the car stays here.";
 			return "Out of gas. Nothing found: on foot from here.";
+		}
+		if (e.kind == "find" && e.times > 1)
+		{
+			string n = e.times.ToString();
+			if (e.detail == "gas" && m_V && m_V.kind == "boat")
+				return n + " fuel docks along the way: every tank and can filled.";
+			if (e.detail == "gas")
+				return n + " working gas stations along the way: every tank and can filled.";
+			if (e.detail == "water" && m_Water)
+				return "Rain, " + n + " times: everyone drinks, every bottle filled.";
+			if (e.detail == "water")
+				return n + " wells along the way: everyone drinks, every bottle filled.";
+			return "Food found along the way, " + n + " times.";
 		}
 		if (e.kind == "find" && e.detail == "gas" && m_V && m_V.kind == "boat")
 			return "A fuel dock! Every tank and can filled.";
@@ -2022,6 +2516,18 @@ class DL_FilmPlayer
 			return "Infected! " + who + " fought it off.";
 		if (e.kind == "ration")
 			return "Food and water ran low: everyone rations.";
+		if (e.kind == "note")
+			return e.detail;                  // the trail: what a choice did
+		if (e.kind == "card")
+			return "";                        // the card itself is on the screen
+		if (e.kind == "act")
+		{
+			// played out under the outcome's line (the note that follows it)
+			int ni = m_Film.events.Find(e) + 1;
+			if (ni > 0 && ni < m_Film.events.Count() && m_Film.events[ni].kind == "note")
+				return m_Film.events[ni].detail;
+			return "";
+		}
 		if (e.kind == "died")
 			return who + " didn't make it.";
 		return "";
@@ -2043,9 +2549,30 @@ class DL_FilmPlayer
 			SceneEnd();
 			return;
 		}
+		if (m_Waiting)
+		{
+			if (m_Scene + 1 < m_Film.events.Count() || !m_Hold)
+			{
+				m_Waiting = false;
+				NextScene();
+			}
+			return;
+		}
 		DL_FilmEvent e = Ev();
 		if (!e)
 			return;
+		if (e.kind == "card")
+		{
+			// the stage stands until the outcome (or whatever comes next) is in
+			if (m_Scene + 1 < m_Film.events.Count() || !m_Hold)
+				NextScene();
+			return;
+		}
+		if (e.kind == "act")
+		{
+			SceneAct(dt);
+			return;
+		}
 		float len = DL_Film.SceneSeconds(e);
 		if ((e.kind == "walk" || e.kind == "swim") && m_Leaving)
 		{
@@ -2097,7 +2624,9 @@ class DL_FilmPlayer
 			if (m_Actor && m_SceneT > 1)
 				m_Actor.down = true;
 		}
-		if (m_SceneT >= len)
+		// a well or food find runs until whoever went over is back (a slow stop or a long walk), a few seconds at most
+		bool finding = e.kind == "find" && e.detail != "gas" && m_Step >= 10 && m_Step != 12 && m_SceneT < len + 6;
+		if (m_SceneT >= len && !finding)
 			NextScene();
 	}
 
@@ -2149,6 +2678,16 @@ class DL_FilmPlayer
 				m_Puff.x = c.x;
 			}
 			m_Puff.y = m_WheelY;
+			if (e.detail == "engine" || e.detail == "enginedead")
+			{
+				// the engine smokes, under the bonnet at the front (the car drives down: its front is at the bottom)
+				m_WheelSide = -1;
+				m_WheelY = c.y + hh - 12;
+				m_Puff.x = c.x;
+				m_Puff.y = c.y + hh - 6;
+				if (c.kind == "bike")
+					m_Puff.y = c.y;
+			}
 			m_Puff.sprite.Show(true);
 			NextStep();
 		}
@@ -2184,7 +2723,7 @@ class DL_FilmPlayer
 					{
 						if (e.detail == "spare")
 							ShowTool(P_WHEEL, m_Actor.x + m_WheelSide * 9, m_Actor.y + 11);
-						else if (e.detail == "kit")
+						else if (e.detail == "kit" || e.detail == "engine")
 							ShowTool(P_CRATE, m_Actor.x + m_WheelSide * 9, m_Actor.y + 11);
 					}
 				}
@@ -2200,8 +2739,10 @@ class DL_FilmPlayer
 		else if (m_Step == 3)
 		{
 			float work = 2.6;
-			if (e.detail == "none")
+			if (e.detail == "none" || e.detail == "enginedead")
 				work = 1.4;                       // nothing to fix it with
+			else if (e.detail == "engine")
+				work = 3.6;                       // a blowtorch job
 			if (m_StepT > work && !m_HelperCarry)
 			{
 				m_Tool.sprite.Show(false);
@@ -2210,7 +2751,7 @@ class DL_FilmPlayer
 					m_Actor.pose = DL_FilmPerson.NORMAL;
 					m_Actor.dir = 0;
 				}
-				if (e.detail != "none")
+				if (e.detail != "none" && e.detail != "enginedead")
 				{
 					m_Puff.sprite.Show(false);
 					Board(c);
@@ -2218,7 +2759,7 @@ class DL_FilmPlayer
 				NextStep();
 			}
 		}
-		else if (m_Step == 4 && e.detail != "none")
+		else if (m_Step == 4 && e.detail != "none" && e.detail != "enginedead")
 		{
 			bool helperIn = true;
 			if (m_Helper)
@@ -2671,6 +3212,1593 @@ class DL_FilmPlayer
 		}
 	}
 
+	// ---------------- the trail's card scenes ----------------
+	// A card (event "card", detail = its scene, e.g. "barrier bandits:2") stops the road and sets the stage ahead of
+	// the cars while the party votes; the outcome (event "act", detail = steps, e.g. "out shoot:npc back drive", who =
+	// whom it is about) plays it out a step at a time. The words: Research/interactive-trail-design.md "Card scenes".
+
+	protected void BuildStage()
+	{
+		m_Blocks.Clear();
+		for (int i = 0; i < 5; i++)
+			m_Blocks.Insert(new DL_FilmThing(m_Root, 3, DIR + "barrier_ca.paa", m_Px, 128, 64, 256, 256, 0.55));   // Tools/anim_roadblock_cut.py
+		m_Deer = new DL_FilmThing(m_Root, 3, DIR + "deer_ca.paa", m_Px, 64, 64, 512, 128, 0.66);   // ~42 px (Tools/anim_deer_cut.py)
+		m_Camp = new DL_FilmThing(m_Root, 3, TRAIL_TEX, m_Px, 64, 64, 256, 256, 0.45);
+		m_Meat = new DL_FilmThing(m_Root, 3, TRAIL_TEX, m_Px, 64, 64, 256, 256, 0.35);
+		m_Meat.sprite.Cell(192, 192, 64, 64);
+		m_Steam = new DL_FilmThing(m_Root, SORT_TOP - 10, TRAIL_TEX, m_Px, 64, 64, 256, 256, 0.55);
+		m_Splash = new DL_FilmThing(m_Root, 3, DIR + "splash_ca.paa", m_Px, 64, 64, 256, 256, 1);   // Tools/anim_river_cut.py
+		m_SplashL = new DL_FilmThing(m_Root, 3, DIR + "splash_ca.paa", m_Px, 64, 64, 256, 256, 1);
+		m_SplashR = new DL_FilmThing(m_Root, 3, DIR + "splash_ca.paa", m_Px, 64, 64, 256, 256, 1);
+		// Tools/anim_river_cut.py: 4 frames of 256 x 256, the water's middle on the cell's middle, the broken bridge end
+		// on the near (upper) bank; river_props: "BRIDGE OUT" sign, driftwood log, reeds, bridge debris
+		m_RiverField = new DL_FilmThing(m_Root, 3, DIR + "river_ca.paa", m_Px, 256, 256, 256, 1024, 1);
+		m_RiverField.sprite.Cell(0, 0, 256, 256);
+		m_RiverSnow = new DL_FilmThing(m_Root, 3, DIR + "river_snow_ca.paa", m_Px, 256, 256, 256, 1024, 1);
+		m_RiverDesert = new DL_FilmThing(m_Root, 3, DIR + "river_desert_ca.paa", m_Px, 256, 256, 256, 1024, 1);
+		m_River = m_RiverField;
+		m_RiverProps.Clear();
+		array<int> propCells = {0, 1, 2, 2, 3};
+		foreach (int pc : propCells)
+		{
+			DL_FilmThing rp = new DL_FilmThing(m_Root, 4, DIR + "river_props.paa", m_Px, 64, 64, 256, 64, 1);
+			rp.sprite.Cell(pc * 64, 0, 64, 64);
+			m_RiverProps.Insert(rp);
+		}
+		m_Flash2 = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 255, 235, 130), SORT_TOP + 1, 0, 0, 3 * m_Px, 3 * m_Px);
+		m_Flash2.Show(false);
+		m_Cross = new DL_FilmThing(m_Root, 3, DIR + "crossroad_ca.paa", m_Px, 256, 128, 256, 128, 1);   // Tools/anim_fork_cut.py
+		m_Cross.sprite.Cell(0, 0, 256, 128);
+		m_Lake = new DL_FilmThing(m_Root, 3, DIR + "lake_ca.paa", m_Px, 128, 128, 128, 128, 1);
+		m_Lake.sprite.Cell(0, 0, 128, 128);
+		m_Sign = Thing2(0, 0, 0.8, 3);
+		m_Ring = Thing2(2, 3, 0.6, 4);
+		m_Wreck = new DL_FilmThing(m_Root, 3, DIR + "heli_ca.paa", m_Px, 128, 128, 128, 128, 0.8);    // ~102 px with its shadow
+		m_Wreck.sprite.Cell(0, 0, 128, 128);
+		m_Column = new DL_FilmThing(m_Root, SORT_TOP - 30, TRAIL_TEX, m_Px, 64, 64, 256, 256, 1.1);
+		m_Column.sprite.SetColor(ARGB(255, 60, 60, 64));
+		m_Mud = Thing2(2, 1, 1.7, 3);
+		m_Spray = Thing2(2, 2, 0.6, SORT_TOP - 25);
+		// Tools/anim_trail.py night(): 128 x 128 cells shown 96 x 96, the lamps on the top edge; car cells left, bike right
+		m_Beam = new DL_FilmThing(m_Root, SORT_TOP - 50, DIR + "night_ca.paa", m_Px, 128, 128, 256, 256, 0.75);
+		m_Beam.sprite.SetColor(ARGB(255, 6, 8, 26));
+		m_Glow = new DL_FilmThing(m_Root, SORT_TOP - 49, DIR + "night_ca.paa", m_Px, 128, 128, 256, 256, 0.75);
+		m_Glow.sprite.SetColor(ARGB(255, 255, 250, 238));
+		m_Rod = Thing2(0, 1, 0.6, SORT_TOP - 26);
+		m_Fish = Thing2(1, 1, 0.4, SORT_TOP - 26);
+		m_Bubble = Thing2(1, 0, 0.5, SORT_TOP - 5);
+		m_Gas.Clear();
+		for (int gi = 0; gi < 7; gi++)
+		{
+			DL_FilmThing g = Thing2(gi % 2, 2, 1.3, SORT_TOP - 35);
+			g.sprite.SetAlpha(0.8);
+			m_Gas.Insert(g);
+		}
+		float vw = 256 * m_Px;
+		float vh = m_ViewH * m_Px;
+		m_Dark = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 6, 8, 26), SORT_TOP - 50, m_Ox, m_Oy, vw, vh);
+		m_Dark.SetAlpha(0);
+		m_Dark.Show(false);
+		m_DarkB = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 6, 8, 26), SORT_TOP - 50, m_Ox, m_Oy, vw, vh);
+		m_DarkL = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 6, 8, 26), SORT_TOP - 50, m_Ox, m_Oy, vw, vh);
+		m_DarkR = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 6, 8, 26), SORT_TOP - 50, m_Ox, m_Oy, vw, vh);
+		m_DarkB.Show(false);
+		m_DarkL.Show(false);
+		m_DarkR.Show(false);
+		m_Haze = DL_FilmSpike.Image(m_Root, DL_FilmSpike.PLAIN, ARGB(255, 236, 240, 246), SORT_TOP - 46, m_Ox, m_Oy, vw, vh);
+		m_Haze.SetAlpha(0);
+		m_Haze.Show(false);
+		m_Snow = new DL_Strip(m_Root, DIR + "snow_ca.paa", SORT_TOP - 45, m_Ox, m_Oy, vw, vh, 256, 256, true);
+		m_Snow.SetAlpha(0);
+		m_DarkA = 0;
+		m_DarkTo = 0;
+		m_SnowA = 0;
+		m_SnowTo = 0;
+		m_Spin = false;
+		m_Sick = null;
+		m_Npcs.Clear();
+		m_Horde.Clear();
+		m_Staged = false;
+		m_SteamMode = 0;
+		m_Plow = 0;
+		m_Wading = false;
+		m_Carry = false;
+		m_HitT = 0;
+		m_ClearT = 0;
+	}
+
+	// a thing from the second trail atlas (Tools/anim_trail.py atlas2), cell (cx, cy)
+	protected DL_FilmThing Thing2(int cx, int cy, float scale, int sort)
+	{
+		DL_FilmThing t = new DL_FilmThing(m_Root, sort, TRAIL2_TEX, m_Px, 64, 64, 256, 256, scale);
+		t.sprite.Cell(cx * 64, cy * 64, 64, 64);
+		return t;
+	}
+
+	protected void Put(DL_FilmThing t, float x, float y)
+	{
+		t.x = x;
+		t.y = y;
+		t.used = true;
+		t.sprite.SetAlpha(1);
+		t.sprite.Show(true);
+	}
+
+	// a bubble over p (null = over the front car): cell 1 "?", 2 fever, 11 "!"; seconds -1 = until taken away
+	protected void Bubble(DL_FilmPerson p, int cell, float seconds)
+	{
+		int bx = cell % 4;
+		int by = cell / 4;
+		m_Bubble.sprite.Cell(bx * 64, by * 64, 64, 64);
+		m_BubbleOn = p;
+		m_BubbleT = seconds;
+		m_Bubble.used = true;
+		m_Bubble.sprite.Show(true);
+	}
+
+	protected void StageThing(DL_FilmThing t, float x, float y, int cx, int cy)
+	{
+		t.sprite.Cell(cx * 64, cy * 64, 64, 64);
+		t.sprite.SetAlpha(1);
+		t.x = x;
+		t.y = y;
+		t.used = true;
+		t.sprite.Show(true);
+	}
+
+	// a piece of the roadblock: cell 0 barrier, 1 broken barrier, 2 sandbags, 3 junk pile, 4 spike strip, 5 bloody barrier
+	protected void StageBlock(DL_FilmThing t, float x, float y, int cell)
+	{
+		int bcol = cell % 2;
+		int brow = cell / 2;
+		StageThing(t, x, y, 0, 0);
+		t.sprite.Cell(bcol * 128, brow * 64, 128, 64);
+	}
+
+	// nothing by the road or on it near y (a sign through the barrier, a wreck on the deer)
+	protected void ClearRoad(float y)
+	{
+		foreach (DL_FilmThing t : m_Props)
+		{
+			if (t.used && Math.AbsFloat(t.y - y) < 90)
+			{
+				t.used = false;
+				t.sprite.Show(false);
+			}
+		}
+		foreach (DL_FilmThing w : m_Wrecks)
+		{
+			if (w.used && Math.AbsFloat(w.y - y) < 120)
+			{
+				w.used = false;
+				w.sprite.Show(false);
+			}
+		}
+	}
+
+	protected DL_FilmPerson Npc(DL_FilmActor a, float x, float y, int dir)
+	{
+		DL_FilmPerson p = new DL_FilmPerson(m_Root, 8, m_Px, a, "");
+		p.x = x;
+		p.y = y;
+		p.dir = dir;
+		p.Show(true);
+		m_Npcs.Insert(p);
+		return p;
+	}
+
+	protected void StageUp(string scene, string who)
+	{
+		ClearStage();
+		m_Staged = true;
+		m_Target = 0;
+		foreach (DL_FilmPerson mp : m_Crew)
+			mp.marching = false;
+		m_LeadHome = m_LeadY;
+		// high enough that the stage shows above the card (it covers the window's lower part)
+		float up = m_ViewH * 0.17;
+		if (m_Convoy)
+			up = m_ViewH * 0.22;
+		if (m_LeadY > up)
+		{
+			m_LeadY = up;
+			Relayout(false);
+		}
+		// ahead of the front car (or of the walkers), plus the road they still roll while they brake
+		DL_FilmCar lead = FirstCar();
+		float ahead = m_WalkY + 40;
+		if (lead)
+			ahead = lead.slotY + lead.h / 2 + 28;
+		else
+		{
+			foreach (DL_FilmPerson w : m_Crew)
+			{
+				if (!w.down && w.shown)
+					ahead = Math.Max(ahead, w.y + 40);
+			}
+		}
+		float brake = m_Speed * m_Speed / (2 * 168);
+		float y = ahead + brake;
+		float side = m_WalkY;
+		if (lead)
+			side = lead.slotY;
+		side += brake;
+		ClearRoad(y);
+		ClearRoad(side);
+		array<string> words = new array<string>;
+		scene.Split(" ", words);
+		foreach (string word : words)
+		{
+			string v = word;
+			string arg = "";
+			int c = word.IndexOf(":");
+			if (c > 0)
+			{
+				v = word.Substring(0, c);
+				arg = word.Substring(c + 1, word.Length() - c - 1);
+			}
+			int n = arg.ToInt();
+			if (v == "barrier")
+			{
+				// two barriers across the lane (clean, broken or bloody), spikes in front, junk and sandbags at the sides
+				array<int> looks = {0, 1, 5};
+				int look1 = looks.GetRandomIndex();
+				int look2 = (look1 + Math.RandomInt(1, 3)) % 3;
+				StageBlock(m_Blocks[0], 98, y, looks[look1]);
+				StageBlock(m_Blocks[1], 158, y + 2, looks[look2]);
+				StageBlock(m_Blocks[2], 128, y + 16, 4);
+				StageBlock(m_Blocks[3], 40, y - 2, 3);
+				StageBlock(m_Blocks[4], 214, y + 3, 2);
+			}
+			else if (v == "bandits")
+			{
+				if (n < 1)
+					n = 2;
+				for (int b = 0; b < n; b++)
+				{
+					string gun = "akmrifle";
+					if (b % 2 == 1)
+						gun = "sksrifle";
+					DL_FilmActor ba = DemoActor("Bandit", "bandit", "gorkapants@olive,gorkajacket@olive,balaklava@black", gun, "", -1);
+					DL_FilmPerson bp = Npc(ba, 128 + (b - (n - 1) / 2.0) * 34, y + 20, 1);
+					bp.pose = DL_FilmPerson.AIM;
+				}
+			}
+			else if (v == "horde")
+			{
+				if (n < 1)
+					n = 6;
+				array<string> zeds = DL_FilmCatalog.List(DL_FilmCatalog.ZED);
+				m_HordeMode = 0;
+				for (int z = 0; z < n; z++)
+				{
+					DL_FilmPerson zp = new DL_FilmPerson(m_Root, 8, m_Px, null, zeds[z % zeds.Count()]);
+					zp.x = Math.RandomFloat(76, 180);
+					zp.y = y + Math.RandomFloat(-6, 36);
+					zp.speed = 12;
+					zp.dir = Math.RandomInt(0, 4);
+					zp.Show(true);
+					m_Horde.Insert(zp);
+				}
+			}
+			else if (v == "river")
+			{
+				float ry = y + 34;                     // the water's middle; the broken bridge end reaches ~70 up
+				string riverLand = BiomeHere();
+				m_River = m_RiverField;
+				if (riverLand == "snow")
+					m_River = m_RiverSnow;
+				else if (riverLand == "desert")
+					m_River = m_RiverDesert;
+				m_River.x = 128;
+				m_River.y = ry;
+				m_River.used = true;
+				m_River.sprite.SetAlpha(1);
+				m_River.sprite.Show(true);
+				Put(m_RiverProps[0], 216, ry - 74);    // the sign on the verge before the edge
+				Put(m_RiverProps[1], 34, ry + 6);      // a log in the water
+				if (riverLand != "snow")
+				{
+					Put(m_RiverProps[2], 24, ry - 34); // reeds on both banks
+					Put(m_RiverProps[3], 238, ry + 32);
+				}
+				Put(m_RiverProps[4], 202, ry - 2);     // a broken pier in the water
+			}
+			else if (v == "steam")
+				m_SteamMode = 1;
+			else if (v == "deer")
+			{
+				m_DeerDir = 1;
+				m_DeerMode = 0;
+				StageThing(m_Deer, 30, side, 0, 1);
+			}
+			else if (v == "stranger")
+				Npc(DemoActor("Stranger", "def2", "jeans@blue,hoodiegray@gray,improvisedbag", "", "", -1), 210, side + 8, 3);
+			else if (v == "survivor")
+			{
+				DL_FilmPerson sp = Npc(DemoActor("Survivor", "kate", "jeans@blue,raincoatblue@red", "", "", -1), 212, side + 8, 3);
+				sp.pose = DL_FilmPerson.USE;
+			}
+			else if (v == "fork")
+			{
+				// the side road across, a signpost (whole or broken) at its near corner, right of the road
+				Put(m_Cross, 128, y - 26);
+				Put(m_Sign, 210, y + 20);
+				if (Math.RandomInt(0, 2) == 0)
+					m_Sign.sprite.Cell(0, 0, 64, 64);
+				else
+					m_Sign.sprite.Cell(64, 192, 64, 64);
+			}
+			else if (v == "lake")
+				Put(m_Lake, 12, side + 6);
+			else if (v == "helicrash")
+				Put(m_Wreck, 230, side + 10);
+			else if (v == "mud")
+			{
+				if (lead)
+					Put(m_Mud, lead.x, lead.slotY + 6 + brake);
+				m_Spin = true;
+			}
+			else if (v == "sick")
+			{
+				foreach (DL_FilmPerson sk : m_Crew)
+				{
+					if (sk.name == who && !sk.down)
+						m_Sick = sk;
+				}
+				if (m_Sick)
+				{
+					OutOf(m_Sick);
+					m_Sick.pose = DL_FilmPerson.USE;
+					Bubble(m_Sick, 2, -1);
+				}
+			}
+			else if (v == "night")
+				m_DarkTo = 0.62;
+			else if (v == "blizzard")
+				m_SnowTo = 1;
+			else if (v == "gas")
+			{
+				for (int g = 0; g < m_Gas.Count(); g++)
+					Put(m_Gas[g], 30 + g * 33 + Math.RandomFloat(-6, 6), y + 10 + Math.RandomFloat(-8, 22));
+			}
+		}
+	}
+
+	// the stage goes: the cars back to their places; hide = at once (else it stays on the road and scrolls away)
+	protected void Unstage(bool hide)
+	{
+		if (m_Staged)
+		{
+			m_Staged = false;
+			m_LeadY = m_LeadHome;
+			Relayout(false);
+		}
+		m_Plow = 0;
+		m_Wading = false;
+		m_Carry = false;
+		if (m_Tool)
+			m_Tool.sprite.Show(false);
+		foreach (DL_FilmPerson p : m_Crew)
+		{
+			p.swimming = false;
+			p.SetAlpha(1);
+		}
+		if (hide)
+			ClearStage();
+	}
+
+	protected void ClearStage()
+	{
+		foreach (DL_FilmPerson n : m_Npcs)
+			n.Show(false);
+		foreach (DL_FilmPerson z : m_Horde)
+			z.Show(false);
+		m_Npcs.Clear();
+		m_Horde.Clear();
+		array<DL_FilmThing> things = {m_Deer, m_Camp, m_Meat, m_Splash, m_SplashL, m_SplashR, m_RiverField, m_RiverSnow, m_RiverDesert, m_Steam, m_Cross, m_Sign, m_Ring, m_Lake, m_Wreck, m_Column, m_Mud, m_Spray, m_Beam, m_Glow, m_Rod, m_Fish, m_Bubble};
+		foreach (DL_FilmThing b : m_Blocks)
+			things.Insert(b);
+		foreach (DL_FilmThing rpc : m_RiverProps)
+			things.Insert(rpc);
+		foreach (DL_FilmThing gt : m_Gas)
+			things.Insert(gt);
+		foreach (DL_FilmThing t : things)
+		{
+			if (!t)
+				continue;
+			t.used = false;
+			t.sprite.Show(false);
+		}
+		m_SteamMode = 0;
+		m_ClearT = 0;
+		m_Joiner = null;
+		m_Sick = null;
+		m_BubbleOn = null;
+		m_Spin = false;
+		m_DarkTo = 0;
+		m_SnowTo = 0;
+	}
+
+	protected void ActStart(DL_FilmEvent e)
+	{
+		m_Act.Clear();
+		e.detail.Split(" ", m_Act);
+		m_ActI = 0;
+		m_ActT = 0;
+		m_ActNew = true;
+		m_WorkAt = -1;
+		DL_Log.Detail("trail act: " + e.detail);
+	}
+
+	protected void SceneAct(float dt)
+	{
+		m_ActT += dt;
+		if (m_ActI >= m_Act.Count())
+		{
+			if (m_ActT > 0.8)
+				NextScene();
+			return;
+		}
+		string step = m_Act[m_ActI];
+		string v = step;
+		string arg = "";
+		int c = step.IndexOf(":");
+		if (c > 0)
+		{
+			v = step.Substring(0, c);
+			arg = step.Substring(c + 1, step.Length() - c - 1);
+		}
+		bool first = m_ActNew;
+		m_ActNew = false;
+		bool done = step == "" || ActStep(v, arg, first) || m_ActT > 9;
+		if (m_SceneT > 24)
+		{
+			m_ActI = m_Act.Count();           // a safety: the road must go on
+			done = true;
+		}
+		if (done)
+		{
+			m_ActI++;
+			m_ActT = 0;
+			m_ActNew = true;
+			m_WorkAt = -1;
+		}
+	}
+
+	protected DL_FilmPerson FirstNpc(bool alive)
+	{
+		foreach (DL_FilmPerson n : m_Npcs)
+		{
+			if (n.shown && (!alive || !n.down))
+				return n;
+		}
+		return null;
+	}
+
+	protected DL_FilmPerson NearZed(DL_FilmPerson to)
+	{
+		DL_FilmPerson best = null;
+		float bd = 1000000;
+		foreach (DL_FilmPerson z : m_Horde)
+		{
+			if (z.down || !z.shown)
+				continue;
+			float d = 0;
+			if (to)
+				d = (z.x - to.x) * (z.x - to.x) + (z.y - to.y) * (z.y - to.y);
+			if (d < bd)
+			{
+				bd = d;
+				best = z;
+			}
+		}
+		return best;
+	}
+
+	// where a step's target is (film px); false = there is none
+	protected bool TargetAt(string t, out float tx, out float ty)
+	{
+		DL_FilmCar lead = FirstCar();
+		if (t == "deer" && m_Deer.used)
+		{
+			tx = m_Deer.x;
+			ty = m_Deer.y;
+			return true;
+		}
+		if (t == "zed")
+		{
+			DL_FilmPerson z = NearZed(m_Actor);
+			if (z)
+			{
+				tx = z.x;
+				ty = z.y;
+				return true;
+			}
+		}
+		if (t == "lake" && m_Lake.used)
+		{
+			tx = m_Lake.x + 62;                  // its shore, on the road side
+			ty = m_Lake.y + 8;
+			return true;
+		}
+		if (t == "wreck" && m_Wreck.used)
+		{
+			tx = m_Wreck.x - 46;                 // by its nose (down-left)
+			ty = m_Wreck.y + 14;
+			return true;
+		}
+		if (t == "sign" && m_Sign.used)
+		{
+			tx = m_Sign.x - 14;                  // at its foot, on the road side
+			ty = m_Sign.y + 18;
+			return true;
+		}
+		if (t == "sick" && m_Sick)
+		{
+			tx = m_Sick.x + 16;
+			ty = m_Sick.y;
+			return true;
+		}
+		if (t == "front" && lead)
+		{
+			tx = lead.x;
+			ty = lead.y + lead.HalfH() + 12;
+			return true;
+		}
+		DL_FilmPerson n = FirstNpc(true);
+		if (!n)
+			n = FirstNpc(false);
+		if (n)
+		{
+			tx = n.x;
+			ty = n.y;
+			return true;
+		}
+		return false;
+	}
+
+	// the side of the road the stage's business is on (-1 left, 1 right)
+	protected int StageSide()
+	{
+		if (m_Deer.used || m_Lake.used)
+			return -1;
+		if (m_Wreck.used)
+			return 1;
+		DL_FilmPerson n = FirstNpc(false);
+		if (n && n.x > 150)
+			return 1;
+		return -1;
+	}
+
+	protected void OutOf(DL_FilmPerson p)
+	{
+		if (!p || p.shown || p.down)
+			return;
+		DL_FilmCar c = FilmCar(p.car);
+		if (c && !c.inWorld)
+			GetOutOne(p, c, StageSide());
+	}
+
+	// he raises his weapon at the target (the slung one into his hands)
+	protected void Raise(DL_FilmPerson p, float tx, float ty)
+	{
+		if (!p)
+			return;
+		if (!p.hand && p.back)
+		{
+			p.Draw();
+			m_Drawn = true;
+		}
+		p.path.Clear();
+		p.Face(tx - p.x, ty - p.y);
+		if (p.Shoots() || !p.hand)
+			p.pose = DL_FilmPerson.AIM;
+		else
+			p.pose = DL_FilmPerson.SWING;
+	}
+
+	protected void Roll(bool walkers)
+	{
+		Unstage(false);
+		m_Target = DRIVE;
+		if (walkers || !FirstCar() || Walkers() > 0)
+			m_Target = WALK;
+		foreach (DL_FilmPerson p : m_Crew)
+		{
+			if (!p.down && p.car < 0)
+			{
+				p.dir = 0;
+				p.pose = DL_FilmPerson.NORMAL;
+				p.marching = true;
+			}
+		}
+	}
+
+	// one step; true = done, on to the next
+	protected bool ActStep(string v, string arg, bool first)
+	{
+		DL_FilmPerson a = m_Actor;
+		DL_FilmCar lead = FirstCar();
+		float tx;
+		float ty;
+		if (v == "wait")
+			return m_ActT >= arg.ToFloat();
+		if (v == "out")
+		{
+			if (first)
+				OutOf(a);
+			return m_ActT > 0.5;
+		}
+		if (v == "all")
+		{
+			if (first)
+			{
+				foreach (DL_FilmCar oc : m_Cars)
+				{
+					if (!oc.inWorld && Inside(oc))
+						GetOut(oc);
+				}
+			}
+			return m_ActT > 0.6;
+		}
+		if (v == "go")
+		{
+			if (first && a && TargetAt(arg, tx, ty))
+			{
+				a.pose = DL_FilmPerson.NORMAL;
+				float gx = tx;
+				float gy = ty - 18;                  // in front of a person (between him and the cars)
+				if (arg == "deer")
+				{
+					gx = tx + 20;
+					gy = ty;
+				}
+				else if (arg == "lake" || arg == "wreck" || arg == "sick" || arg == "sign")
+					gy = ty;
+				else if (arg == "front")
+				{
+					gy = ty;
+					a.Go(a.x, gy);
+				}
+				a.Go(gx, gy);
+			}
+			return !a || !a.Busy() || m_ActT > 6;
+		}
+		if (v == "shoot" || v == "miss")
+		{
+			if (!a || !TargetAt(arg, tx, ty))
+				return true;
+			if (first)
+			{
+				Raise(a, tx, ty);
+				if (arg == "deer")
+					m_DeerMode = 3;               // it hears him: head up
+			}
+			if (a.pose == DL_FilmPerson.AIM && (a.Shoots() || a.hand == null))
+				Shot(a, m_ActT);
+			if (m_ActT < 1.3)
+				return false;
+			m_Flash.Show(false);
+			a.pose = DL_FilmPerson.NORMAL;
+			if (v == "miss" && arg == "deer")
+			{
+				m_DeerMode = 1;
+				m_DeerDir = 0;
+				m_DeerVx = -110;
+			}
+			else if (arg == "deer")
+				m_DeerMode = 2;
+			else if (arg == "zed")
+			{
+				DL_FilmPerson kz = NearZed(a);
+				if (kz)
+					kz.down = true;
+			}
+			else
+			{
+				DL_FilmPerson kn = FirstNpc(true);
+				if (kn)
+				{
+					kn.down = true;
+					kn.pose = DL_FilmPerson.NORMAL;
+				}
+			}
+			return true;
+		}
+		if (v == "aim")
+		{
+			if (first && a && TargetAt(arg, tx, ty))
+				Raise(a, tx, ty);
+			return m_ActT > 0.6;
+		}
+		if (v == "npcfire")
+		{
+			DL_FilmPerson sn = FirstNpc(true);
+			if (!sn || !a)
+				return true;
+			if (first)
+			{
+				foreach (DL_FilmPerson fn : m_Npcs)
+				{
+					if (!fn.down)
+					{
+						fn.FaceTo(a);
+						fn.pose = DL_FilmPerson.AIM;
+					}
+				}
+			}
+			ShotOf(m_Flash2, sn, m_ActT);
+			if (m_ActT < 1.3)
+				return false;
+			m_Flash2.Show(false);
+			return true;
+		}
+		if (v == "npcflee")
+		{
+			foreach (DL_FilmPerson rn : m_Npcs)
+			{
+				if (rn.down)
+					continue;
+				rn.pose = DL_FilmPerson.NORMAL;
+				rn.speed = 75;
+				rn.path.Clear();
+				float off = -50;
+				if (rn.x > 128)
+					off = 310;
+				rn.Go(off, rn.y + 30);
+			}
+			return true;
+		}
+		if (v == "hit")
+		{
+			if (first)
+				m_HitT = 0.9;
+			return m_ActT > 0.9;
+		}
+		if (v == "work")
+		{
+			float wt = arg.ToFloat();
+			if (wt <= 0)
+				wt = 2;
+			if (a)
+			{
+				a.path.Clear();
+				a.pose = DL_FilmPerson.USE;
+			}
+			if (m_ActT < wt)
+				return false;
+			if (a)
+				a.pose = DL_FilmPerson.NORMAL;
+			return true;
+		}
+		if (v == "fix")
+		{
+			if (!a || !lead)
+				return true;
+			if (first)
+			{
+				OutOf(a);
+				a.pose = DL_FilmPerson.NORMAL;
+				float fy = lead.y + lead.HalfH() + 12;
+				a.Go(a.x, fy);
+				a.Go(lead.x, fy);
+			}
+			if (a.Busy() && m_ActT < 6)
+				return false;
+			if (m_WorkAt < 0)
+			{
+				m_WorkAt = m_ActT;
+				a.dir = 1;
+				a.pose = DL_FilmPerson.USE;
+				ShowTool(P_CRATE, a.x + 10, a.y + 6);
+			}
+			if (m_ActT - m_WorkAt < 2.6)
+				return false;
+			a.pose = DL_FilmPerson.NORMAL;
+			m_Tool.sprite.Show(false);
+			m_SteamMode = 0;
+			return true;
+		}
+		if (v == "fire")
+		{
+			if (a)
+			{
+				StageThing(m_Camp, a.x + 16, a.y + 8, 2, 2);
+				m_Meat.x = a.x + 16;
+				m_Meat.y = a.y + 2;
+				m_Meat.used = true;
+				m_Meat.sprite.Show(true);
+			}
+			return true;
+		}
+		if (v == "carry")
+		{
+			m_Carry = true;
+			return true;
+		}
+		if (v == "drop")
+		{
+			m_Carry = false;
+			if (a)
+				ShowTool(P_CRATE, a.x, a.y + 14);
+			return true;
+		}
+		if (v == "back")
+		{
+			if (first)
+			{
+				foreach (DL_FilmCar bc : m_Cars)
+				{
+					if (!bc.inWorld)
+						Board(bc);
+				}
+				foreach (DL_FilmPerson bw : m_Crew)
+				{
+					if (!bw.down)
+						bw.pose = DL_FilmPerson.NORMAL;
+				}
+				Formation(false);
+			}
+			bool all = true;
+			foreach (DL_FilmCar ic : m_Cars)
+			{
+				if (!ic.inWorld && !Boarded(ic))
+					all = false;
+			}
+			foreach (DL_FilmPerson ww : m_Crew)
+			{
+				if (!ww.down && ww.car < 0 && ww.Busy())
+					all = false;
+			}
+			if (!all && m_ActT < 7)
+				return false;
+			HideCrew();
+			if (m_Carry)
+			{
+				m_Carry = false;
+				m_Tool.sprite.Show(false);
+			}
+			return true;
+		}
+		if (v == "drive")
+		{
+			if (m_Tool)
+				m_Tool.sprite.Show(false);
+			Roll(false);
+			return true;
+		}
+		if (v == "slow")
+		{
+			Roll(true);
+			return true;
+		}
+		if (v == "stop")
+		{
+			m_Target = 0;
+			return m_Speed < 1 || m_ActT > 3;
+		}
+		if (v == "plow")
+		{
+			Roll(false);
+			m_Plow = 1;
+			return true;
+		}
+		if (v == "ford" || v == "stall")
+		{
+			if (!lead || !m_River.used)
+				return true;
+			if (first)
+			{
+				m_Staged = false;
+				m_LeadY = m_LeadHome;
+				Relayout(false);
+				m_Target = 40;
+				m_Plow = 2;
+			}
+			float front = lead.y + lead.HalfH();
+			if (v == "stall" && front > m_River.y)
+			{
+				m_Target = 0;
+				m_Plow = 3;
+				m_SteamMode = 1;
+				return m_Speed < 1;
+			}
+			if (v == "ford" && m_River.y + 36 < lead.Top())
+			{
+				m_Plow = 0;
+				m_Target = DRIVE;
+				if (Walkers() > 0)
+					m_Target = WALK;
+				return true;
+			}
+			return false;
+		}
+		if (v == "wade")
+		{
+			if (!m_River.used)
+				return true;
+			if (first)
+			{
+				Roll(true);
+				m_Target = WALK * 0.7;
+				m_Wading = true;
+			}
+			float topWalker = 100000;
+			foreach (DL_FilmPerson wp : m_Crew)
+			{
+				if (!wp.down && wp.car < 0)
+					topWalker = Math.Min(topWalker, wp.y);
+			}
+			if (m_River.y + 40 < topWalker - 16)
+			{
+				m_Wading = false;
+				foreach (DL_FilmPerson dry : m_Crew)
+					dry.swimming = false;
+				m_Target = WALK;
+				return true;
+			}
+			return false;
+		}
+		if (v == "steam")
+		{
+			if (arg == "off")
+				m_SteamMode = 0;
+			else if (arg == "black")
+				m_SteamMode = 2;
+			else
+				m_SteamMode = 1;
+			return true;
+		}
+		if (v == "join")
+		{
+			if (first)
+			{
+				m_Joiner = FirstNpc(true);
+				if (m_Joiner && lead)
+				{
+					float hx;
+					float hy;
+					DoorOf(lead, 3, hx, hy);
+					m_Joiner.pose = DL_FilmPerson.NORMAL;
+					m_Joiner.Go(m_Joiner.x, hy);
+					m_Joiner.Go(hx, hy);
+				}
+			}
+			if (m_Joiner && m_Joiner.Busy() && m_ActT < 6)
+				return false;
+			if (m_Joiner && lead)
+				m_Joiner.Show(false);    // in he gets
+			return true;
+		}
+		if (v == "aside" || v == "pass")
+		{
+			if (first)
+			{
+				m_HordeMode = 1;
+				if (v == "pass")
+					m_HordeMode = 2;
+				foreach (DL_FilmPerson hz : m_Horde)
+				{
+					if (hz.down)
+						continue;
+					hz.path.Clear();
+					hz.speed = 26;
+					if (v == "aside")
+						hz.Go(Math.RandomFloat(206, 246), hz.y + Math.RandomFloat(-10, 10));
+					else
+						hz.Go(-40, hz.y + Math.RandomFloat(-20, 20));
+				}
+			}
+			return m_ActT > 2.2;
+		}
+		if (v == "zed")
+		{
+			DL_FilmPerson az = NearZed(a);
+			if (!az || !a)
+				return true;
+			if (first)
+			{
+				az.path.Clear();
+				az.speed = 40;
+				az.Go(a.x + 14, a.y);
+			}
+			if (az.Busy() && m_ActT < 4)
+				return false;
+			az.attacking = m_ActT < 3.4;
+			az.FaceTo(a);
+			a.FaceTo(az);
+			if (m_ActT < 3.6)
+				return false;
+			az.attacking = false;
+			az.Go(az.x + 60, az.y + 10);
+			return true;
+		}
+		if (v == "clear")
+		{
+			if (first)
+				m_ClearT = 1;
+			if (m_ActT < 1)
+				return false;
+			ClearStage();
+			return true;
+		}
+		if (v == "splash")
+		{
+			if (lead)
+			{
+				m_Splash.x = lead.x;
+				m_Splash.y = lead.y + lead.HalfH();
+				m_Splash.used = true;
+				m_Splash.sprite.Show(true);
+			}
+			return m_ActT > 0.6;
+		}
+		// at the signpost with the compass (or GPS): its bubble over him, then the waypoint shows on the road ahead
+		if (v == "compass")
+		{
+			if (first && a)
+			{
+				a.path.Clear();
+				a.pose = DL_FilmPerson.USE;
+				Bubble(a, 12, 2.2);
+			}
+			if (m_ActT < 2.2)
+				return false;
+			if (a)
+				a.pose = DL_FilmPerson.NORMAL;
+			float ringY = m_Cross.y - 6;
+			if (!m_Cross.used && lead)
+				ringY = lead.Top() - 40;
+			float ringX = 128;
+			if (lead)
+				ringX = lead.x;
+			Put(m_Ring, ringX, ringY);
+			return true;
+		}
+		if (v == "think" || v == "alert" || v == "ill")
+		{
+			if (first)
+			{
+				int bcell = 1;
+				if (v == "alert")
+					bcell = 11;
+				else if (v == "ill")
+					bcell = 2;
+				DL_FilmPerson bubbleP = null;
+				if (a && a.shown)
+					bubbleP = a;
+				Bubble(bubbleP, bcell, 1.6);
+			}
+			return m_ActT > 1.6;
+		}
+		if (v == "fish")
+		{
+			float ft = arg.ToFloat();
+			if (ft <= 0)
+				ft = 3;
+			if (!a)
+				return true;
+			if (first)
+			{
+				a.path.Clear();
+				a.dir = 3;
+				a.pose = DL_FilmPerson.NORMAL;
+				Put(m_Rod, a.x - 13, a.y - 2);
+			}
+			if (m_ActT > ft * 0.65 && !m_Fish.used)
+				Put(m_Fish, a.x - 4, a.y + 6);
+			if (m_ActT < ft)
+				return false;
+			m_Rod.used = false;
+			m_Rod.sprite.Show(false);
+			m_Fish.used = false;
+			m_Fish.sprite.Show(false);
+			return true;
+		}
+		if (v == "zeds")
+		{
+			int zn = arg.ToInt();
+			if (zn < 1)
+				zn = 2;
+			float zx = 236;
+			float zy = 80;
+			if (m_Wreck.used)
+			{
+				zx = m_Wreck.x;
+				zy = m_Wreck.y;
+			}
+			else if (a)
+				zy = a.y;
+			array<string> zskins = DL_FilmCatalog.List(DL_FilmCatalog.ZED);
+			m_HordeMode = 0;
+			for (int zi = 0; zi < zn; zi++)
+			{
+				DL_FilmPerson nz = new DL_FilmPerson(m_Root, 8, m_Px, null, zskins[zi % zskins.Count()]);
+				nz.x = zx + Math.RandomFloat(-10, 30);
+				nz.y = zy + Math.RandomFloat(-30, 30);
+				nz.speed = 12;
+				nz.dir = 3;
+				nz.Show(true);
+				m_Horde.Insert(nz);
+			}
+			return true;
+		}
+		if (v == "push")
+		{
+			if (!lead)
+				return true;
+			bool fail = arg == "fail";
+			if (first)
+			{
+				int pi = 0;
+				foreach (DL_FilmPerson pp : m_Crew)
+				{
+					if (pp.down || !pp.shown)
+						continue;
+					pp.pose = DL_FilmPerson.NORMAL;
+					int pcol = pi % 3;
+					int prow = pi / 3;
+					float px2 = lead.x - 14 + 14 * pcol;
+					float py2 = lead.Top() - 8 - 10 * prow;
+					float sideX = lead.x - lead.HalfW() - 10;
+					if (pp.x > lead.x)
+						sideX = lead.x + lead.HalfW() + 10;
+					pp.Go(sideX, py2);
+					pp.Go(px2, py2);
+					pi++;
+				}
+				m_WorkAt = -1;
+			}
+			bool there = true;
+			foreach (DL_FilmPerson wpp : m_Crew)
+			{
+				if (!wpp.down && wpp.shown && wpp.Busy())
+					there = false;
+			}
+			if (!there && m_ActT < 6)
+				return false;
+			if (m_WorkAt < 0)
+			{
+				m_WorkAt = m_ActT;
+				foreach (DL_FilmPerson up : m_Crew)
+				{
+					if (!up.down && up.shown)
+					{
+						up.dir = 0;
+						up.pose = DL_FilmPerson.USE;
+					}
+				}
+			}
+			float pt = m_ActT - m_WorkAt;
+			if (!fail && pt > 0.8)
+				m_Target = 14;                    // it creeps out (the ground moves, the pushers with the car)
+			if (pt < 3)
+				return false;
+			m_Target = 0;
+			if (!fail)
+				m_Spin = false;
+			foreach (DL_FilmPerson dp : m_Crew)
+			{
+				if (!dp.down)
+					dp.pose = DL_FilmPerson.NORMAL;
+			}
+			return true;
+		}
+		if (v == "unstick")
+		{
+			m_Spin = false;
+			return true;
+		}
+		if (v == "cure")
+		{
+			if (m_Sick)
+				m_Sick.pose = DL_FilmPerson.NORMAL;
+			if (m_BubbleOn == m_Sick)
+			{
+				m_Bubble.used = false;
+				m_Bubble.sprite.Show(false);
+			}
+			return true;
+		}
+		if (v == "mask")
+		{
+			if (first)
+			{
+				foreach (DL_FilmPerson mp : m_Crew)
+				{
+					if (!mp.down && mp.shown)
+						mp.AddLayer("gasmask");
+				}
+			}
+			return m_ActT > 0.8;
+		}
+		if (v == "lights")
+		{
+			if (lead)
+			{
+				int beamCol = 0;
+				if (lead.kind == "bike")
+					beamCol = 128;
+				m_Beam.sprite.Cell(beamCol, 0, 128, 128);
+				m_Glow.sprite.Cell(beamCol, 128, 128, 128);
+				m_Beam.used = true;
+				m_Glow.used = true;
+			}
+			return true;
+		}
+		if (v == "dawn")
+		{
+			m_DarkTo = 0;
+			m_Beam.used = false;
+			m_Glow.used = false;
+			return m_ActT > 1.2;
+		}
+		if (v == "calm")
+		{
+			m_SnowTo = 0;
+			return m_ActT > 1.2;
+		}
+		DL_Log.Warn("trail act: unknown step " + v);
+		return true;
+	}
+
+	// muzzle flash on flash f every 0.45 s, at p's weapon
+	protected void ShotOf(ImageWidget f, DL_FilmPerson p, float t)
+	{
+		ImageWidget keep = m_Flash;
+		m_Flash = f;
+		Shot(p, t);
+		m_Flash = keep;
+	}
+
+	// a stage person on the ground: it scrolls with the road (and so does where it walks to)
+	protected void StagePerson(DL_FilmPerson p, float dt, float dy)
+	{
+		if (!p.shown)
+			return;
+		p.y -= dy;
+		for (int i = 0; i < p.path.Count(); i++)
+		{
+			vector q = p.path[i];
+			p.path[i] = Vector(q[0], q[1] - dy, 0);
+		}
+		p.Step(dt);
+		p.Update(dt, m_Px, m_Ox, m_Oy);
+		float feet = p.y + 13;
+		if (p.down)
+			feet = p.y;
+		p.SortAt(Depth(feet), p.dir);
+		if (p.y < -50 || p.x < -60 || p.x > 320)
+			p.Show(false);
+	}
+
+	protected void StageUpdate(float dt, float dy)
+	{
+		if (!m_Deer)
+			return;
+		DL_FilmCar lead = FirstCar();
+		foreach (DL_FilmPerson n : m_Npcs)
+			StagePerson(n, dt, dy);
+		foreach (DL_FilmPerson z : m_Horde)
+		{
+			if (m_HordeMode == 0 && !z.down && !z.Busy() && Math.RandomFloat01() < dt * 0.6)
+				z.Go(Math.Clamp(z.x + Math.RandomFloat(-14, 14), 70, 186), z.y + Math.RandomFloat(-6, 6));
+			if (m_Plow == 1 && lead && !z.down && Math.AbsFloat(z.x - lead.x) < lead.HalfW() + 8 && Math.AbsFloat(z.y - lead.y) < lead.HalfH() + 6)
+				z.down = true;                    // under the bonnet
+			StagePerson(z, dt, dy);
+		}
+		foreach (DL_FilmThing b : m_Blocks)
+		{
+			ScrollThing(b, dy);
+			if (b.used)
+				b.SetSort(Depth(b.y + 10));
+		}
+		ScrollThing(m_River, dy);
+		if (m_Splash.used)
+		{
+			// frames 1 2 3 2: the water keeps churning (frame 0 is the first small splash)
+			array<int> splashSeq = {1, 2, 3, 2};
+			int splashF = Math.Floor(m_T * 8);
+			splashF = splashSeq[splashF % 4];
+			m_Splash.sprite.Cell(splashF * 64, 0, 64, 64);
+			m_SplashL.sprite.Cell(splashF * 64, 64, 64, 64);
+			m_SplashR.sprite.Cell(splashF * 64, 128, 64, 64);
+		}
+		if (m_River.used)
+		{
+			int riverF = Math.Floor(m_T * 5);
+			riverF = riverF % 4;
+			m_River.sprite.Cell(0, riverF * 256, 256, 256);
+		}
+		for (int rpi = 0; rpi < m_RiverProps.Count(); rpi++)
+		{
+			DL_FilmThing rpt = m_RiverProps[rpi];
+			ScrollThing(rpt, dy);
+			if (rpt.used && (rpi == 0 || rpi == 2 || rpi == 3))
+				rpt.SetSort(Depth(rpt.y + 26));   // standing things: by their feet
+		}
+		if (m_Deer.used)
+		{
+			// deer_ca cells: 0 standing, 1 alert, 2-3 walking, 4-5 running, 6 grazing, 7 down; row 0 faces right
+			int col = 6;
+			float graze = m_T - Math.Floor(m_T / 5.0) * 5.0;
+			if (m_DeerMode == 0 && graze > 3.4)
+				col = 0;                         // looks up a moment, then grazes on
+			if (m_DeerMode == 3)
+				col = 1;
+			if (m_DeerMode == 1)
+			{
+				int rf = Math.Floor(m_T * 8);
+				col = 4 + rf % 2;
+				m_Deer.x += m_DeerVx * dt;
+				if (m_Deer.x < -30 || m_Deer.x > 290)
+				{
+					m_Deer.used = false;
+					m_Deer.sprite.Show(false);
+				}
+			}
+			else if (m_DeerMode == 2)
+				col = 7;
+			int drow = 1;
+			if (m_DeerDir == 1)
+				drow = 0;
+			m_Deer.sprite.Cell(col * 64, drow * 64, 64, 64);
+			ScrollThing(m_Deer, dy);
+			m_Deer.SetSort(Depth(m_Deer.y + 16));
+		}
+		if (m_Camp.used)
+		{
+			int cf = Math.Floor(m_T * 6);
+			int cfc = 2 + cf % 2;
+			m_Camp.sprite.Cell(cfc * 64, 128, 64, 64);
+			ScrollThing(m_Camp, dy);
+			m_Camp.SetSort(Depth(m_Camp.y + 6));
+		}
+		ScrollThing(m_Meat, dy);
+		if (m_Meat.used)
+			m_Meat.SetSort(Depth(m_Meat.y + 8));
+		// steam (or black smoke) from the front car's bonnet
+		bool steam = m_SteamMode > 0 && lead;
+		m_Steam.sprite.Show(steam);
+		if (steam)
+		{
+			int sf = Math.Floor(m_T * 4);
+			int sfc = sf % 2;
+			m_Steam.sprite.Cell(sfc * 64, 192, 64, 64);
+			if (m_SteamMode == 2)
+				m_Steam.sprite.SetColor(ARGB(255, 70, 70, 74));
+			else
+				m_Steam.sprite.SetColor(ARGB(255, 255, 255, 255));
+			m_Steam.x = lead.drawX;
+			m_Steam.y = lead.y + lead.HalfH() - 12;
+			m_Steam.Place(m_Px, m_Ox, m_Oy);
+		}
+		// the water at the bonnet while a car is in the river
+		if (m_Plow >= 2 && lead && m_River.used)
+		{
+			float front = lead.y + lead.HalfH();
+			bool wet = front > m_River.y - 26 && lead.Top() < m_River.y + 26;
+			m_Splash.sprite.Show(wet);
+			m_SplashL.sprite.Show(wet);
+			m_SplashR.sprite.Show(wet);
+			m_SplashL.used = wet;
+			m_SplashR.used = wet;
+			if (wet)
+			{
+				// the wake under the car's front, the sprays skirting out from its sides; all under the car
+				float wakeY = Math.Min(front - 6, m_River.y + 22);
+				m_Splash.x = lead.drawX;
+				m_Splash.y = wakeY;
+				m_Splash.used = true;
+				m_SplashL.x = lead.drawX - lead.HalfW() - 9;
+				m_SplashL.y = wakeY - 10;
+				m_SplashR.x = lead.drawX + lead.HalfW() + 9;
+				m_SplashR.y = wakeY - 10;
+				int under = Depth(lead.Top()) - 2;
+				array<DL_FilmThing> wakes = {m_Splash, m_SplashL, m_SplashR};
+				foreach (DL_FilmThing sp : wakes)
+				{
+					sp.Place(m_Px, m_Ox, m_Oy);
+					sp.SetSort(under);
+				}
+			}
+		}
+		else if (m_Splash.used)
+		{
+			ScrollThing(m_Splash, dy);
+			m_Splash.SetSort(SORT_TOP - 20);
+			m_SplashL.used = false;
+			m_SplashR.used = false;
+			m_SplashL.sprite.Show(false);
+			m_SplashR.sprite.Show(false);
+		}
+		// wading: in the water, only their tops show
+		if (m_Wading && m_River.used)
+		{
+			foreach (DL_FilmPerson wp : m_Crew)
+			{
+				if (!wp.down && wp.car < 0)
+					wp.swimming = Math.AbsFloat(wp.y + 6 - m_River.y) < 24;
+			}
+		}
+		if (m_Carry && m_Actor)
+			ShowTool(P_CRATE, m_Actor.x + 7, m_Actor.y + 8);
+		if (m_HitT > 0 && m_Actor)
+		{
+			m_HitT -= dt;
+			int hk = Math.Floor(m_HitT * 10);
+			float ha = 1;
+			if (hk % 2 == 0 && m_HitT > 0)
+				ha = 0.25;
+			m_Actor.SetAlpha(ha);
+		}
+		StageUpdate2(dt, dy, lead);
+		if (m_ClearT > 0)
+		{
+			array<DL_FilmThing> fade = {m_Cross, m_Sign, m_Ring, m_Lake, m_Wreck, m_Mud};
+			foreach (DL_FilmThing gf : m_Gas)
+				fade.Insert(gf);
+			foreach (DL_FilmThing ft : fade)
+				ft.sprite.SetAlpha(m_ClearT);
+			m_ClearT = Math.Max(0, m_ClearT - dt);
+			foreach (DL_FilmThing cb : m_Blocks)
+				cb.sprite.SetAlpha(m_ClearT);
+			foreach (DL_FilmPerson cn : m_Npcs)
+				cn.SetAlpha(m_ClearT);
+			foreach (DL_FilmPerson cz : m_Horde)
+				cz.SetAlpha(m_ClearT);
+			m_Deer.sprite.SetAlpha(m_ClearT);
+			m_River.sprite.SetAlpha(m_ClearT);
+			foreach (DL_FilmThing crp : m_RiverProps)
+				crp.sprite.SetAlpha(m_ClearT);
+		}
+	}
+
+	protected void StageUpdate2(float dt, float dy, DL_FilmCar lead)
+	{
+		ScrollThing(m_Cross, dy);
+		ScrollThing(m_Lake, dy);
+		ScrollThing(m_Sign, dy);
+		ScrollThing(m_Ring, dy);
+		if (m_Ring.used)
+			m_Ring.sprite.SetAlpha(0.65 + 0.35 * Math.Sin(m_T * 6));     // it glints
+		if (m_Sign.used)
+			m_Sign.SetSort(Depth(m_Sign.y + 12));
+		ScrollThing(m_Wreck, dy);
+		if (m_Wreck.used)
+			m_Wreck.SetSort(Depth(m_Wreck.y + 34));
+		m_Column.sprite.Show(m_Wreck.used);
+		if (m_Wreck.used)
+		{
+			int cf = Math.Floor(m_T * 3);
+			int cfc = cf % 2;
+			m_Column.sprite.Cell(cfc * 64, 192, 64, 64);
+			m_Column.x = m_Wreck.x - 4;           // from the engine under the rotor hub
+			m_Column.y = m_Wreck.y - 52;
+			m_Column.used = true;
+			m_Column.Place(m_Px, m_Ox, m_Oy);
+		}
+		ScrollThing(m_Mud, dy);
+		bool spin = m_Spin && lead;
+		m_Spray.sprite.Show(spin);
+		if (spin)
+		{
+			// mud thrown up behind a rear wheel, one side then the other
+			int sp = Math.Floor(m_T * 6);
+			int sps = sp % 2;
+			float side = -1;
+			if (sps == 1)
+				side = 1;
+			m_Spray.x = lead.x + side * (lead.HalfW() - 2);
+			m_Spray.y = lead.Top() - 6 - (m_T * 40 - Math.Floor(m_T * 6) * 40 / 6.0);
+			m_Spray.used = true;
+			m_Spray.Place(m_Px, m_Ox, m_Oy);
+		}
+		if (m_Rod.used)
+			m_Rod.Place(m_Px, m_Ox, m_Oy);
+		if (m_Fish.used)
+			m_Fish.Place(m_Px, m_Ox, m_Oy);
+		foreach (DL_FilmThing g : m_Gas)
+		{
+			ScrollThing(g, dy);
+			if (g.used)
+				g.x += Math.Sin(m_T * 0.8 + g.y * 0.05) * 3 * dt;
+		}
+		// the bubble over its person (or the front car); gone when its time is up or he is gone
+		if (m_Bubble.used)
+		{
+			bool keep = true;
+			if (m_BubbleT >= 0)
+			{
+				m_BubbleT -= dt;
+				keep = m_BubbleT > 0;
+			}
+			if (m_BubbleOn && (!m_BubbleOn.shown || m_BubbleOn.down))
+				keep = false;
+			if (!m_BubbleOn && !lead)
+				keep = false;
+			if (!keep)
+			{
+				m_Bubble.used = false;
+				m_Bubble.sprite.Show(false);
+			}
+			else
+			{
+				if (m_BubbleOn)
+				{
+					m_Bubble.x = m_BubbleOn.x + 10;
+					m_Bubble.y = m_BubbleOn.y - 22;
+				}
+				else
+				{
+					m_Bubble.x = lead.x + lead.HalfW();
+					m_Bubble.y = lead.Top() - 6;
+				}
+				m_Bubble.Place(m_Px, m_Ox, m_Oy);
+			}
+		}
+		// night and the blizzard fade in and out
+		m_DarkA += Math.Clamp(m_DarkTo - m_DarkA, -dt * 0.6, dt * 0.6);
+		Night(lead);
+		m_SnowA += Math.Clamp(m_SnowTo - m_SnowA, -dt * 0.8, dt * 0.8);
+		m_Snow.SetAlpha(m_SnowA);
+		m_Haze.Show(m_SnowA > 0.01);
+		m_Haze.SetAlpha(m_SnowA * 0.35);
+		if (m_SnowA > 0.01)
+			m_Snow.Scroll((m_T * 260 + m_Scroll) * m_Px);
+	}
+
+	// The night: one dark sheet; with the headlights on, the sheet is cut around the lead car's lamps into the part
+	// above, below, left and right of the cones' square, and the square itself is the darkness with the cones taken
+	// out (so the road in the light shows as by day), with a soft glow over them. The pieces start on whole screen
+	// pixels and end where the cone sprite ends, so they meet without a seam.
+	protected void Night(DL_FilmCar lead)
+	{
+		bool dark = m_DarkA > 0.01;
+		bool lit = dark && m_Beam.used && lead;
+		float vx0 = Math.Round(m_Ox);
+		float vy0 = Math.Round(m_Oy);
+		float vx1 = Math.Round(m_Ox + 256 * m_Px);
+		float vy1 = Math.Round(m_Oy + m_ViewH * m_Px);
+		m_Dark.Show(dark);
+		m_Dark.SetAlpha(m_DarkA);
+		m_DarkB.Show(lit);
+		m_DarkL.Show(lit);
+		m_DarkR.Show(lit);
+		m_Beam.sprite.Show(lit);
+		m_Glow.sprite.Show(lit);
+		if (!lit)
+		{
+			m_Dark.SetPos(vx0, vy0);
+			m_Dark.SetSize(vx1 - vx0, vy1 - vy0);
+			return;
+		}
+		float lampY = lead.y + lead.HalfH() - 4;            // the front bumper (the cars drive down the film)
+		if (lead.kind == "bike")
+			lampY = lead.y + lead.HalfH() - 6;
+		float side = m_Beam.w * m_Px;                         // the sprite's own size: the dark pieces end where it ends
+		float hx0 = Math.Round(m_Ox + (lead.drawX - m_Beam.w / 2) * m_Px);
+		float hy0 = Math.Clamp(Math.Round(m_Oy + lampY * m_Px), vy0, vy1);
+		float hx1 = hx0 + side;
+		float hy1 = Math.Min(hy0 + side, vy1);
+		m_Dark.SetPos(vx0, vy0);
+		m_Dark.SetSize(vx1 - vx0, hy0 - vy0);
+		m_DarkB.SetPos(vx0, hy1);
+		m_DarkB.SetSize(vx1 - vx0, vy1 - hy1);
+		m_DarkL.SetPos(vx0, hy0);
+		m_DarkL.SetSize(Math.Max(0, hx0 - vx0), hy1 - hy0);
+		m_DarkR.SetPos(hx1, hy0);
+		m_DarkR.SetSize(Math.Max(0, vx1 - hx1), hy1 - hy0);
+		m_DarkB.SetAlpha(m_DarkA);
+		m_DarkL.SetAlpha(m_DarkA);
+		m_DarkR.SetAlpha(m_DarkA);
+		m_Beam.sprite.MoveTo(hx0, hy0);
+		m_Beam.sprite.SetAlpha(m_DarkA);
+		m_Glow.sprite.MoveTo(hx0, hy0);
+		m_Glow.sprite.SetAlpha(Math.Clamp(m_DarkA / 0.62, 0, 1));
+	}
+
 	// ---------------- per frame ----------------
 
 	void Update(float dt)
@@ -2704,6 +4832,7 @@ class DL_FilmPlayer
 		Scene(dt);
 		if (!m_Playing)
 			return;
+		BarUpdate(dt);
 		// ease the ground speed
 		float a = 120 * dt;
 		if (m_Speed < m_Target)
@@ -2755,6 +4884,8 @@ class DL_FilmPlayer
 		ScrollThing(m_Lot, dy);
 		ScrollThing(m_Roof, dy);
 		ScrollThing(m_Pump, dy);
+		ScrollThing(m_FoodWreck, dy);
+		ScrollThing(m_FoodProp, dy);
 		// the cars: left behind (scroll away), driving off, or in the line (closing up)
 		foreach (DL_FilmCar c : m_Cars)
 		{
@@ -2875,6 +5006,7 @@ class DL_FilmPlayer
 			m_Puff.y -= dt * 3;
 			m_Puff.Place(m_Px, m_Ox, m_Oy);
 		}
+		StageUpdate(dt, dy);
 	}
 
 	// the sky per frame: clouds come up from the bottom (under the plane, and a few thin ones over it), a sea
@@ -3070,10 +5202,39 @@ class DL_FilmPlayer
 				else
 					t.x = 202;
 			}
+			if (t.x < 128 && FindOnVerge())
+				t.x = 256 - t.x;       // the left verge is the find's: the other side
 			t.y = y;
 			t.used = true;
 			t.sprite.Show(true);
 			return;
+		}
+	}
+
+	// a well or food spot is on the left verge (its scene until it scrolls off)
+	protected bool FindOnVerge()
+	{
+		return m_FindAt && m_FindAt.used && m_FindAt != m_Lot;
+	}
+
+	// nothing else on the left verge near a find spot (a sign over the pump, a wreck on the wreck)
+	protected void ClearVerge(float y)
+	{
+		foreach (DL_FilmThing t : m_Props)
+		{
+			if (t.used && t.x < 128 && Math.AbsFloat(t.y - y) < 80)
+			{
+				t.used = false;
+				t.sprite.Show(false);
+			}
+		}
+		foreach (DL_FilmThing w : m_Wrecks)
+		{
+			if (w.used && w.x < 128 && Math.AbsFloat(w.y - y) < 110)
+			{
+				w.used = false;
+				w.sprite.Show(false);
+			}
 		}
 	}
 
@@ -3089,7 +5250,7 @@ class DL_FilmPlayer
 			return;
 		DL_FilmThing t = free[Math.RandomInt(0, free.Count())];
 		// on the far shoulder or the opposite lane, never in the car's way
-		if (Math.RandomFloat01() < 0.5)
+		if (Math.RandomFloat01() < 0.5 && !FindOnVerge())
 			t.x = 46;
 		else
 			t.x = 212;
@@ -3100,7 +5261,94 @@ class DL_FilmPlayer
 
 	// ---------------- demo (F9) ----------------
 
-	protected static DL_FilmActor DemoActor(string name, string skin, string gear, string hand, string back, int car)
+	// the finds on their own (dev -dlFindTest): n = 0 a car in the forest, 1 a group on foot in the field, 2 two cars
+	// in the snow; each has a well and food finds (the food spot is picked at random each time)
+	static DL_Film FindDemo(int n)
+	{
+		DL_Film f = new DL_Film();
+		f.biomeFrom = "forest";
+		f.biomeTo = "forest";
+		f.km = 60;
+		f.skip = "none";
+		if (n == 3)
+		{
+			// a very long road (the 5000 km test of 2026-10-31): dozens of finds, then the car is lost and they walk
+			f.km = 5000;
+			f.car = "sedan@wine";
+			f.crew.Insert(DemoActor("Derk", "def1", "workpants@brown,tshirt@orange,taloonbackpack@green,baseballcap@red", "glockpistol", "crowbar", 0));
+			f.Add("drive", 20);
+			f.Add("flat", 20, "Derk", "spare");
+			f.Add("find", 20, "Derk", "gas", -1, 1);
+			for (int i = 0; i < 12; i++)
+			{
+				f.Add("drive", 25);
+				if (i % 3 == 2)
+					f.Add("find", 30 + i * 25, "Derk", "gas", -1, 1);
+				else
+					f.Add("find", 30 + i * 25, "Derk", "water");
+			}
+			f.Add("fuel", 320, "Derk", "lost");
+			for (int k = 0; k < 60; k++)
+			{
+				f.Add("walk", 75);
+				if (k % 2 == 0)
+					f.Add("find", 330 + k * 75, "Derk", "water");
+				else
+					f.Add("find", 330 + k * 75, "Derk", "food");
+			}
+			f.Add("ration", 4800);
+			f.Add("walk", 200);
+			int raw = f.events.Count();
+			f.Condense();
+			DL_Log.Info("find test: long road " + raw.ToString() + " scenes -> " + f.events.Count().ToString() + ", " + f.Length().ToString() + " s");
+			return f;
+		}
+		if (n == 1)
+		{
+			f.biomeFrom = "field";
+			f.biomeTo = "field";
+			f.crew.Insert(DemoActor("Derk", "survivalist", "hunterpants,hunterjacket,hunterbackpack,warmhat@black", "sksrifle", "", -1));
+			f.crew.Insert(DemoActor("Britney", "jasmine", "jeans@blue,raincoatblue,schoolbackpack@red,beretred", "", "baseballbat", -1));
+			f.Add("walk", 10);
+			f.Add("find", 10, "Britney", "water");
+			f.Add("walk", 10);
+			f.Add("find", 20, "Derk", "food");
+			f.Add("walk", 10);
+			f.Add("find", 30, "Britney", "food");
+			f.Add("walk", 10);
+			return f;
+		}
+		if (n == 2)
+		{
+			f.biomeFrom = "snow";
+			f.biomeTo = "snow";
+			f.cars.Insert("4x4@green");
+			f.cars.Insert("sedan@wine");
+			f.crew.Insert(DemoActor("Derk", "veteran", "orelpants,oreljacket,razgruz,hunterbackpack,helmetarmy", "akmrifle", "", 0));
+			f.crew.Insert(DemoActor("Mika", "def3", "workpants,sweater@green,improvisedbag,ushanka", "glockpistol", "", 1));
+			f.Add("drive", 15);
+			f.Add("find", 15, "Mika", "food");
+			f.Add("drive", 10);
+			f.Add("find", 25, "Derk", "water");
+			f.Add("drive", 10);
+			f.Add("find", 35, "Derk", "food");
+			f.Add("drive", 10);
+			return f;
+		}
+		f.car = "sedan@wine";
+		f.crew.Insert(DemoActor("Derk", "def1", "workpants@brown,tshirt@orange,taloonbackpack@green,baseballcap@red", "glockpistol", "crowbar", 0));
+		f.crew.Insert(DemoActor("OrionKaelin", "redneck", "jeans@blue,hoodiegray@green,mountainbackpack,cowboyhat", "", "mosinnagant", 0));
+		f.Add("drive", 15);
+		f.Add("find", 15, "Derk", "water");
+		f.Add("drive", 10);
+		f.Add("find", 25, "OrionKaelin", "food");
+		f.Add("drive", 10);
+		f.Add("find", 35, "Derk", "food");
+		f.Add("drive", 10);
+		return f;
+	}
+
+	static DL_FilmActor DemoActor(string name, string skin, string gear, string hand, string back, int car)
 	{
 		DL_FilmActor a = new DL_FilmActor();
 		a.car = car;

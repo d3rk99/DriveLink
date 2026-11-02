@@ -15,6 +15,7 @@ if ($Dev) {
   Get-ChildItem -LiteralPath $source -Force | Where-Object { $_.Name -ne "gui" } | Copy-Item -Destination $stage -Recurse -Force
   New-Item -ItemType Directory -Force -Path (Join-Path $stage "gui\anim") | Out-Null
   Get-ChildItem -LiteralPath (Join-Path $source "gui\anim") -Force | Where-Object { $_.Name -ne "_minidayz_src" } | Copy-Item -Destination (Join-Path $stage "gui\anim") -Recurse -Force
+  Copy-Item -LiteralPath (Join-Path $source "gui\layouts") -Destination (Join-Path $stage "gui") -Recurse -Force
   $cfg = Join-Path $stage "config.cpp"
   $text = Get-Content -LiteralPath $cfg -Raw
   if ($text -notmatch 'type = "mod";') { throw "config.cpp: no type = mod line to put the DL_DEV define after" }

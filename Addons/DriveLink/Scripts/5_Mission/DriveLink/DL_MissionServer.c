@@ -46,6 +46,80 @@ class DL_Party
 	ref map<string, string> prices = new map<string, string>; // leader -> his trip's price text
 	int since;                                      // g_Game.GetTime() the countdown (re)started
 	bool anyway;                                    // a leader short of supplies who goes anyway: nobody joins him
+	// the interactive trail's ready-up (DL_ReadySend)
+	ref map<string, bool> ready = new map<string, bool>; // who pressed ready (every member, passengers too)
+	bool short;                                     // the party as a whole hasn't enough (refuse mode)
+	bool canGo = true;                              // ... and may still go (allowAnyway)
+	bool trail;                                     // it goes by the trail (DL_TrailGo), not DL_DepartParty
+	string oddsKey;                                 // who the hub's odds were asked for ("" = not yet)
+	ref array<int> odds;                            // the hub's answer: each member's % to arrive alive
+	ref array<int> vehicleOdds;                     // ... each vehicle's % to make it all the way
+}
+
+// the interactive trail (DL_Trail): one party on its way, frozen here while it watches and votes
+class DL_TrailTrip
+{
+	int id;
+	ref DL_Zone zone;
+	ref array<ref DL_PartyUnit> units;
+	ref array<ref DL_TravelPrice> prices;           // per unit
+	ref DL_Journey journey;
+	bool convoy;
+	bool watch;                                     // filmMode "watch": the choices make themselves
+	ref DL_TrailState state;
+	ref DL_TrailGame game;
+	int choices;
+	ref array<ref array<ref DL_FilmEvent>> chapters;
+	int chap;
+	string phase;                                   // road | vote | outcome | last | done
+	float t;                                        // seconds in this phase
+	float wait;                                     // road / last: how long the film needs
+	float hideT;
+	float probeT;                                   // dev: the staging probe's clock
+	float tallyT;
+	float outcomeSeconds;                           // the scenes of the last outcome (they play before the next road)
+	float kmCounted;                                // detours already put into the road
+	ref array<string> sids = new array<string>;
+	ref DL_TrailVoteCard card;
+	ref DL_TrailTally tally;
+	ref map<Transport, bool> carHome = new map<Transport, bool>; // cars that turned back (left alone from here on)
+	ref map<string, float> energy = new map<string, float>;     // hunger and thirst stay where they were while
+	ref map<string, float> water = new map<string, float>;      // they watch (the trip itself costs them)
+}
+
+// a car moved to the staging area by the trail: where it stood and where it stands now. A list, not a map keyed by
+// the car: a car that leaves for good is deleted, and a map keyed by a deleted entity broke the next save (a server
+// crash in the JSON writer, 2026-11-01)
+class DL_StagedCar
+{
+	Transport car;
+	vector from;
+	float yaw;
+	vector at;
+}
+
+class DL_TrailCarFile
+{
+	ref array<vector> at = new array<vector>;
+	ref array<vector> home = new array<vector>;
+	ref array<float> yaw = new array<float>;
+}
+
+// a driver turns back with his car: his passengers choose (go back with him, or stay on the trail)
+class DL_TrailLeave
+{
+	string driver;
+	Transport car;
+	ref DL_TrailTrip trip;
+	float left;                                     // seconds to decide
+	ref map<string, int> answers = new map<string, int>; // passenger sid -> 0 back with him, 1 stay
+	ref array<string> asked = new array<string>;
+}
+
+class DL_TrailHomeFile
+{
+	ref array<string> sids = new array<string>;
+	ref array<vector> pos = new array<vector>;
 }
 
 // M3, target side: a passenger who arrived before his driver's car exists here.
@@ -170,13 +244,35 @@ modded class MissionServer
     }
 
     float DL_DistanceXZ(vector a,vector b){a[1]=0;b[1]=0;return vector.Distance(a,b);}
+
+	// the staging area (hub Map page; else config.json trail.stagingPos), at ground height. False = none, or it is under
+	// water (off a coast the ground is the sea floor: nobody is put there, they wait where they stand)
+	protected bool m_DL_StagingWetSaid;
+	bool DL_StagingSpot(out vector p)
+	{
+		p = m_DL_Cfg.stagingArea;
+		if (p[0] == 0 && p[2] == 0 && m_DL_Cfg.trail)
+			p = m_DL_Cfg.trail.stagingPos;
+		if (p[0] == 0 && p[2] == 0)
+			return false;
+		p[1] = g_Game.SurfaceY(p[0], p[2]);
+		if (p[1] < 0.5 || g_Game.SurfaceIsPond(p[0], p[2]))
+		{
+			if (!m_DL_StagingWetSaid)
+				DL_Log.Warn("the staging area " + p.ToString() + " is under water: nobody is moved there (pick dry land on the hub's Map page)");
+			m_DL_StagingWetSaid = true;
+			return false;
+		}
+		m_DL_StagingWetSaid = false;
+		return true;
+	}
     bool DL_StagingHasObservers(vector at,string ownGroup)
     {
         array<Man> people=new array<Man>;GetGame().GetPlayers(people);
         foreach(Man person:people)
         {
             if(!person.GetIdentity() || person.GetIdentity().GetPlainId()==ownGroup)continue;
-            bool traveller=false;
+            bool traveller=m_DL_Leaving.Contains(person.GetIdentity().GetPlainId()); // on the trail, waiting at the staging area
             foreach(string roomKey,DL_Room waiting:m_DL_Rooms)if(waiting.here.Find(person.GetIdentity().GetPlainId())>=0)traveller=true;
             if(!traveller && DL_DistanceXZ(person.GetPosition(),at)<100)return true;
         }
@@ -419,6 +515,9 @@ modded class MissionServer
 	// travel anyway (allowAnyway): refused leaders who were offered it, and who took it (steam id -> that zone)
 	protected ref map<string, ref DL_Zone> m_DL_AnywayOffer = new map<string, ref DL_Zone>;
 	protected ref map<string, ref DL_Zone> m_DL_Anyway = new map<string, ref DL_Zone>;
+	// a group / convoy short of supplies as a whole: its leader's answer sends all of them (or none)
+	protected ref map<string, ref DL_Party> m_DL_PartyOffer = new map<string, ref DL_Party>;
+	protected ref map<string, ref array<PlayerBase>> m_DL_ShortCrew = new map<string, ref array<PlayerBase>>; // who sees a party's table
 	// travel time on: the party as it left (vehicles, seats, worn items), sent for the main menu scene (DL_MenuScene)
 	protected ref map<string, ref DL_SceneHold> m_DL_SceneOf = new map<string, ref DL_SceneHold>;
 	static const float DL_AIR_HEIGHT = 300;      // a plane comes in this high above the ground (plane entry not set)
@@ -464,6 +563,32 @@ modded class MissionServer
 			m_DL_Cfg.crewWaitSeconds = 120;
 		if (!m_DL_Cfg.travel)
 			m_DL_Cfg.travel = new DL_TravelRules();
+		// the interactive trail's settings: a config.json from before them gets them written in
+		string cfgText = "";
+		FileHandle cfh = OpenFile(DL_Const.CONFIG, FileMode.READ);
+		if (cfh)
+		{
+			string cline;
+			while (FGets(cfh, cline) >= 0)
+				cfgText += cline;
+			CloseFile(cfh);
+		}
+		// a section the loader made itself comes without the defaults (test 2026-11-01: filmMode "", maxChoices 0)
+		bool trailFix = !m_DL_Cfg.trail || m_DL_Cfg.trail.filmMode == "";
+		if (!m_DL_Cfg.trail)
+			m_DL_Cfg.trail = new DL_TrailConfig();
+		if (m_DL_Cfg.trail.filmMode == "")
+			m_DL_Cfg.trail.filmMode = "interactive";
+		if (m_DL_Cfg.trail.readySeconds < 10)
+			m_DL_Cfg.trail.readySeconds = 60;
+		if (m_DL_Cfg.trail.voteSeconds < 5)
+			m_DL_Cfg.trail.voteSeconds = 30;
+		if (m_DL_Cfg.trail.maxChoices < 1)
+			m_DL_Cfg.trail.maxChoices = 5;
+		if (m_DL_Cfg.trail.instantRiskPerHour <= 0)
+			m_DL_Cfg.trail.instantRiskPerHour = 15;
+		if (cfgText != "" && (trailFix || !cfgText.Contains("\"trail\"")))
+			JsonFileLoader<DL_Config>.SaveFile(DL_Const.CONFIG, m_DL_Cfg, err);
 		if (m_DL_Cfg.joinId == "")
 		{
 			Math.Randomize(-1);
@@ -493,6 +618,8 @@ modded class MissionServer
 		DL_Log.Info(dlMsg184);
 		// once the world is up: are the arrival points' car spots (and a convoy's line behind them) free?
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_CheckCarSpots, 20000, false);
+		// cars a restart left at the trail's staging spot go back where they stood
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_TrailCarsComeBack, 25000, false);
 	}
 
 	// ---------------- M2 spikes (debug.json only) ----------------
@@ -801,6 +928,7 @@ modded class MissionServer
 		m_DL_LayoutRev = l.rev;
 		m_DL_Cfg.zones = l.zones;
 		m_DL_Cfg.arrivals = l.arrivals;
+		m_DL_Cfg.stagingArea = l.staging;
 		if (l.travel && l.travel.mode != "") // an older hub sends none: keep what config.json has
 			m_DL_Cfg.travel = l.travel;
 		m_DL_Parties.Clear(); // countdowns of zones that may be gone now
@@ -825,6 +953,12 @@ modded class MissionServer
 		{
 			if (a)
 				DL_Log.Detail("  arrival '" + a.name + "' " + a.pos.ToString() + " yaw " + a.yaw.ToString());
+		}
+		vector stageAt;
+		if (m_DL_Cfg.stagingArea[0] != 0 || m_DL_Cfg.stagingArea[2] != 0)
+		{
+			if (DL_StagingSpot(stageAt))
+				DL_Log.Info("  staging area " + stageAt.ToString() + " (ground " + stageAt[1].ToString() + ")");
 		}
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_CheckCarSpots);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_CheckCarSpots, 5000, false);
@@ -1069,6 +1203,8 @@ modded class MissionServer
 	override void OnClientReadyEvent(PlayerIdentity identity, PlayerBase player)
 	{
 		super.OnClientReadyEvent(identity, player);
+		if (identity)
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_TrailComeBack, 3000, false, identity.GetPlainId());
 		DL_Pending p;
 		if (DL_On() && identity)
 			p = m_DL_Pending.Get(identity.GetPlainId());
@@ -1464,7 +1600,12 @@ modded class MissionServer
 	{
 		string key;
 		if (!m_DL_FilmKey.Find(sid, key))
-			return;
+		{
+			// his film outlasted the 5 minutes its watchers are remembered (a 5000 km trip): he watches it alone now,
+			// his vote is enough (it said "waiting for the others" with nobody else there)
+			key = sid;
+			m_DL_FilmKey.Set(sid, key);
+		}
 		array<string> voted = m_DL_FilmVoted.Get(key);
 		if (!voted)
 		{
@@ -1585,6 +1726,8 @@ modded class MissionServer
 		if (m_DL_Cfg.travel && m_DL_Cfg.travel.filmOff)
 			return 0;                                   // Travel settings: no film here, the story only
 		d.film.biomeTo = DL_MyBiome();
+		int rawScenes = d.film.events.Count();
+		d.film.Condense();                              // repeated finds become one scene, the film fits its time
 		d.film.skip = "vote";
 		if (m_DL_Cfg.travel && m_DL_Cfg.travel.voteSkipOff)
 			d.film.skip = "none";
@@ -1599,7 +1742,7 @@ modded class MissionServer
 		JsonFileLoader<DL_Film>.MakeData(d.film, json, err, false);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendFilm, 2500, false, sid, json);
 		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SendFilm, 4500, false, sid, json);
-		string dlMsg1218 = sid + "'s road film: " + d.film.events.Count().ToString() + " scenes, ";
+		string dlMsg1218 = sid + "'s road film: " + d.film.events.Count().ToString() + " scenes (of " + rawScenes.ToString() + "), ";
 		dlMsg1218 += d.film.biomeFrom + " -> " + d.film.biomeTo + ", ";
 		dlMsg1218 += d.film.Duration().ToString() + " s";
 		DL_Log.Detail(dlMsg1218);
@@ -1691,14 +1834,22 @@ modded class MissionServer
 		}
 		if (newRoom && d.car && d.car.type != "" && !room.boat && !room.air)
 			room.carPos = DL_FreeCarSpot(room.carPos, room.carYaw, d.car.type, group);
+        // land vehicles: the server's staging area (hub Map page) if it has one, else the arrival's own older point
+        vector stageAt;bool hasArea=false;if(!room.boat)hasArea=DL_StagingSpot(stageAt);
         bool stagingForKind=ap.stagingEnabled && !room.air;
         if(room.boat && ap.stagingBoatPos[0]==0 && ap.stagingBoatPos[2]==0)stagingForKind=false;
-        if(!room.boat && ap.stagingPos[0]==0 && ap.stagingPos[2]==0)stagingForKind=false;
+        if(!room.boat && !hasArea && ap.stagingPos[0]==0 && ap.stagingPos[2]==0)stagingForKind=false;
         if (newRoom && stagingForKind)
         {
             room.finalCarPos=room.carPos;room.finalCarYaw=room.carYaw;room.finalLandPos=room.landPos;room.finalLandYaw=room.landYaw;
             vector assembly=ap.stagingPos;float assemblyYaw=ap.stagingYaw;
             if(room.boat){assembly=ap.stagingBoatPos;assemblyYaw=ap.stagingBoatYaw;}
+            if(!room.boat && hasArea)
+            {
+                // the staging area's -z side (leaving groups are on its +z side); the lanes go further -z
+                assembly=Vector(stageAt[0], stageAt[1], stageAt[2] - 60.0);
+                assemblyYaw=0;
+            }
             if((assembly[0]==0 && assembly[2]==0) || DL_DistanceXZ(assembly,room.finalCarPos)<100)
             {
                 m_DL_BuildError="Arrival staging needs a configured point at least 100 m from the final arrival";return null;
@@ -2616,6 +2767,7 @@ modded class MissionServer
 		super.OnUpdate(timeslice);
 		if (!DL_On())
 			return;
+		DL_TrailUpdate(timeslice);
 		m_DL_Tick += timeslice;
 		if (m_DL_Tick < m_DL_Cfg.checkEverySeconds)
 			return;
@@ -2671,19 +2823,18 @@ modded class MissionServer
 			// that can't pay doesn't get one
 			DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, DL_CarOf(pb) != null, DL_CarOf(pb));
 			string missing = DL_TravelCost.Shortfall(price, DL_CrewOf(pb), DL_CarOf(pb), m_DL_Snap, m_DL_CarSnap);
-			if (missing != "" && DL_RefusesShortTrips() && !DL_GoesAnyway(sid, z))
-			{
-				m_DL_MustLeaveZone.Set(sid, true);
-				string dlMsg2184 = sid + " can't pay the trip to " + z.to + " (";
-				dlMsg2184 += price.Text() + "): " + missing;
-				DL_Log.Info(dlMsg2184);
-				DL_ShowShort(pb, z, price, "Step out of the zone and come back when you have it.");
-				continue;
-			}
+			// short on his own: the countdown starts all the same (whoever comes in behind him brings what he has,
+			// a group or convoy pays as one); the check is when it runs out (DL_DepartParty / DL_Depart)
+			bool goesAnyway = DL_GoesAnyway(sid, z);
 			string priceText = "";
 			if (price)
 				priceText = price.Text();
-			DL_JoinParty(pb, z, priceText, now, missing != "" && DL_RefusesShortTrips());
+			if (missing != "" && DL_RefusesShortTrips() && !goesAnyway)
+			{
+				DL_Log.Info(sid + " is short for the trip to " + z.to + " on his own (" + missing + "): countdown, others may make up for it");
+				priceText += " - not enough supplies on your own";
+			}
+			DL_JoinParty(pb, z, priceText, now, missing != "" && DL_RefusesShortTrips() && goesAnyway);
 		}
 		DL_TendParties(now);
 	}
@@ -2773,6 +2924,11 @@ modded class MissionServer
 			dlMsg2274 += party.leaders.Count().ToString() + " now, countdown again";
 			DL_Log.Info(dlMsg2274);
 		}
+		if (DL_TrailOn())
+		{
+			DL_ReadySend(party);          // the interactive trail: the ready-up table instead of the countdown
+			return;
+		}
 		DL_PartyCountdown(party, m_DL_Cfg.countdownSeconds);
 	}
 
@@ -2823,6 +2979,7 @@ modded class MissionServer
 	protected void DL_TendParties(int now)
 	{
 		array<ref DL_Party> go = new array<ref DL_Party>;   // ref: holds each party after it leaves m_DL_Parties
+		array<ref DL_Party> trailGo = new array<ref DL_Party>;
 		for (int i = m_DL_Parties.Count() - 1; i >= 0; i--)
 		{
 			DL_Party party = m_DL_Parties[i];
@@ -2844,11 +3001,32 @@ modded class MissionServer
 				party.prices.Remove(l);
 				dropped = true;
 				if (pb && !m_DL_Leaving.Contains(l))
+				{
 					DL_CrewCountdown(pb, 0, "", "");
+					if (DL_TrailOn())
+						DL_ReadyClose(pb);
+				}
 			}
 			if (party.leaders.Count() == 0)
 			{
 				m_DL_Parties.RemoveOrdered(i);
+				continue;
+			}
+			if (DL_TrailOn())
+			{
+				// the trail: everyone ready = they go; the time up = nobody goes
+				if (dropped)
+					DL_ReadySend(party);
+				if (DL_ReadyAll(party))
+				{
+					trailGo.Insert(party);
+					m_DL_Parties.RemoveOrdered(i);
+				}
+				else if (now - party.since >= m_DL_Cfg.trail.readySeconds * 1000)
+				{
+					m_DL_Parties.RemoveOrdered(i);
+					DL_ReadyGiveUp(party);
+				}
 				continue;
 			}
 			if (dropped && party.leaders.Count() > 0)
@@ -2866,6 +3044,8 @@ modded class MissionServer
 		}
 		foreach (DL_Party gp : go)
 			DL_DepartParty(gp);
+		foreach (DL_Party tp : trailGo)
+			DL_TrailGo(tp);
 	}
 
 	// the countdown of a party ran out: one unit = the usual trip; more = one road for all, each unit sent as usual
@@ -2898,26 +3078,27 @@ modded class MissionServer
 			DL_Depart(units[0].leader, z);
 			return;
 		}
-		// each unit pays its own way (refuse mode: one that can't stays here, the others go)
+		// the party pays as one (refuse mode): everyone's food and water, every vehicle's fuel and canisters, against
+		// what all of them need; short as a whole = nobody goes, its leader may take them all anyway
 		array<ref DL_PartyUnit> going = new array<ref DL_PartyUnit>;
 		array<ref DL_TravelPrice> prices = new array<ref DL_TravelPrice>;
 		foreach (DL_PartyUnit gu : units)
 		{
-			DL_TravelPrice price = DL_TravelCost.Price(m_DL_Cfg.travel, z, gu.car != null, gu.car);
-			string missing = DL_TravelCost.Shortfall(price, gu.crew, gu.car, m_DL_Snap, m_DL_CarSnap);
-			if (missing != "" && DL_RefusesShortTrips())
-			{
-				string gsid = gu.leader.GetIdentity().GetPlainId();
-				m_DL_MustLeaveZone.Set(gsid, true);
-				string dlMsg2406 = gsid + " can't pay the trip to " + z.to + " any more (";
-				dlMsg2406 += price.Text() + "): " + missing + " - the ";
-				dlMsg2406 += DL_PartyWord(party) + " goes without him";
-				DL_Log.Info(dlMsg2406);
-				DL_ShowShort(gu.leader, z, price, "The others went on.");
-				continue;
-			}
 			going.Insert(gu);
-			prices.Insert(price);
+			prices.Insert(DL_TravelCost.Price(m_DL_Cfg.travel, z, gu.car != null, gu.car));
+		}
+		if (prices[0] && DL_RefusesShortTrips() && !party.anyway)
+		{
+			DL_OddsReq pooled = DL_TravelCost.PartySupplies(going, prices, m_DL_Snap, m_DL_CarSnap);
+			string pmissing = DL_TravelCost.PartyShortfall(pooled);
+			if (pmissing != "")
+			{
+				foreach (string pl : party.leaders)
+					m_DL_MustLeaveZone.Set(pl, true);
+				DL_Log.Info(DL_PartyWord(party) + " " + party.id.ToString() + " can't pay the trip to " + z.to + " together: " + pmissing);
+				DL_ShowShortParty(party, going, pooled, z, prices[0]);
+				return;
+			}
 		}
 		if (going.Count() == 0)
 			return;
@@ -2928,7 +3109,7 @@ modded class MissionServer
 		}
 		// weakened mode: the road is played now, once for the whole party
 		DL_Journey journey;
-		if (prices[0] && !DL_RefusesShortTrips())
+		if (prices[0] && (!DL_RefusesShortTrips() || party.anyway))
 		{
 			journey = DL_Journey.RunParty(m_DL_Cfg.travel, z, going, m_DL_Snap, m_DL_CarSnap, true);
 			string jtext = journey.Story();
@@ -3108,6 +3289,7 @@ modded class MissionServer
 		if (car)
 			info.vehicle = DL_Veh.Kind(car);
 		info.people = q.people;
+		info.vehicles = q.vehicles;
 		info.fuel = q.fuel;
 		info.needFuel = q.needFuel;
 		info.needSpare = q.needSpare;
@@ -3128,6 +3310,60 @@ modded class MissionServer
 		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/odds?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, json, new DL_OddsWaiter(this, sid, info), "OnAnswer", "odds " + sid);
 	}
 
+	// a party short as a whole: one table with every person and vehicle; the first leader decides for all of them
+	protected void DL_ShowShortParty(DL_Party party, array<ref DL_PartyUnit> units, DL_OddsReq q, DL_Zone z, DL_TravelPrice price)
+	{
+		PlayerBase lead = units[0].leader;
+		if (!lead || !lead.GetIdentity())
+			return;
+		string sid = lead.GetIdentity().GetPlainId();
+		q.serverId = m_DL_Cfg.serverId;
+		q.key = m_DL_Cfg.hubKey;
+		q.kind = party.kind;
+		DL_ShortInfo info = new DL_ShortInfo();
+		info.zone = z.name;
+		info.price = price.Text() + ", for each of " + q.people.Count().ToString();
+		if (units[0].car)
+			info.vehicle = DL_Veh.Kind(units[0].car);
+		info.people = q.people;
+		info.vehicles = q.vehicles;
+		info.fuel = q.fuel;
+		info.needFuel = q.needFuel;
+		info.needSpare = q.needSpare;
+		info.spareOk = q.spareOk;
+		info.leader = lead.GetIdentity().GetName();
+		info.tail = "Not enough for the " + DL_PartyWord(party) + " as a whole.";
+		if (m_DL_Cfg.travel && m_DL_Cfg.travel.allowAnyway)
+		{
+			m_DL_AnywayOffer.Set(sid, z);
+			m_DL_PartyOffer.Set(sid, party);
+		}
+		m_DL_ShortCrew.Set(sid, DL_PartyMembers(units));
+		string json;
+		string err;
+		if (!JsonFileLoader<DL_OddsReq>.MakeData(q, json, err, false))
+		{
+			DL_SendShort(sid, info, false, "");
+			return;
+		}
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/odds?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, json, new DL_OddsWaiter(this, sid, info), "OnAnswer", "odds " + sid);
+	}
+
+	// everyone of a party, units in order (the table's rows are in this order)
+	protected array<PlayerBase> DL_PartyMembers(array<ref DL_PartyUnit> units)
+	{
+		array<PlayerBase> all = new array<PlayerBase>;
+		foreach (DL_PartyUnit u : units)
+		{
+			foreach (PlayerBase m : u.crew)
+			{
+				if (m)
+					all.Insert(m);
+			}
+		}
+		return all;
+	}
+
 	// the hub's odds came (or not): the dialog goes to everyone in the crew; only the leader gets the buttons
 	void DL_SendShort(string sid, DL_ShortInfo info, bool ok, string body)
 	{
@@ -3140,6 +3376,11 @@ modded class MissionServer
 			{
 				for (int i = 0; i < info.people.Count() && i < r.odds.Count(); i++)
 					info.people[i].odds = r.odds[i];
+				if (info.vehicles && r.vehicleOdds)
+				{
+					for (int vi = 0; vi < info.vehicles.Count() && vi < r.vehicleOdds.Count(); vi++)
+						info.vehicles[vi].odds = r.vehicleOdds[vi];
+				}
 			}
 		}
 		PlayerBase pb = DL_FindPlayer(sid);
@@ -3147,6 +3388,12 @@ modded class MissionServer
 			return;
 		bool offer = m_DL_AnywayOffer.Contains(sid);
 		array<PlayerBase> crew = DL_CrewOf(pb);
+		array<PlayerBase> partyCrew;
+		if (m_DL_ShortCrew.Find(sid, partyCrew))
+		{
+			crew = partyCrew;                // a whole party's table: to all of them
+			m_DL_ShortCrew.Remove(sid);
+		}
 		string odds = "";
 		foreach (DL_OddsPerson op : info.people)
 			odds += " " + op.name + " " + op.odds.ToString() + "%";
@@ -3192,6 +3439,32 @@ modded class MissionServer
 			if (parts[1] != "1" || !pb || DL_ZoneFor(pb) != z || !m_DL_Cfg.travel || !m_DL_Cfg.travel.allowAnyway)
 			{
 				DL_Log.Info(sid + " stays (travel anyway declined)");
+				m_DL_PartyOffer.Remove(sid);
+				continue;
+			}
+			DL_Party offered;
+			if (m_DL_PartyOffer.Find(sid, offered))
+			{
+				m_DL_PartyOffer.Remove(sid);
+				DL_Party all = new DL_Party();
+				m_DL_PartyN++;
+				all.id = m_DL_PartyN;
+				all.zone = z;
+				all.convoy = offered.convoy;
+				all.kind = offered.kind;
+				all.anyway = true;
+				foreach (string ol : offered.leaders)
+				{
+					PlayerBase opb = DL_FindPlayer(ol);
+					if (opb && opb.IsAlive() && DL_ZoneFor(opb) == z)
+					{
+						all.leaders.Insert(ol);
+						m_DL_MustLeaveZone.Remove(ol);
+					}
+				}
+				DL_Log.Info(sid + " takes the " + DL_PartyWord(all) + " through " + z.name + " anyway: " + all.leaders.Count().ToString() + " units");
+				if (all.leaders.Count() > 0)
+					DL_DepartParty(all);
 				continue;
 			}
 			DL_Log.Info(sid + " travels anyway through " + z.name);
@@ -3572,7 +3845,11 @@ modded class MissionServer
 			// Nothing was handed over: he stays here with everything he has, the car too.
 			m_DL_Leaving.Remove(sid);
 			if (car)
+			{
 				car.SetAllowDamage(true);
+				DL_TrailCarBack(car);             // the trail moved it to the staging spot: back where it stood
+				DL_TrailHideCar(car, false);
+			}
 			// RestApi gives the same OnError for "no connection" and "hub said no" (HTTP 4xx), so don't guess.
 			string why = "hub refused or unreachable (see the hub window)";
 			if (r && r.error != "")
@@ -3580,6 +3857,8 @@ modded class MissionServer
 			DL_Log.Info(sid + " NOT sent: " + why);
 			if (pb)
 			{
+				DL_TrailHomeBack(sid, pb);       // the trail moved him to the staging spot: back where he stood
+				pb.DL_SetHidden(false);
 				pb.SetAllowDamage(true);
 				m_DL_MustLeaveZone.Set(sid, true);
 			NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 8, "DriveLink", "Travel failed: " + why + ". Step out of the zone and back in to try again.", "");
@@ -3588,6 +3867,7 @@ modded class MissionServer
 		}
 		if (car)
 		{
+			DL_TrailCarForget(car);
 			// The hub holds the car now (inside his trip). Remember it BEFORE it goes (crash guard, DL_CarGuard), and
 			// delete it after he has been removed from the seat (DL_RemoveTraveller runs at 1.5 s).
 			DL_CarGuard.Remember(car);
@@ -3838,6 +4118,1600 @@ modded class MissionServer
 		rpc.Send(null, DL_Const.RPC_REDIRECT, true, id);
 	}
 
+	// ---------------- the interactive trail (Research/interactive-trail-design.md) ----------------
+	// Whoever is in the zone gets the same ready-up table; all ready within readySeconds = the party is frozen here
+	// (hidden, no damage; on foot: moved to the staging spot) and watches one film, voting on choice cards now and
+	// then. The outcome changes the journey's snapshots (DL_Journey.AfterTrail), the dead die here, the rest leave as
+	// usual (DL_DepartUnit). Turning back puts them where they stood.
+
+	protected ref array<ref DL_TrailTrip> m_DL_Trips = new array<ref DL_TrailTrip>;
+	protected ref DL_TrailDeck m_DL_Deck;
+	protected float m_DL_TrailTick;
+	protected int m_DL_TripN;
+	protected ref map<string, vector> m_DL_TrailHome;   // moved to the staging spot: where he stood (kept in a file)
+	protected ref map<int, ref DL_Party> m_DL_Prechecks = new map<int, ref DL_Party>; // waiting for the hub's precheck
+	protected ref array<ref DL_StagedCar> m_DL_StagedCars = new array<ref DL_StagedCar>;  // cars at the staging spot
+	static const string DL_TRAIL_CARS_FILE = "$profile:DriveLink/trail_cars.json";
+	protected ref map<string, ref DL_TrailLeave> m_DL_TrailLeaves = new map<string, ref DL_TrailLeave>; // driver sid -> his passengers deciding
+	static const string DL_TRAIL_HOME_FILE = "$profile:DriveLink/trail_home.json";
+
+	protected bool DL_TrailOn()
+	{
+		return m_DL_Cfg && m_DL_Cfg.trail && m_DL_Cfg.trail.filmMode != "off" && m_DL_Cfg.trail.filmMode != "";
+	}
+
+	protected DL_TrailDeck DL_Deck()
+	{
+		if (!m_DL_Deck)
+			m_DL_Deck = DL_TrailDeck.Load();
+		return m_DL_Deck;
+	}
+
+	// a party's units now: each driver with his crew, each walker
+	protected array<ref DL_PartyUnit> DL_TrailUnits(DL_Party party)
+	{
+		array<ref DL_PartyUnit> units = new array<ref DL_PartyUnit>;
+		foreach (string l : party.leaders)
+		{
+			PlayerBase pb = DL_FindPlayer(l);
+			if (!pb)
+				continue;
+			DL_PartyUnit u = new DL_PartyUnit();
+			u.leader = pb;
+			u.car = DL_CarOf(pb);
+			array<PlayerBase> crew = DL_CrewOf(pb);
+			foreach (PlayerBase c : crew)
+				u.crew.Insert(c);
+			units.Insert(u);
+		}
+		return units;
+	}
+
+	// ---------------- ready-up ----------------
+
+	// the table to everyone in the party (and the countdown's text off)
+	protected void DL_ReadySend(DL_Party party)
+	{
+		if (party.trail)
+			return;                            // on its way: no table any more (a late odds answer must not bring it back)
+		array<ref DL_PartyUnit> units = DL_TrailUnits(party);
+		array<PlayerBase> members = DL_PartyMembers(units);
+		if (members.Count() == 0)
+			return;
+		DL_Zone z = party.zone;
+		array<ref DL_TravelPrice> prices = new array<ref DL_TravelPrice>;
+		foreach (DL_PartyUnit u : units)
+			prices.Insert(DL_TravelCost.Price(m_DL_Cfg.travel, z, u.car != null, u.car));
+		DL_ReadyInfo r = new DL_ReadyInfo();
+		r.to = z.name;
+		DL_ShortInfo info = new DL_ShortInfo();
+		info.zone = z.name;
+		if (prices.Count() > 0 && prices[0])
+		{
+			DL_OddsReq pooled = DL_TravelCost.PartySupplies(units, prices, m_DL_Snap, m_DL_CarSnap);
+			info.price = prices[0].Text();
+			if (members.Count() > 1)
+				info.price += ", for each of " + members.Count().ToString();
+			info.people = pooled.people;
+			info.vehicles = pooled.vehicles;
+			info.fuel = pooled.fuel;
+			info.needFuel = pooled.needFuel;
+			info.needSpare = pooled.needSpare;
+			info.spareOk = pooled.spareOk;
+			if (units[0].car)
+				info.vehicle = DL_Veh.Kind(units[0].car);
+			if (DL_RefusesShortTrips())
+			{
+				r.why = DL_TravelCost.PartyShortfall(pooled);
+				r.short = r.why != "";
+				r.canGo = !r.short || (m_DL_Cfg.travel && m_DL_Cfg.travel.allowAnyway);
+			}
+			// the hub's odds of making it: asked once for these people (again when someone joins or leaves)
+			string oddsKey = units.Count().ToString();
+			foreach (PlayerBase om : members)
+				oddsKey += "|" + om.GetIdentity().GetPlainId();
+			if (party.oddsKey != oddsKey)
+			{
+				party.oddsKey = oddsKey;
+				party.odds = null;
+				party.vehicleOdds = null;
+				pooled.serverId = m_DL_Cfg.serverId;
+				pooled.key = m_DL_Cfg.hubKey;
+				pooled.kind = party.kind;
+				string oj;
+				string oerr;
+				if (JsonFileLoader<DL_OddsReq>.MakeData(pooled, oj, oerr, false))
+					DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/odds?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, oj, new DL_ReadyOddsWaiter(this, party.id, oddsKey), "OnAnswer", "odds party " + party.id.ToString());
+			}
+			if (party.odds)
+			{
+				for (int oi = 0; oi < info.people.Count() && oi < party.odds.Count(); oi++)
+					info.people[oi].odds = party.odds[oi];
+			}
+			if (party.vehicleOdds && info.vehicles)
+			{
+				for (int vo = 0; vo < info.vehicles.Count() && vo < party.vehicleOdds.Count(); vo++)
+					info.vehicles[vo].odds = party.vehicleOdds[vo];
+			}
+		}
+		else
+		{
+			info.price = "a free trip";
+			info.people = new array<ref DL_OddsPerson>;
+		}
+		r.table = info;
+		int left = m_DL_Cfg.trail.readySeconds - (g_Game.GetTime() - party.since) / 1000;
+		r.seconds = Math.Max(1, left);
+		foreach (PlayerBase m : members)
+		{
+			string msid = m.GetIdentity().GetPlainId();
+			r.names.Insert(m.GetIdentity().GetName());
+			r.sids.Insert(msid);
+			r.ready.Insert(party.ready.Contains(msid));
+		}
+		party.short = r.short;
+		party.canGo = r.canGo;
+		string json;
+		string err;
+		if (!JsonFileLoader<DL_ReadyInfo>.MakeData(r, json, err, false))
+		{
+			DL_Log.Warn("ready table json: " + err);
+			return;
+		}
+		foreach (PlayerBase to : members)
+		{
+			DL_Countdown(to.GetIdentity(), 0, "", "");     // the old countdown text, if it was up
+			DL_SendFilmRpc(to.GetIdentity().GetPlainId(), json, DL_Const.RPC_TRAIL_READY);
+		}
+	}
+
+	// the hub's odds for a ready-up table came: kept with the party, the table goes out again with them
+	void DL_ReadyOdds(int partyId, string key, bool ok, string body)
+	{
+		DL_Party party = null;
+		foreach (DL_Party p : m_DL_Parties)
+		{
+			if (p.id == partyId && p.oddsKey == key)
+				party = p;
+		}
+		if (!party || !ok)
+			return;
+		DL_OddsResp r;
+		string err;
+		JsonSerializer js = new JsonSerializer();
+		if (!js.ReadFromString(r, body, err) || !r || !r.ok || !r.odds)
+			return;
+		party.odds = r.odds;
+		party.vehicleOdds = r.vehicleOdds;
+		DL_ReadySend(party);
+	}
+
+	// the table closes for him (he left the zone, the party went or gave up)
+	protected void DL_ReadyClose(PlayerBase pb)
+	{
+		if (!pb || !pb.GetIdentity())
+			return;
+		array<PlayerBase> crew = DL_CrewOf(pb);
+		foreach (PlayerBase c : crew)
+		{
+			if (c && c.GetIdentity())
+				DL_SendFilmRpc(c.GetIdentity().GetPlainId(), "", DL_Const.RPC_TRAIL_READY);
+		}
+	}
+
+	protected bool DL_ReadyAll(DL_Party party)
+	{
+		if (!party.canGo)
+			return false;
+		array<PlayerBase> members = DL_PartyMembers(DL_TrailUnits(party));
+		if (members.Count() == 0)
+			return false;
+		foreach (PlayerBase m : members)
+		{
+			if (!m.GetIdentity() || !party.ready.Contains(m.GetIdentity().GetPlainId()))
+				return false;
+		}
+		return true;
+	}
+
+	protected DL_Party DL_ReadyPartyOf(string sid)
+	{
+		foreach (DL_Party p : m_DL_Parties)
+		{
+			array<PlayerBase> members = DL_PartyMembers(DL_TrailUnits(p));
+			foreach (PlayerBase m : members)
+			{
+				if (m.GetIdentity() && m.GetIdentity().GetPlainId() == sid)
+					return p;
+			}
+		}
+		return null;
+	}
+
+	// nobody goes: not everyone was ready in time, or someone (bySid) pressed Not ready
+	protected void DL_ReadyGiveUp(DL_Party party, string bySid = "")
+	{
+		array<PlayerBase> members = DL_PartyMembers(DL_TrailUnits(party));
+		foreach (string l : party.leaders)
+			m_DL_MustLeaveZone.Set(l, true);
+		string byName = "";
+		foreach (PlayerBase bm : members)
+		{
+			if (bySid != "" && bm.GetIdentity() && bm.GetIdentity().GetPlainId() == bySid)
+				byName = bm.GetIdentity().GetName();
+		}
+		foreach (PlayerBase m : members)
+		{
+			if (!m.GetIdentity())
+				continue;
+			DL_SendFilmRpc(m.GetIdentity().GetPlainId(), "", DL_Const.RPC_TRAIL_READY);
+			string msg = "Not everyone was ready: nobody travels. Step out of the zone and back in to try again.";
+			if (bySid == m.GetIdentity().GetPlainId())
+				msg = "Trip called off. Step out of the zone and back in to try again.";
+			else if (bySid != "")
+				msg = byName + " is not ready: the trip is called off. Step out of the zone and back in to try again.";
+			NotificationSystem.SendNotificationToPlayerIdentityExtended(m.GetIdentity(), 10, "DriveLink", msg, "");
+		}
+		if (bySid != "")
+			DL_Log.Info(DL_PartyWord(party) + " " + party.id.ToString() + " in " + party.zone.name + ": " + bySid + " is not ready, nobody goes");
+		else
+			DL_Log.Info(DL_PartyWord(party) + " " + party.id.ToString() + " in " + party.zone.name + ": not everyone ready in time, nobody goes");
+	}
+
+	// ---------------- the trip ----------------
+
+	// everyone is ready: the trail starts (DriveLinkRestart holds it first while the clients get ready to switch)
+	protected void DL_TrailGo(DL_Party party)
+	{
+		party.trail = true;
+		// the hub first: would it take every one of them? (no film for a trip it would refuse at the end)
+		DL_PrecheckReq q = new DL_PrecheckReq();
+		q.serverId = m_DL_Cfg.serverId;
+		q.key = m_DL_Cfg.hubKey;
+		q.to = party.zone.to;
+		array<PlayerBase> members = DL_PartyMembers(DL_TrailUnits(party));
+		foreach (PlayerBase m : members)
+			q.steamIds.Insert(m.GetIdentity().GetPlainId());
+		string json;
+		string err;
+		if (!JsonFileLoader<DL_PrecheckReq>.MakeData(q, json, err, false))
+		{
+			DL_TrailStart(party);
+			return;
+		}
+		m_DL_Prechecks.Set(party.id, party);
+		DL_Hub.Post(m_DL_Cfg.hubUrl, "/api/precheck?serverId=" + m_DL_Cfg.serverId + "&key=" + m_DL_Cfg.hubKey, json, new DL_PrecheckWaiter(this, party.id), "OnAnswer", "precheck party " + party.id.ToString());
+	}
+
+	// the hub's answer: go, or tell them why not (no answer = an older hub without /api/precheck: go as before; a
+	// refusal at the end still puts everyone back)
+	void DL_TrailPrechecked(int partyId, bool ok, string body)
+	{
+		DL_Party party;
+		if (!m_DL_Prechecks.Find(partyId, party))
+			return;
+		m_DL_Prechecks.Remove(partyId);
+		DL_PrecheckResp r;
+		string err;
+		JsonSerializer js = new JsonSerializer();
+		if (!ok || !js.ReadFromString(r, body, err) || !r)
+		{
+			DL_Log.Info("trail precheck: no answer from the hub (older hub?), the trail starts");
+			DL_TrailStart(party);
+			return;
+		}
+		if (r.ok)
+		{
+			DL_TrailStart(party);
+			return;
+		}
+		string why = r.error;
+		if (why == "")
+			why = "the hub would not take this trip";
+		DL_Log.Info(DL_PartyWord(party) + " " + party.id.ToString() + ": the hub would refuse the trip to " + party.zone.to + " (" + why + "), no trail");
+		array<PlayerBase> members = DL_PartyMembers(DL_TrailUnits(party));
+		foreach (string l : party.leaders)
+			m_DL_MustLeaveZone.Set(l, true);
+		foreach (PlayerBase m : members)
+		{
+			if (!m.GetIdentity())
+				continue;
+			DL_SendFilmRpc(m.GetIdentity().GetPlainId(), "", DL_Const.RPC_TRAIL_READY);
+			NotificationSystem.SendNotificationToPlayerIdentityExtended(m.GetIdentity(), 12, "DriveLink", "Travel not possible: " + why + ". Step out of the zone and back in to try again.", "");
+		}
+	}
+
+	protected void DL_TrailStart(DL_Party party)
+	{
+		DL_Zone z = party.zone;
+		array<ref DL_PartyUnit> units = DL_TrailUnits(party);
+		array<PlayerBase> members = DL_PartyMembers(units);
+		foreach (PlayerBase rm : members)
+		{
+			if (rm.GetIdentity())
+				DL_SendFilmRpc(rm.GetIdentity().GetPlainId(), "", DL_Const.RPC_TRAIL_READY);
+		}
+		if (units.Count() == 0)
+			return;
+		array<ref DL_TravelPrice> prices = new array<ref DL_TravelPrice>;
+		foreach (DL_PartyUnit u : units)
+			prices.Insert(DL_TravelCost.Price(m_DL_Cfg.travel, z, u.car != null, u.car));
+		// the road, played once for all (costs always; the road's events when weakened, or short and going anyway)
+		bool weakened = !DL_RefusesShortTrips() || party.short;
+		DL_Journey journey = DL_Journey.RunParty(m_DL_Cfg.travel, z, units, m_DL_Snap, m_DL_CarSnap, weakened);
+		DL_TrailTrip trip = new DL_TrailTrip();
+		m_DL_TripN++;
+		trip.id = m_DL_TripN;
+		trip.zone = z;
+		trip.units = units;
+		trip.prices = prices;
+		trip.journey = journey;
+		trip.convoy = party.convoy;
+		trip.watch = m_DL_Cfg.trail.filmMode == "watch";
+		DL_TrailState st = new DL_TrailState();
+		st.biome = DL_MyBiome();
+		st.km = z.distanceKm;
+		st.instant = !m_DL_Cfg.travel || !m_DL_Cfg.travel.timeEnabled;
+		foreach (DL_JVehicle jv : journey.vehicles)
+		{
+			DL_TrailCar tc = new DL_TrailCar();
+			tc.idx = jv.idx;
+			tc.name = DL_Journey.CarName(jv.car);
+			DL_Traveller holder = journey.Find(jv.holder);
+			if (holder && journey.vehicles.Count() > 1)
+				tc.name = holder.name + "'s " + tc.name;
+			else
+				tc.name = "the " + tc.name;
+			foreach (DL_ItemData ci : jv.car.items)
+				tc.items.Insert(ci.type);
+			st.cars.Insert(tc);
+		}
+		foreach (DL_Traveller tv : journey.crew)
+		{
+			DL_TrailMember tm = new DL_TrailMember();
+			tm.sid = tv.sid;
+			tm.name = tv.name;
+			tm.car = tv.veh;
+			foreach (DL_ItemData pi : tv.d.items)
+				tm.items.Insert(pi.type);
+			st.members.Insert(tm);
+			trip.sids.Insert(tv.sid);
+		}
+		trip.state = st;
+		trip.game = new DL_TrailGame(st, DL_Deck());
+		trip.game.instantRiskPerHour = m_DL_Cfg.trail.instantRiskPerHour;
+		trip.choices = DL_TrailGame.Choices(z.distanceKm, m_DL_Cfg.trail.maxChoices);
+		DL_Film film = journey.film;
+		film.biomeFrom = DL_MyBiome();
+		film.biomeTo = film.biomeFrom;
+		film.biomeVia = z.viaBiome;
+		film.km = z.distanceKm;
+		film.Condense(30 * (trip.choices + 1));
+		film.skip = "trail";
+		trip.chapters = DL_TrailChapters.Split(film, trip.choices);
+		film.events = trip.chapters[0];
+		// freeze them here: hidden, no damage, cars stopped; on foot to the staging spot
+		// the staging area: leaving groups on its +z side (arriving vehicles are put together on the -z side), each
+		// party at the same time in its own row
+		vector stage;
+		bool move = DL_StagingSpot(stage);
+		int rowOf = trip.id % 6;
+		stage[2] = stage[2] + 60.0 + rowOf * 40.0;
+		int k = 0;
+		int carN = 0;
+		foreach (DL_PartyUnit su : units)
+		{
+			if (su.car)
+			{
+				DL_Veh.EngineStop(su.car);
+				DL_Veh.Handbrake(su.car, 1);
+				su.car.SetAllowDamage(false);
+				DL_TrailHideCar(su.car, true);
+				if (move)
+				{
+					// the car and everyone in it to the staging spot, one beside the other
+					vector cp = stage;
+					cp[0] = cp[0] + carN * 8.0;
+					DL_TrailMoveCar(su.car, cp, 0, true);
+					carN++;
+				}
+			}
+			foreach (PlayerBase sp : su.crew)
+			{
+				if (!sp || !sp.GetIdentity())
+					continue;
+				string ssid = sp.GetIdentity().GetPlainId();
+				m_DL_Leaving.Set(ssid, true);
+				sp.SetAllowDamage(false);
+				sp.DL_SetHidden(true);
+				trip.energy.Set(ssid, sp.GetStatEnergy().Get());
+				trip.water.Set(ssid, sp.GetStatWater().Get());
+				if (move && !su.car)
+				{
+					DL_TrailHomeSet(ssid, sp.GetPosition());
+					int col = k % 4;
+					int row = k / 4;
+					vector at = stage;
+					at[0] = at[0] + col * 2.0;
+					at[2] = at[2] + row * 2.0;
+					at[1] = g_Game.SurfaceY(at[0], at[2]);
+					sp.SetPosition(at);
+					k++;
+				}
+			}
+		}
+		string json;
+		string err;
+		if (!JsonFileLoader<DL_Film>.MakeData(film, json, err, false))
+			DL_Log.Warn("trail film json: " + err);
+		foreach (string fsid : trip.sids)
+			DL_SendFilmRpc(fsid, json, DL_Const.RPC_TRAIL_START);
+		trip.phase = "road";
+		trip.t = 0;
+		trip.wait = DL_TrailChapters.Seconds(trip.chapters[0]) + 2;
+		m_DL_Trips.Insert(trip);
+		string dlMsgT = DL_PartyWord(party) + " " + party.id.ToString() + " sets off on the trail to " + z.to + ": ";
+		dlMsgT += trip.sids.Count().ToString() + " people, " + journey.vehicles.Count().ToString() + " vehicles, ";
+		dlMsgT += trip.choices.ToString() + " choices, " + film.events.Count().ToString() + " scenes in the first chapter";
+		DL_Log.Info(dlMsgT);
+	}
+
+	// a car (with whoever sits in it) to p, facing yaw; staged = it goes to the staging spot (where it stood is
+	// kept, in a file too: a restart puts it back), else it comes back from there
+	protected void DL_TrailMoveCar(Transport car, vector p, float yaw, bool staged)
+	{
+		if (!car)
+			return;
+		DL_StagedCar sc = null;
+		if (staged)
+		{
+			sc = DL_StagedOf(car);
+			if (!sc)
+			{
+				sc = new DL_StagedCar();
+				sc.car = car;
+				m_DL_StagedCars.Insert(sc);
+			}
+			sc.from = car.GetPosition();
+			sc.yaw = car.GetOrientation()[0];
+		}
+		p[1] = g_Game.SurfaceY(p[0], p[2]) + 0.4;
+		vector o = car.GetOrientation();
+		o[0] = yaw;
+		o[1] = 0;
+		o[2] = 0;
+		car.SetPosition(p);
+		car.SetOrientation(o);
+		SetVelocity(car, "0 0 0");
+		car.SetSynchDirty();
+		if (sc)
+			sc.at = p;
+		DL_TrailCarHomeSave();
+		DL_Log.Detail(car.GetType() + " moved to " + p.ToString() + " (staged " + staged.ToString() + ")");
+	}
+
+	// a staged car back where it stood (nothing happens to a car that never moved)
+	protected void DL_TrailCarBack(Transport car)
+	{
+		DL_StagedCar sc = DL_StagedOf(car);
+		if (!sc)
+			return;
+		m_DL_StagedCars.RemoveItem(sc);
+		DL_TrailMoveCar(car, sc.from, sc.yaw, false);
+	}
+
+	// a car that leaves for good (handed over): no longer to be put back
+	protected void DL_TrailCarForget(Transport car)
+	{
+		DL_StagedCar sc = DL_StagedOf(car);
+		if (!sc)
+			return;
+		m_DL_StagedCars.RemoveItem(sc);
+		DL_TrailCarHomeSave();
+	}
+
+	// the staged car's entry (null = it was not moved); entries of cars that are gone are dropped on the way
+	protected DL_StagedCar DL_StagedOf(Transport car)
+	{
+		DL_StagedCar found = null;
+		for (int i = m_DL_StagedCars.Count() - 1; i >= 0; i--)
+		{
+			DL_StagedCar sc = m_DL_StagedCars[i];
+			if (!sc || !sc.car)
+				m_DL_StagedCars.Remove(i);
+			else if (car && sc.car == car)
+				found = sc;
+		}
+		return found;
+	}
+
+	// staged cars: where each stands now and where it stood (a restart finds them by the first)
+	protected void DL_TrailCarHomeSave()
+	{
+		DL_StagedOf(null);                      // drop the cars that are gone
+		DL_TrailCarFile f = new DL_TrailCarFile();
+		foreach (DL_StagedCar sc : m_DL_StagedCars)
+		{
+			f.at.Insert(sc.at);
+			f.home.Insert(sc.from);
+			f.yaw.Insert(sc.yaw);
+		}
+		string err;
+		JsonFileLoader<DL_TrailCarFile>.SaveFile(DL_TRAIL_CARS_FILE, f, err);
+	}
+
+	// after a restart: cars the file says were at the staging spot go back where they stood
+	protected void DL_TrailCarsComeBack()
+	{
+		if (!FileExist(DL_TRAIL_CARS_FILE))
+			return;
+		DL_TrailCarFile f;
+		string err;
+		if (!JsonFileLoader<DL_TrailCarFile>.LoadFile(DL_TRAIL_CARS_FILE, f, err) || !f)
+			return;
+		for (int i = 0; i < f.at.Count() && i < f.home.Count(); i++)
+		{
+			array<Object> objs = new array<Object>;
+			array<CargoBase> cargos = new array<CargoBase>;
+			g_Game.GetObjectsAtPosition(f.at[i], 4, objs, cargos);
+			foreach (Object o : objs)
+			{
+				Transport t = Transport.Cast(o);
+				if (!t)
+					continue;
+				DL_TrailMoveCar(t, f.home[i], f.yaw[i], false);
+				DL_Log.Info(t.GetType() + " was left at the trail's staging spot (a restart): back to " + f.home[i].ToString());
+				break;
+			}
+		}
+		DeleteFile(DL_TRAIL_CARS_FILE);
+	}
+
+	protected void DL_TrailHideCar(Transport t, bool on)
+	{
+		CarScript cs = CarScript.Cast(t);
+		if (cs)
+		{
+			cs.DL_SetHidden(on);
+			return;
+		}
+		BoatScript bs = BoatScript.Cast(t);
+		if (bs)
+			bs.DL_SetHidden(on);
+	}
+
+	// every frame: the trips' clocks; inputs as they come
+	protected void DL_TrailUpdate(float dt)
+	{
+		DL_TrailInputs();
+		m_DL_TrailTick += dt;
+		if (m_DL_TrailTick < 0.25)
+			return;
+		float step = m_DL_TrailTick;
+		m_DL_TrailTick = 0;
+		DL_TrailLeavesTick(step);
+		for (int i = m_DL_Trips.Count() - 1; i >= 0; i--)
+		{
+			DL_TrailTrip trip = m_DL_Trips[i];
+			DL_TrailStep(trip, step);
+			if (trip.phase == "done")
+				m_DL_Trips.RemoveOrdered(i);
+		}
+	}
+
+	protected void DL_TrailStep(DL_TrailTrip trip, float dt)
+	{
+		trip.t += dt;
+#ifdef DL_DEV
+		// staging probe (dev): every 5 s, where the party's cars and people are and how they are
+		trip.probeT += dt;
+		if (trip.probeT >= 5)
+		{
+			trip.probeT = 0;
+			foreach (DL_PartyUnit pu : trip.units)
+			{
+				if (pu.car)
+				{
+					vector cpos = pu.car.GetPosition();
+					DL_Log.Info("PROBE car " + pu.car.GetType() + " at " + cpos.ToString() + " ground " + g_Game.SurfaceY(cpos[0], cpos[2]).ToString() + " health " + pu.car.GetHealth("", "").ToString() + " engine " + pu.car.GetHealth("Engine", "").ToString() + " speed " + GetVelocity(pu.car).Length().ToString());
+				}
+				foreach (PlayerBase pp : pu.crew)
+				{
+					if (pp)
+						DL_Log.Info("PROBE person at " + pp.GetPosition().ToString() + " health " + pp.GetHealth("", "").ToString() + " blood " + pp.GetHealth("", "Blood").ToString() + " alive " + pp.IsAlive().ToString());
+				}
+			}
+		}
+#endif
+		// who logged out: off the trip (he logged out frozen where he was; a walker comes back from the staging spot
+		// when he logs in again, DL_TrailComeBack)
+		foreach (DL_TrailMember m : trip.state.members)
+		{
+			if (m.gone || m.dead || m.fake)
+				continue;
+			if (!DL_FindPlayer(m.sid))
+			{
+				m.gone = true;
+				m_DL_Leaving.Remove(m.sid);
+				DL_Log.Info(m.sid + " logged out on the trail: off the trip, he stays here");
+				DL_TrailNote(trip, m.name + " is gone.");
+			}
+		}
+		if (trip.state.Alive().Count() == 0)
+		{
+			DL_TrailFinish(trip, true);
+			return;
+		}
+		// hunger and thirst don't tick while they watch
+		foreach (string hs, float he : trip.energy)
+		{
+			PlayerBase hp = DL_FindPlayer(hs);
+			DL_TrailMember hm = trip.state.Member(hs);
+			if (!hp || !hm || hm.gone || hm.dead)
+				continue;
+			hp.GetStatEnergy().Set(he);
+			hp.GetStatWater().Set(trip.water.Get(hs));
+		}
+		// the hidden flag lifts by itself after 2 minutes (a safety): keep it up
+		trip.hideT += dt;
+		if (trip.hideT > 60)
+		{
+			trip.hideT = 0;
+			DL_TrailHideAll(trip, true);
+		}
+		if (trip.phase == "road" && trip.t >= trip.wait && m_DL_TrailLeaves.Count() == 0)
+			DL_TrailCardUp(trip);
+		else if (trip.phase == "vote")
+			DL_TrailVote(trip, dt);
+		else if (trip.phase == "outcome" && trip.t >= 6)
+			DL_TrailNextChapter(trip);
+		else if (trip.phase == "last" && trip.t >= trip.wait)
+			DL_TrailFinish(trip, false);
+	}
+
+	protected void DL_TrailHideAll(DL_TrailTrip trip, bool on)
+	{
+		foreach (DL_PartyUnit u : trip.units)
+		{
+			if (u.car && !trip.carHome.Contains(u.car))
+				DL_TrailHideCar(u.car, on);
+			foreach (PlayerBase p : u.crew)
+			{
+				if (!p || !p.GetIdentity())
+					continue;
+				DL_TrailMember m = trip.state.Member(p.GetIdentity().GetPlainId());
+				if (m && !m.gone && !m.dead)
+					p.DL_SetHidden(on);
+			}
+		}
+	}
+
+	protected void DL_TrailCardUp(DL_TrailTrip trip)
+	{
+		if (!trip.game.Draw())
+		{
+			DL_Log.Info("trail " + trip.id.ToString() + ": no card fits, on to the next chapter");
+			DL_TrailNextChapter(trip);
+			return;
+		}
+		trip.card = trip.game.Show(trip.chap + 1, trip.choices, m_DL_Cfg.trail.voteSeconds);
+		trip.card.watch = trip.watch;
+		trip.tally = new DL_TrailTally();
+		foreach (string vs : trip.card.sids)
+		{
+			trip.tally.picks.Insert(DL_TrailGame.NONE);
+			trip.tally.locked.Insert(false);
+			PlayerBase vp = DL_FindPlayer(vs);
+			bool alone = true;
+			if (vp)
+			{
+				Transport vc = DL_CarOf(vp);
+				alone = !vc || vc.CrewDriver() == vp;
+			}
+			trip.card.alone.Insert(alone);
+		}
+		trip.tally.left = m_DL_Cfg.trail.voteSeconds;
+		if (trip.watch)
+			trip.tally.left = 6;
+		string json;
+		string err;
+		JsonFileLoader<DL_TrailVoteCard>.MakeData(trip.card, json, err, false);
+		DL_TrailToAll(trip, json, DL_Const.RPC_TRAIL_CARD);
+		// the film sets the card's scene up on the road while they vote
+		DL_FilmEvent se = trip.game.SceneEvent(DL_TrailKmSoFar(trip));
+		if (se)
+		{
+			array<ref DL_FilmEvent> sevs = new array<ref DL_FilmEvent>;
+			sevs.Insert(se);
+			DL_TrailRoadOut(trip, sevs, false);
+		}
+		trip.phase = "vote";
+		trip.t = 0;
+		trip.tallyT = 0;
+		DL_Log.Info("trail " + trip.id.ToString() + ": card " + trip.game.card.id + " (" + trip.card.choices.Count().ToString() + " choices)");
+	}
+
+	// everyone still on the trip (sent in parts, like the film)
+	protected void DL_TrailToAll(DL_TrailTrip trip, string json, int rpcType)
+	{
+		foreach (DL_TrailMember m : trip.state.members)
+		{
+			if (!m.gone && !m.dead && !m.fake)
+				DL_SendFilmRpc(m.sid, json, rpcType);
+		}
+	}
+
+	protected void DL_TrailSendTally(DL_TrailTrip trip)
+	{
+		string json;
+		string err;
+		JsonFileLoader<DL_TrailTally>.MakeData(trip.tally, json, err, false);
+		DL_TrailToAll(trip, json, DL_Const.RPC_TRAIL_TALLY);
+	}
+
+	protected void DL_TrailVote(DL_TrailTrip trip, float dt)
+	{
+		trip.tally.left = Math.Max(0, trip.tally.left - dt);
+		bool all = !trip.watch;
+		for (int i = 0; i < trip.card.sids.Count(); i++)
+		{
+			DL_TrailMember m = trip.state.Member(trip.card.sids[i]);
+			if (m && (m.gone || m.dead))
+				continue;
+			if (!trip.tally.locked[i])
+				all = false;
+		}
+		trip.tallyT += dt;
+		if (!all && trip.tally.left > 0)
+		{
+			if (trip.tallyT >= 1)
+			{
+				trip.tallyT = 0;
+				DL_TrailSendTally(trip);        // the clock, once a second
+			}
+			return;
+		}
+		int win;
+		if (trip.watch)
+			win = DL_TrailBest(trip);
+		else
+			win = trip.game.Winner(trip.card, trip.tally);
+		trip.tally.result = win;
+		if (win == DL_TrailGame.TURN_BACK)
+		{
+			trip.tally.outcome = "The party turns back.";
+			DL_TrailSendTally(trip);
+			DL_Log.Info("trail " + trip.id.ToString() + ": the party votes to turn back");
+			DL_TrailFinish(trip, true);
+			return;
+		}
+		array<ref DL_FilmEvent> evs = new array<ref DL_FilmEvent>;
+		trip.tally.outcome = trip.game.Resolve(win, DL_TrailKmSoFar(trip), evs);
+		DL_TrailSendTally(trip);
+		DL_TrailRoadOut(trip, evs, false);
+		trip.outcomeSeconds = DL_TrailChapters.Seconds(evs);
+		DL_Log.Info("trail " + trip.id.ToString() + ": " + trip.card.choices[win].label + " - " + trip.tally.outcome);
+		trip.phase = "outcome";
+		trip.t = 0;
+	}
+
+	// "watch": the option the party is best set up for (one its items need or help), else the safest
+	protected int DL_TrailBest(DL_TrailTrip trip)
+	{
+		for (int i = 0; i < trip.card.choices.Count(); i++)
+		{
+			if (trip.card.choices[i].help != "")
+				return i;
+		}
+		for (int s = 0; s < trip.card.choices.Count(); s++)
+		{
+			if (trip.card.choices[s].hint == "safe")
+				return s;
+		}
+		return 0;
+	}
+
+	protected float DL_TrailKmSoFar(DL_TrailTrip trip)
+	{
+		float km = 0;
+		for (int c = 0; c <= trip.chap && c < trip.chapters.Count(); c++)
+			km += DL_TrailChapters.Km(trip.chapters[c]);
+		return km;
+	}
+
+	protected void DL_TrailRoadOut(DL_TrailTrip trip, array<ref DL_FilmEvent> evs, bool last)
+	{
+		DL_TrailRoad road = new DL_TrailRoad();
+		foreach (DL_FilmEvent e : evs)
+			road.events.Insert(e);
+		road.km = trip.state.km + trip.state.extraKm;
+		road.last = last;
+		string json;
+		string err;
+		JsonFileLoader<DL_TrailRoad>.MakeData(road, json, err, false);
+		DL_TrailToAll(trip, json, DL_Const.RPC_TRAIL_ROAD);
+	}
+
+	// a line on the film for everyone (someone turned back, logged out)
+	protected void DL_TrailNote(DL_TrailTrip trip, string text)
+	{
+		array<ref DL_FilmEvent> evs = new array<ref DL_FilmEvent>;
+		evs.Insert(DL_TrailGame.Ev("note", DL_TrailKmSoFar(trip), "", text));
+		DL_TrailRoadOut(trip, evs, false);
+	}
+
+	protected void DL_TrailNextChapter(DL_TrailTrip trip)
+	{
+		trip.chap++;
+		if (trip.chap >= trip.chapters.Count())
+		{
+			DL_TrailFinish(trip, false);
+			return;
+		}
+		array<ref DL_FilmEvent> next = trip.chapters[trip.chap];
+		DL_TrailChapters.Fix(next, trip.state, trip.state.extraKm - trip.kmCounted);
+		trip.kmCounted = trip.state.extraKm;
+		bool last = trip.chap == trip.chapters.Count() - 1;
+		DL_TrailRoadOut(trip, next, last);
+		trip.wait = DL_TrailChapters.Seconds(next) + Math.Max(0, trip.outcomeSeconds - 6);
+		trip.outcomeSeconds = 0;
+		trip.t = 0;
+		if (last)
+		{
+			trip.phase = "last";
+			trip.wait += DL_Film.END_SECONDS + 3;
+		}
+		else
+			trip.phase = "road";
+	}
+
+	// ---------------- inputs ----------------
+
+	protected void DL_TrailInputs()
+	{
+		array<string> q = DL_TrailAnswers.Queue();
+		if (q.Count() == 0)
+			return;
+		array<string> answers = new array<string>;
+		answers.Copy(q);
+		q.Clear();
+		foreach (string a : answers)
+		{
+			array<string> parts = new array<string>;
+			a.Split("|", parts);
+			if (parts.Count() != 3)
+				continue;
+			string sid = parts[0];
+			string what = parts[1];
+			int val = parts[2].ToInt();
+			if (what == "ready")
+			{
+				DL_Party party = DL_ReadyPartyOf(sid);
+				if (!party)
+					continue;
+				if (val == 1 && party.canGo)
+				{
+					party.ready.Set(sid, true);
+					DL_ReadySend(party);
+				}
+				else if (val == 0 && !party.trail)
+				{
+					// Not ready: he calls it off, for the whole party (it only goes when everyone is ready)
+					m_DL_Parties.RemoveItem(party);
+					DL_ReadyGiveUp(party, sid);
+				}
+				else
+				{
+					party.ready.Remove(sid);
+					DL_ReadySend(party);
+				}
+				continue;
+			}
+			DL_TrailTrip trip = DL_TrailTripOf(sid);
+			if (!trip)
+				continue;
+			if (what == "alone")
+			{
+				DL_TrailAlone(trip, sid);
+				continue;
+			}
+			if (what == "ask")
+			{
+				// a passenger's answer: back with his driver (0) or stay (1)
+				foreach (string ld, DL_TrailLeave lv : m_DL_TrailLeaves)
+				{
+					if (lv.asked.Find(sid) >= 0)
+						lv.answers.Set(sid, Math.Clamp(val, 0, 1));
+				}
+				continue;
+			}
+			if (trip.phase != "vote" || trip.watch)
+				continue;
+			int i = trip.card.sids.Find(sid);
+			if (i < 0 || trip.tally.locked[i])
+				continue;
+			if (what == "pick" && (val == DL_TrailGame.TURN_BACK || (val >= 0 && val < trip.card.choices.Count())))
+				trip.tally.picks[i] = val;
+			else if (what == "lock" && trip.tally.picks[i] != DL_TrailGame.NONE)
+				trip.tally.locked[i] = true;
+			DL_TrailSendTally(trip);
+		}
+	}
+
+	protected DL_TrailTrip DL_TrailTripOf(string sid)
+	{
+		foreach (DL_TrailTrip t : m_DL_Trips)
+		{
+			DL_TrailMember m = t.state.Member(sid);
+			if (m && !m.gone && !m.dead)
+				return t;
+		}
+		return null;
+	}
+
+	// ---------------- turning back alone ----------------
+
+	// on foot: he walks back (the further in, the worse the odds); at the wheel: the car and everyone in it go back
+	protected void DL_TrailAlone(DL_TrailTrip trip, string sid)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		DL_TrailMember me = trip.state.Member(sid);
+		if (!pb || !me || m_DL_TrailLeaves.Contains(sid))
+			return;
+		Transport car = DL_CarOf(pb);
+		if (car && car.CrewDriver() != pb)
+		{
+			// a passenger: out of the car, then he walks back on his own
+			DL_TrailGetOut(pb);
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_TrailWalkBack, 2500, false, trip, sid, 0);
+			return;
+		}
+		if (car)
+		{
+			// the driver: his passengers on the trip choose first (go back with him, or stay)
+			DL_TrailLeave leave = new DL_TrailLeave();
+			leave.driver = sid;
+			leave.car = car;
+			leave.trip = trip;
+			leave.left = 20;
+			array<PlayerBase> crew = DL_CrewOf(pb);
+			foreach (PlayerBase c : crew)
+			{
+				if (c == pb || !c.GetIdentity())
+					continue;
+				DL_TrailMember cm = trip.state.Member(c.GetIdentity().GetPlainId());
+				if (!cm || cm.gone || cm.dead)
+					continue;
+				leave.asked.Insert(c.GetIdentity().GetPlainId());
+				DL_TrailAsk(trip, c.GetIdentity().GetPlainId(), me.name);
+			}
+			if (leave.asked.Count() > 0)
+			{
+				m_DL_TrailLeaves.Set(sid, leave);
+				NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 8, "DriveLink", "Turning back: your passengers choose to come with you or stay (20 s).", "");
+				return;
+			}
+		}
+		DL_TrailGoBack(trip, sid, null);
+	}
+
+	// a passenger's choice when his driver turns back: the same card, only for him
+	protected void DL_TrailAsk(DL_TrailTrip trip, string psid, string driverName)
+	{
+		DL_TrailVoteCard ask = new DL_TrailVoteCard();
+		ask.title = driverName + " turns back";
+		ask.text = driverName + " is taking the car back. Go with them, or stay on the trail (a free seat in another car, or on foot)?";
+		ask.seconds = 20;
+		ask.ask = true;
+		DL_TrailChoice back = new DL_TrailChoice();
+		back.label = "Go back with " + driverName;
+		back.hint = "safe";
+		ask.choices.Insert(back);
+		DL_TrailChoice stay = new DL_TrailChoice();
+		stay.label = "Stay on the trail";
+		stay.hint = "risky";
+		ask.choices.Insert(stay);
+		DL_TrailMember pm = trip.state.Member(psid);
+		ask.names.Insert(pm.name);
+		ask.sids.Insert(psid);
+		ask.alone.Insert(false);
+		string json;
+		string err;
+		JsonFileLoader<DL_TrailVoteCard>.MakeData(ask, json, err, false);
+		DL_SendFilmRpc(psid, json, DL_Const.RPC_TRAIL_CARD);
+	}
+
+	// every second: the passengers' answers in (or the time up: they go back with him), then the car goes
+	protected void DL_TrailLeavesTick(float dt)
+	{
+		array<string> done = new array<string>;
+		foreach (string d, DL_TrailLeave lv : m_DL_TrailLeaves)
+		{
+			lv.left -= dt;
+			if (lv.left > 0 && lv.answers.Count() < lv.asked.Count())
+				continue;
+			done.Insert(d);
+		}
+		foreach (string dd : done)
+		{
+			DL_TrailLeave l = m_DL_TrailLeaves.Get(dd);
+			m_DL_TrailLeaves.Remove(dd);
+			array<string> stay = new array<string>;
+			foreach (string a : l.asked)
+			{
+				int choice = 0;
+				l.answers.Find(a, choice);
+				if (choice == 1)
+					stay.Insert(a);
+			}
+			DL_TrailGoBack(l.trip, l.driver, stay);
+		}
+	}
+
+	// a passenger who stays when his car goes back: out of it, into a free seat of another car or on foot
+	protected void DL_TrailStays(DL_TrailTrip trip, string psid, Transport from)
+	{
+		PlayerBase p = DL_FindPlayer(psid);
+		DL_TrailMember m = trip.state.Member(psid);
+		if (!p || !m)
+			return;
+		DL_TrailGetOut(p);
+		// where he stood before the staging spot: the car's place (a turn back later brings him there)
+		DL_StagedCar fromSc = DL_StagedOf(from);
+		if (fromSc)
+			DL_TrailHomeSet(psid, fromSc.from);
+		int to = -1;
+		foreach (DL_TrailCar oc : trip.state.cars)
+		{
+			if (oc.lost || oc.idx == m.car)
+				continue;
+			int seated = 0;
+			array<DL_TrailMember> alive = trip.state.Alive();
+			foreach (DL_TrailMember sm : alive)
+			{
+				if (sm.car == oc.idx)
+					seated++;
+			}
+			if (seated < 4)
+			{
+				to = oc.idx;
+				break;
+			}
+		}
+		m.car = to;
+		// his unit: the car he moves to, or one of his own on foot
+		foreach (DL_PartyUnit u : trip.units)
+		{
+			int i = u.crew.Find(p);
+			if (i >= 0)
+				u.crew.Remove(i);
+		}
+		Transport toCar = null;
+		foreach (DL_JVehicle jv : trip.journey.vehicles)
+		{
+			if (jv.idx == to)
+				toCar = jv.live;
+		}
+		bool placed = false;
+		foreach (DL_PartyUnit tu : trip.units)
+		{
+			if (toCar && tu.car == toCar)
+			{
+				tu.crew.Insert(p);
+				placed = true;
+			}
+		}
+		if (!placed)
+		{
+			DL_PartyUnit walk = new DL_PartyUnit();
+			walk.leader = p;
+			walk.crew.Insert(p);
+			trip.units.Insert(walk);
+			trip.prices.Insert(DL_TravelCost.Price(m_DL_Cfg.travel, trip.zone, false, null));
+		}
+		string where = "on foot";
+		if (to >= 0)
+			where = "in " + trip.state.cars[to].name;
+		DL_TrailNote(trip, m.name + " stays on the trail, " + where + ".");
+		DL_Log.Info(psid + " stays on trail " + trip.id.ToString() + " (" + where + ")");
+	}
+
+	// a passenger turning back alone: once he is out of the car he walks back (tries a few seconds)
+	protected void DL_TrailWalkBack(DL_TrailTrip trip, string sid, int tries)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb)
+			return;
+		Transport car = DL_CarOf(pb);
+		if (car && tries < 4)
+		{
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_TrailWalkBack, 1500, false, trip, sid, tries + 1);
+			return;
+		}
+		if (car)
+		{
+			NotificationSystem.SendNotificationToPlayerIdentityExtended(pb.GetIdentity(), 6, "DriveLink", "You couldn't get out of the car: you stay on the trail.", "");
+			return;
+		}
+		// back from the staging spot to where his car stood
+		Transport was = null;
+		foreach (DL_PartyUnit u : trip.units)
+		{
+			if (u.crew.Find(pb) >= 0)
+				was = u.car;
+		}
+		DL_StagedCar wasSc = DL_StagedOf(was);
+		if (wasSc)
+			DL_TrailHomeSet(sid, wasSc.from);
+		DL_TrailGoBack(trip, sid, null);
+	}
+
+	// the server runs the get-out on the client (it's his command): the trail's passengers who leave a car
+	protected void DL_TrailGetOut(PlayerBase pb)
+	{
+		if (!pb || !pb.GetIdentity())
+			return;
+		ScriptRPC rpc = new ScriptRPC();
+		rpc.Write(true);
+		rpc.Send(null, DL_Const.RPC_TRAIL_GETOUT, true, pb.GetIdentity());
+	}
+
+	// he (on foot, or at the wheel with whoever goes back with him) turns back: the way back is rolled, he is put
+	// back where he stood. stay = his passengers who stay on the trail
+	protected void DL_TrailGoBack(DL_TrailTrip trip, string sid, array<string> stay)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		DL_TrailMember me = trip.state.Member(sid);
+		if (!pb || !me || me.gone || me.dead)
+			return;
+		Transport car = DL_CarOf(pb);
+		if (car && car.CrewDriver() != pb)
+			car = null;                            // a passenger who got out (or couldn't): on his own
+		float far = (trip.chap + 1.0) / (trip.choices + 1.0);
+		array<PlayerBase> going = new array<PlayerBase>;
+		if (car)
+		{
+			array<PlayerBase> crew = DL_CrewOf(pb);
+			foreach (PlayerBase c : crew)
+			{
+				if (stay && c.GetIdentity() && stay.Find(c.GetIdentity().GetPlainId()) >= 0)
+				{
+					DL_TrailStays(trip, c.GetIdentity().GetPlainId(), car);
+					continue;
+				}
+				going.Insert(c);
+			}
+			if (me.car >= 0 && me.car < trip.state.cars.Count())
+				trip.state.cars[me.car].lost = true;
+			trip.carHome.Set(car, true);
+		}
+		else
+			going.Insert(pb);
+		string names = "";
+		foreach (PlayerBase g : going)
+		{
+			if (!g.GetIdentity())
+				continue;
+			string gsid = g.GetIdentity().GetPlainId();
+			DL_TrailMember gm = trip.state.Member(gsid);
+			if (!gm || gm.gone || gm.dead)
+				continue;
+			gm.gone = true;
+			if (names != "")
+				names += " and ";
+			names += gm.name;
+			int vi = -1;
+			if (trip.card)
+				vi = trip.card.sids.Find(gsid);
+			if (trip.phase == "vote" && vi >= 0)
+			{
+				trip.tally.picks[vi] = DL_TrailGame.NONE;
+				trip.tally.locked[vi] = true;
+			}
+			// the way back: alone on foot it is dangerous, in a car only a little
+			string fate = "made it back.";
+			float deathPct = 15 * far;
+			float hurtPct = 35 * far;
+			if (car)
+			{
+				deathPct = 0;
+				hurtPct = 15 * far;
+			}
+			bool dies = DL_TrailRoll(deathPct);
+			DL_TrailRestore(trip, gsid, gm);
+			DL_TrailSummary back = new DL_TrailSummary();
+			back.title = "You turned back";
+			if (dies)
+			{
+				fate = "didn't make it back.";
+				back.lines.Insert("You didn't make it back.");
+				DL_TrailKill(gsid);
+			}
+			else if (DL_TrailRoll(hurtPct))
+			{
+				fate = "made it back, hurt.";
+				g.SetHealth("", "", Math.Max(10, g.GetHealth("", "") - 30));
+				back.lines.Insert("You made it back, but you were hurt on the way.");
+			}
+			else
+				back.lines.Insert("You made it back where you started.");
+			DL_Log.Info(gsid + " turned back alone on trail " + trip.id.ToString() + ": " + fate);
+			string bj;
+			string berr;
+			JsonFileLoader<DL_TrailSummary>.MakeData(back, bj, berr, false);
+			DL_SendFilmRpc(gsid, bj, DL_Const.RPC_TRAIL_END);
+		}
+		if (car)
+		{
+			// the ones who stay get out first, then the car goes back where it stood
+			if (stay && stay.Count() > 0)
+				g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_TrailCarBack, 4000, false, car);
+			else
+				DL_TrailCarBack(car);
+			DL_TrailHideCar(car, false);
+			car.SetAllowDamage(true);
+			DL_TravelPrice ap = null;
+			for (int au = 0; au < trip.units.Count(); au++)
+			{
+				if (trip.units[au].car == car)
+					ap = trip.prices[au];
+			}
+			DL_TrailCarFuel(trip, car, me.car, ap, far);
+		}
+		if (names != "")
+			DL_TrailNote(trip, names + " turned back.");
+	}
+
+	// ---------------- the end ----------------
+
+	// turnedBack: the party voted to go back (or nobody is left); else they arrive
+	protected void DL_TrailFinish(DL_TrailTrip trip, bool turnedBack)
+	{
+		trip.phase = "done";
+		float far = (trip.chap + 1.0) / (trip.choices + 1.0);
+		int seconds = 0;
+		if (!turnedBack)
+		{
+			float km = trip.state.km + trip.state.extraKm;
+			trip.journey.AfterTrail(trip.state, km);
+			if (m_DL_Cfg.travel && m_DL_Cfg.travel.timeEnabled)
+			{
+				float kmh = m_DL_Cfg.travel.speedFootKmh;
+				if (trip.state.Driving())
+					kmh = m_DL_Cfg.travel.speedCarKmh;
+				seconds = trip.journey.seconds + trip.state.minutes * 60 + trip.state.extraKm / Math.Max(0.5, kmh) * 3600;
+				// the road was played driving, but the cars were lost on the trail: what was left of it is walked
+				if (!trip.state.Driving() && trip.journey.drivenKm > 0)
+				{
+					float walkedOn = trip.journey.drivenKm * (1 - far);
+					float slower = 1 / Math.Max(0.5, m_DL_Cfg.travel.speedFootKmh) - 1 / Math.Max(0.5, m_DL_Cfg.travel.speedCarKmh);
+					seconds += walkedOn * slower * 3600;
+				}
+				trip.journey.seconds = Math.Max(60, seconds);
+				seconds = trip.journey.seconds;
+			}
+		}
+		DL_TrailSummary sum = trip.game.Summary(turnedBack, seconds);
+		string sj;
+		string serr;
+		JsonFileLoader<DL_TrailSummary>.MakeData(sum, sj, serr, false);
+		DL_TrailToAll(trip, sj, DL_Const.RPC_TRAIL_END);
+		string story = sum.title;
+		foreach (string sl : sum.lines)
+			story += "\n" + sl;
+		// the dead die here: a fresh start on this server, their gear gone with the body
+		foreach (DL_TrailMember dm : trip.state.members)
+		{
+			bool roadDead = false;
+			DL_Traveller jt = trip.journey.Find(dm.sid);
+			if (jt && jt.dead && !turnedBack)
+				roadDead = true;
+			if ((dm.dead || roadDead) && !dm.gone && !dm.fake)
+				DL_TrailKill(dm.sid);
+		}
+		if (turnedBack)
+		{
+			foreach (DL_TrailMember bm : trip.state.members)
+			{
+				if (!bm.gone && !bm.dead)
+					DL_TrailRestore(trip, bm.sid, bm);
+			}
+			for (int bi = 0; bi < trip.units.Count(); bi++)
+			{
+				DL_PartyUnit bu = trip.units[bi];
+				if (!bu.car || trip.carHome.Contains(bu.car))
+					continue;
+				DL_TrailCarBack(bu.car);
+				DL_TrailHideCar(bu.car, false);
+				bu.car.SetAllowDamage(true);
+				int bci = -1;
+				foreach (DL_JVehicle bjv : trip.journey.vehicles)
+				{
+					if (bjv.live == bu.car)
+						bci = bjv.idx;
+				}
+				DL_TrailCarFuel(trip, bu.car, bci, trip.prices[bi], far);
+			}
+			DL_Log.Info("trail " + trip.id.ToString() + " to " + trip.zone.to + " turned back: " + story);
+			return;
+		}
+		// the rest leave as usual: each unit with whoever of it is still going
+		foreach (DL_Traveller ft : trip.journey.crew)
+		{
+			ft.d.film = null;                  // they saw it: the arrival shows the summary only
+			ft.d.journey = story;
+		}
+		array<ref DL_PartyUnit> going = new array<ref DL_PartyUnit>;
+		array<ref DL_TravelPrice> goingPrice = new array<ref DL_TravelPrice>;
+		for (int ui = 0; ui < trip.units.Count(); ui++)
+		{
+			DL_PartyUnit u = trip.units[ui];
+			DL_PartyUnit g = new DL_PartyUnit();
+			g.car = u.car;
+			foreach (PlayerBase c : u.crew)
+			{
+				if (!c || !c.GetIdentity() || !c.IsAlive())
+					continue;
+				DL_TrailMember cm = trip.state.Member(c.GetIdentity().GetPlainId());
+				DL_Traveller ct = trip.journey.Find(c.GetIdentity().GetPlainId());
+				if (!cm || cm.gone || cm.dead || !ct || ct.dead)
+					continue;
+				g.crew.Insert(c);
+			}
+			if (g.crew.Count() == 0)
+			{
+				// nobody of this car is going: it stays here
+				if (u.car && !trip.carHome.Contains(u.car))
+				{
+					DL_TrailCarBack(u.car);
+					DL_TrailHideCar(u.car, false);
+					u.car.SetAllowDamage(true);
+				}
+				continue;
+			}
+			g.leader = g.crew[0];
+			going.Insert(g);
+			goingPrice.Insert(trip.prices[ui]);
+		}
+		if (going.Count() == 0)
+		{
+			DL_Log.Info("trail " + trip.id.ToString() + ": nobody left to arrive");
+			return;
+		}
+		DL_RememberScene(going);
+		// the main menu's road scene shows them as the trail left them: cars lost on the way aren't in it, their
+		// crews walk (or ride in a car of the convoy that had room), and the summary goes under the "on the road"
+		// banner (the banner shows the time left itself)
+		DL_PartyUnit firstUnit = going[0];
+		DL_SceneHold hold = m_DL_SceneOf.Get(firstUnit.crew[0].GetIdentity().GetPlainId());
+		if (hold && hold.scene)
+		{
+			array<int> sceneOf = new array<int>;      // journey vehicle idx -> its place in the scene, -1 = none
+			foreach (DL_JVehicle sjv : trip.journey.vehicles)
+				sceneOf.Insert(-1);
+			int sv = 0;
+			foreach (DL_PartyUnit hu : going)
+			{
+				if (!hu.car)
+					continue;
+				foreach (DL_JVehicle hjv : trip.journey.vehicles)
+				{
+					if (hjv.live == hu.car)
+						sceneOf[hjv.idx] = sv;
+				}
+				sv++;
+			}
+			for (int mi = 0; mi < hold.scene.members.Count() && mi < hold.sids.Count(); mi++)
+			{
+				DL_MenuMember mm = hold.scene.members[mi];
+				DL_Traveller mt = trip.journey.Find(hold.sids[mi]);
+				mm.vehicle = -1;
+				mm.seat = -1;
+				if (!mt || mt.veh < 0 || mt.veh >= trip.journey.vehicles.Count() || trip.journey.vehicles[mt.veh].lost)
+					continue;
+				mm.vehicle = sceneOf[mt.veh];
+				mm.seat = mt.seat;
+			}
+			// the lost cars out, the others renumbered
+			array<int> newIdx = new array<int>;
+			array<ref DL_MenuVehicle> kept = new array<ref DL_MenuVehicle>;
+			for (int vi = 0; vi < hold.scene.vehicles.Count(); vi++)
+			{
+				int jIdx = sceneOf.Find(vi);
+				if (jIdx >= 0 && !trip.journey.vehicles[jIdx].lost)
+				{
+					newIdx.Insert(kept.Count());
+					kept.Insert(hold.scene.vehicles[vi]);
+				}
+				else
+					newIdx.Insert(-1);
+			}
+			hold.scene.vehicles = kept;
+			foreach (DL_MenuMember rm : hold.scene.members)
+			{
+				if (rm.vehicle >= 0 && rm.vehicle < newIdx.Count())
+					rm.vehicle = newIdx[rm.vehicle];
+				if (rm.vehicle < 0)
+					rm.seat = -1;
+			}
+			hold.scene.title = sum.title;
+			foreach (string hl : sum.lines)
+			{
+				if (hl.IndexOf("Time on the road") != 0)
+					hold.scene.lines.Insert(hl);
+			}
+		}
+		string pid = m_DL_Cfg.serverId + "-trail" + trip.id.ToString() + "-" + g_Game.GetTime().ToString();
+		int cars = 0;
+		foreach (DL_JVehicle cv : trip.journey.vehicles)
+		{
+			if (!cv.lost)
+				cars++;
+		}
+		for (int gi = 0; gi < going.Count(); gi++)
+		{
+			DL_PartyUnit du = going[gi];
+			foreach (PlayerBase pm : du.crew)
+			{
+				string psid = pm.GetIdentity().GetPlainId();
+				if (trip.sids.Count() > 1)
+					m_DL_PartyIdOf.Set(psid, pid);
+				if (trip.convoy && going.Count() > 1)
+				{
+					m_DL_ConvoyOf.Set(psid, pid);
+					m_DL_ConvoyCarsOf.Set(psid, cars);
+				}
+			}
+			DL_DepartUnit(du.leader, trip.zone, du.car, du.crew, goingPrice[gi], trip.journey, null);
+		}
+		DL_Log.Info("trail " + trip.id.ToString() + " to " + trip.zone.to + " arrives: " + going.Count().ToString() + " unit(s), " + seconds.ToString() + " s on the road. " + story);
+	}
+
+	// dies here: killed, the body (and everything on it) gone a few seconds later; he respawns on this server
+	protected void DL_TrailKill(string sid)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		DL_TrailHomeBack(sid, null);
+		if (!pb || !pb.IsAlive())
+			return;
+		m_DL_Leaving.Remove(sid);
+		pb.DL_SetHidden(false);
+		pb.SetAllowDamage(true);
+		pb.SetHealth("", "", 0);
+		DL_Log.Info(sid + " died on the trail: killed here");
+		g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_RemoveBody, 5000, false, pb);
+	}
+
+	// back where he stood: seen again, damage on, what the trail used or took is gone from his own gear
+	protected void DL_TrailRestore(DL_TrailTrip trip, string sid, DL_TrailMember m)
+	{
+		PlayerBase pb = DL_FindPlayer(sid);
+		m_DL_Leaving.Remove(sid);
+		if (!pb)
+			return;
+		DL_TrailHomeBack(sid, pb);
+		pb.DL_SetHidden(false);
+		pb.SetAllowDamage(true);
+		m_DL_MustLeaveZone.Set(sid, true);
+		if (!m)
+			return;
+		array<EntityAI> all = new array<EntityAI>;
+		pb.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, all);
+		foreach (string u : m.used)
+		{
+			foreach (EntityAI e : all)
+			{
+				if (e && e != pb && e.GetType() == u)
+				{
+					g_Game.ObjectDelete(e);
+					break;
+				}
+			}
+		}
+		if (m.lost > 0)
+		{
+			array<EntityAI> loose = new array<EntityAI>;
+			foreach (EntityAI le : all)
+			{
+				if (le && le != pb && le.GetHierarchyParent() != pb)
+					loose.Insert(le);   // not worn: in a bag or a pocket
+			}
+			for (int l = 0; l < m.lost && loose.Count() > 0; l++)
+			{
+				int li = Math.RandomInt(0, loose.Count());
+				if (loose[li])
+					g_Game.ObjectDelete(loose[li]);
+				loose.Remove(li);
+			}
+		}
+		if (m.health < 100)
+			pb.SetHealth("", "", Math.Max(10, pb.GetHealth("", "") - (100 - m.health)));
+	}
+
+	// a car that turns back: the fuel of the way there and back, and what the trail cost the tank
+	protected void DL_TrailCarFuel(DL_TrailTrip trip, Transport t, int idx, DL_TravelPrice price, float far)
+	{
+		Car car = Car.Cast(t);
+		if (!car)
+			return;
+		float cap = car.GetFluidCapacity(CarFluid.FUEL);
+		float lose = 0;
+		if (idx >= 0 && idx < trip.state.cars.Count())
+			lose += trip.state.cars[idx].fuelLost * cap;
+		if (price)
+			lose += price.fuelL * far * 2;
+		if (lose > 0)
+			car.Leak(CarFluid.FUEL, Math.Min(lose, car.GetFluidFraction(CarFluid.FUEL) * cap));
+	}
+
+	// ---------------- walkers moved to the staging spot (kept in a file: a restart puts them back too) ----------------
+
+	protected void DL_TrailHomeLoad()
+	{
+		if (m_DL_TrailHome)
+			return;
+		m_DL_TrailHome = new map<string, vector>;
+		if (!FileExist(DL_TRAIL_HOME_FILE))
+			return;
+		DL_TrailHomeFile f;
+		string err;
+		if (JsonFileLoader<DL_TrailHomeFile>.LoadFile(DL_TRAIL_HOME_FILE, f, err) && f)
+		{
+			for (int i = 0; i < f.sids.Count() && i < f.pos.Count(); i++)
+				m_DL_TrailHome.Set(f.sids[i], f.pos[i]);
+		}
+	}
+
+	protected void DL_TrailHomeSave()
+	{
+		DL_TrailHomeFile f = new DL_TrailHomeFile();
+		foreach (string sid, vector p : m_DL_TrailHome)
+		{
+			f.sids.Insert(sid);
+			f.pos.Insert(p);
+		}
+		string err;
+		JsonFileLoader<DL_TrailHomeFile>.SaveFile(DL_TRAIL_HOME_FILE, f, err);
+	}
+
+	protected void DL_TrailHomeSet(string sid, vector p)
+	{
+		DL_TrailHomeLoad();
+		m_DL_TrailHome.Set(sid, p);
+		DL_TrailHomeSave();
+	}
+
+	// pb back where he stood (pb null: just forget it)
+	protected void DL_TrailHomeBack(string sid, PlayerBase pb)
+	{
+		DL_TrailHomeLoad();
+		vector p;
+		if (!m_DL_TrailHome.Find(sid, p))
+			return;
+		if (pb)
+			pb.SetPosition(p);
+		m_DL_TrailHome.Remove(sid);
+		DL_TrailHomeSave();
+	}
+
+	// he logs in while the file says he was moved to the staging spot (a restart, a logout on the trail)
+	protected void DL_TrailComeBack(string sid)
+	{
+		if (DL_TrailTripOf(sid))
+			return;
+		DL_TrailHomeLoad();
+		if (!m_DL_TrailHome.Contains(sid))
+			return;
+		PlayerBase pb = DL_FindPlayer(sid);
+		if (!pb)
+			return;
+		DL_TrailHomeBack(sid, pb);
+		pb.DL_SetHidden(false);
+		pb.SetAllowDamage(true);
+		m_DL_MustLeaveZone.Set(sid, true);
+		DL_Log.Info(sid + " came back from the trail's staging spot to where he stood");
+	}
+
 	protected PlayerBase DL_FindPlayer(string sid)
 	{
 		array<Man> men = new array<Man>;
@@ -3870,6 +5744,23 @@ class DL_SceneHold
 {
 	ref DL_MenuScene scene;
 	ref array<string> sids;   // steam ids, in the order of scene.members
+}
+
+class DL_ReadyOddsWaiter : Managed
+{
+	protected MissionServer m_M;
+	protected int m_Party;
+	protected string m_Key;
+	void DL_ReadyOddsWaiter(MissionServer m, int party, string key) { m_M = m; m_Party = party; m_Key = key; }
+	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_ReadyOdds(m_Party, m_Key, ok, body); }
+}
+
+class DL_PrecheckWaiter : Managed
+{
+	protected MissionServer m_M;
+	protected int m_Party;
+	void DL_PrecheckWaiter(MissionServer m, int party) { m_M = m; m_Party = party; }
+	void OnAnswer(bool ok, string body) { if (m_M) m_M.DL_TrailPrechecked(m_Party, ok, body); }
 }
 
 class DL_OddsWaiter : Managed

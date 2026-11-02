@@ -27,6 +27,15 @@ class DL_Const
 	static const int RPC_CREW_WAIT = 4810004;  // server -> client: crew waiting room (phase, here, expected, text, start engine)
 	static const int RPC_SHORT = 4810013;      // server -> client: short of supplies, DL_ShortInfo as JSON (the dialog)
 	static const int RPC_GO_ANYWAY = 4810014;  // client -> server (his player): bool, travel anyway or not
+	// the interactive trail (DL_Trail): server -> client JSON in parts like RPC_FILM, client -> server through his player
+	static const int RPC_TRAIL_READY = 4810016; // DL_ReadyInfo: the zone's ready-up table ("" = close it)
+	static const int RPC_TRAIL_START = 4810017; // DL_Film (skip "trail"): the film starts, its first chapter
+	static const int RPC_TRAIL_CARD = 4810018;  // DL_TrailVoteCard
+	static const int RPC_TRAIL_TALLY = 4810019; // DL_TrailTally
+	static const int RPC_TRAIL_ROAD = 4810020;  // DL_TrailRoad: more road (a chapter, or what a choice did)
+	static const int RPC_TRAIL_END = 4810021;   // DL_TrailSummary: the trail is over for him
+	static const int RPC_TRAIL_IN = 4810022;    // client -> server: string "ready|1", "pick|2", "lock|1", "alone|1", "ask|0"
+	static const int RPC_TRAIL_GETOUT = 4810023; // server -> client: get out of the car (bool), he leaves it on the trail
 	static const int RPC_MENU_SCENE = 4810015; // server -> client: who travels with him, for the main menu (DL_MenuScene),
 	                                           // in parts like RPC_FILM
 	static const int WAIT_SHOW = 1;            // black screen + "n/m connected"
@@ -107,6 +116,18 @@ class DL_TravelRules
 	}
 }
 
+// The interactive trail (Research/interactive-trail-design.md) for trips that START here.
+class DL_TrailConfig
+{
+	string filmMode = "interactive"; // "interactive" (the party votes) | "watch" (choices make themselves) | "off" (the old countdown)
+	int readySeconds = 60;           // the zone's ready-up: everyone ready by then, or nobody goes
+	int voteSeconds = 30;            // to vote on a choice
+	int maxChoices = 5;              // choices on the longest trips (1 per 20 km)
+	float instantRiskPerHour = 15;   // instant arrival (no travel time): % someone dies per hour a choice would have cost
+	vector stagingPos;               // older setting: a party waits here, hidden, while the film plays (0 0 0 = where
+	                                 // they stand); the hub's staging area (DL_Config.stagingArea) comes first
+}
+
 // Where you come out when you arrive from another server.
 class DL_ArrivalPoint
 {
@@ -148,6 +169,10 @@ class DL_Config
 	// veto) | "veto" (a car of ours away keeps its place: CE respawns that would replace it are deleted)
 	string carEconomy = "off";
 	ref DL_TravelRules travel = new DL_TravelRules(); // from the hub with the layout
+	ref DL_TrailConfig trail = new DL_TrailConfig();  // the interactive trail (this server's config.json)
+	// the staging area (hub Map page, with the layout): where travelling groups wait out of sight, leaving (the trip
+	// film) and arriving (vehicles put together); may be off the map, must be dry land. 0 0 0 = none
+	vector stagingArea;
 	ref array<ref DL_Zone> zones = new array<ref DL_Zone>;
 	ref array<ref DL_ArrivalPoint> arrivals = new array<ref DL_ArrivalPoint>;
 
@@ -332,6 +357,12 @@ class DL_Debug
 	int econRuinCount;
 	int econStatusEvery = 30; // log the event's counts
 	int econExitAt;           // shut down cleanly (the world storage is saved)
+	// interactive trail test (DL_MissionServerTrailTest): every player who logs in is put in the first zone with a
+	// compass, epoxy putty and a bandage; the server shuts down cleanly trailTestExitAt s after the start (0 = never)
+	bool trailTest;
+	int trailTestExitAt;
+	string trailTestCar;      // ... and puts him at the wheel of a new one of these in the zone ("" = on foot)
+	vector trailTestStaging;  // ... and uses this staging spot (0 0 0 = config.json's)
 }
 
 class DL_EconBox

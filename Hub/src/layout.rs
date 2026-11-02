@@ -1,4 +1,5 @@
-// Leaving zones + arrival points per server (table layouts, migration 003). Stored as the mod's own JSON arrays.
+// Leaving zones + arrival points per server (table layouts, migration 003), and its staging area (migration 009).
+// Stored as the mod's own JSON.
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 
@@ -7,11 +8,13 @@ pub struct Layout {
     pub arrivals: String,
     pub map: String,
     pub rev: i64,
+    /// the staging area: JSON [x, 0, z], "" = none
+    pub staging: String,
 }
 
 pub fn get(c: &Connection, server: &str) -> rusqlite::Result<Option<Layout>> {
-    c.query_row("SELECT zones,arrivals,map,rev FROM layouts WHERE server_id=?1", params![server], |r| {
-        Ok(Layout { zones: r.get(0)?, arrivals: r.get(1)?, map: r.get(2)?, rev: r.get(3)? })
+    c.query_row("SELECT zones,arrivals,map,rev,staging FROM layouts WHERE server_id=?1", params![server], |r| {
+        Ok(Layout { zones: r.get(0)?, arrivals: r.get(1)?, map: r.get(2)?, rev: r.get(3)?, staging: r.get(4)? })
     })
     .optional()
 }
@@ -28,16 +31,17 @@ pub fn import_if_missing(c: &Connection, server: &str, zones: &str, arrivals: &s
     Ok(true)
 }
 
-/// Editor save: replaces zones/arrivals (and map when given), rev + 1. Returns the new rev.
-pub fn save(c: &Connection, server: &str, zones: &str, arrivals: &str, map: Option<&str>) -> rusqlite::Result<i64> {
+/// Editor save: replaces zones/arrivals (and map / staging area when given), rev + 1. Returns the new rev.
+pub fn save(c: &Connection, server: &str, zones: &str, arrivals: &str, map: Option<&str>, staging: Option<&str>) -> rusqlite::Result<i64> {
     let cur = get(c, server)?;
     let rev = cur.as_ref().map(|l| l.rev).unwrap_or(0) + 1;
+    let staging = staging.map(|s| s.to_string()).or(cur.as_ref().map(|l| l.staging.clone())).unwrap_or_default();
     let map = map.map(|m| m.to_string()).or(cur.map(|l| l.map)).unwrap_or_default();
     c.execute(
-        "INSERT INTO layouts(server_id,zones,arrivals,map,rev,updated_at) VALUES(?1,?2,?3,?4,?5,CURRENT_TIMESTAMP)
+        "INSERT INTO layouts(server_id,zones,arrivals,map,rev,staging,updated_at) VALUES(?1,?2,?3,?4,?5,?6,CURRENT_TIMESTAMP)
          ON CONFLICT (server_id) DO UPDATE SET zones=excluded.zones, arrivals=excluded.arrivals, map=excluded.map,
-         rev=excluded.rev, updated_at=CURRENT_TIMESTAMP",
-        params![server, zones, arrivals, map, rev],
+         rev=excluded.rev, staging=excluded.staging, updated_at=CURRENT_TIMESTAMP",
+        params![server, zones, arrivals, map, rev, staging],
     )?;
     Ok(rev)
 }
@@ -62,7 +66,16 @@ pub fn to_json(l: &Layout) -> Value {
         "world": l.map, // not "map": a type name in Enforce Script
         "zones": serde_json::from_str::<Value>(&l.zones).unwrap_or(Value::Array(vec![])),
         "arrivals": serde_json::from_str::<Value>(&l.arrivals).unwrap_or(Value::Array(vec![])),
+        // where travelling groups wait out of sight on this server ([0, 0, 0] = none)
+        "staging": serde_json::from_str::<Value>(&l.staging).ok().filter(Value::is_array).unwrap_or(serde_json::json!([0.0, 0.0, 0.0])),
     })
+}
+
+/// The editor's staging area: [x, 0, z], or [0, 0, 0] for none.
+pub fn clean_staging(v: &Value) -> Value {
+    let x = v.get(0).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100000.0, 100000.0);
+    let z = v.get(2).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100000.0, 100000.0);
+    serde_json::json!([x, 0.0, z])
 }
 
 /// The editor sends whatever the browser made; keep only what the mod reads, in its own shape.
@@ -139,11 +152,24 @@ mod staging_tests {
         assert_eq!(v[0]["stagingSpacing"],25.0);
     }
     #[test]
+    fn server_staging_area_saves_keeps_and_clears() {
+        let c=Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE layouts(server_id TEXT PRIMARY KEY,zones TEXT,arrivals TEXT,map TEXT,rev INTEGER,updated_at TEXT,staging TEXT NOT NULL DEFAULT '');").unwrap();
+        save(&c,"s","[]","[]",None,None).unwrap();
+        assert_eq!(to_json(&get(&c,"s").unwrap().unwrap())["staging"],json!([0.0,0.0,0.0]));
+        let off_map=clean_staging(&json!([-250.5,99,16000])).to_string();
+        save(&c,"s","[]","[]",None,Some(&off_map)).unwrap();
+        save(&c,"s","[]","[]",None,None).unwrap(); // a save without it keeps it
+        assert_eq!(to_json(&get(&c,"s").unwrap().unwrap())["staging"],json!([-250.5,0.0,16000.0]));
+        save(&c,"s","[]","[]",None,Some(&clean_staging(&json!(null)).to_string())).unwrap();
+        assert_eq!(to_json(&get(&c,"s").unwrap().unwrap())["staging"],json!([0.0,0.0,0.0]));
+    }
+    #[test]
     fn staging_survives_layout_save_and_reload() {
         let c=Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE layouts(server_id TEXT PRIMARY KEY,zones TEXT,arrivals TEXT,map TEXT,rev INTEGER,updated_at TEXT);").unwrap();
+        c.execute_batch("CREATE TABLE layouts(server_id TEXT PRIMARY KEY,zones TEXT,arrivals TEXT,map TEXT,rev INTEGER,updated_at TEXT,staging TEXT NOT NULL DEFAULT '');").unwrap();
         let a=clean_arrivals(&json!([{"name":"dock","pos":[100,0,200],"stagingEnabled":true,"stagingPos":[1000,900,2000],"stagingYaw":450,"stagingBoatPos":[1200,0,2100],"stagingSpacing":30,"convoySpacing":25}]));
-        save(&c,"test","[]",&a.to_string(),None).unwrap();
+        save(&c,"test","[]",&a.to_string(),None,None).unwrap();
         let loaded=to_json(&get(&c,"test").unwrap().unwrap());
         assert_eq!(loaded["arrivals"][0]["stagingPos"],json!([1000.0,0.0,2000.0]));
         assert_eq!(loaded["arrivals"][0]["stagingYaw"],90.0);

@@ -113,5 +113,19 @@ himself in the seat of the vehicle he travels in, and with a party his crew / th
 
 ## Open
 
+Real two-server test (2026-10-31, TestServer Chernarus 2802 / TestServer2 Livonia 3002, 1 km timed trips):
+car, foot and boat trips all reached the main menu scene. To fix next:
+
+1. **A normal logout still shows the scene.** After walking Livonia -> Chernarus and arriving, logging out without
+   travelling showed the walking party again. The saved `menuscene.json` outlives the trip. Fix: clear it when the
+   client joins any server (MissionGameplay start) and when the countdown reaches "arrived"; only a fresh timed
+   departure writes it.
+2. **The camera trails the lead car.** With one car the camera sat behind where it was framed at the start. Likely
+   `DL_FollowCam`'s smoothing (`m_DL_Follow` moves `dt * 4` of the way per frame, so it lags ~speed/4 m). Fix: lead
+   the follow point by the car's velocity, or follow the path point at the lead's s instead of a smoothed position.
+3. **No walking scene on Livonia.** The menu world follows the last played map, and `DL_MenuSpots` only has a
+   Chernarus road route (and sea spot). Needs a Livonia road route (record one with the dev F8 recorder) and a
+   Livonia water spot; other maps should fall back to the standing party, not nothing.
+
 - The countdown line's font is small; the default TextWidget font doesn't grow with its box here.
 - The menu character carousel (statistics arrows) makes a new character at the old spot, not in the seat.

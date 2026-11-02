@@ -81,6 +81,15 @@ modded class DayZGame
 	protected int m_DL_SceneId;                                  // the menu scene being received in parts
 	protected ref array<string> m_DL_SceneParts = new array<string>;
 	protected int m_DL_SceneGot;
+#ifdef DL_DEV
+	// -dlFindTest: in the main menu, the three find demos one after another, then the game quits (unattended tests)
+	protected ref DL_FilmPlayer m_DL_FindTest;
+	protected int m_DL_FindTestN = -1;
+	protected float m_DL_FindTestT;
+	// -dlTrailTest: the interactive trail with made-up voters, two trips, then the game quits
+	protected ref DL_TrailTest m_DL_TrailTest;
+	protected int m_DL_TrailTestN = -1;
+#endif
 
 	bool DL_IsTransferLogin()
 	{
@@ -108,6 +117,9 @@ modded class DayZGame
 	override void OnUpdate(bool doSim, float timeslice)
 	{
 		super.OnUpdate(doSim, timeslice);
+#ifdef DL_DEV
+		DL_FindTest(timeslice);
+#endif
 		string prototype;
 		if (!IsDedicatedServer() && CommandlineGetParam("dlTransitionDemo", prototype))
 		{
@@ -117,6 +129,91 @@ modded class DayZGame
 			m_DL_TransitionKey = pressed;
 		}
 	}
+#ifdef DL_DEV
+	protected void DL_TrailTestTick(float dt)
+	{
+		m_DL_FindTestT += Math.Min(dt, 0.05);
+		if (m_DL_TrailTestN < 0)
+		{
+			if (m_DL_FindTestT < 20)
+				return;
+			m_DL_TrailTestN = 0;
+			m_DL_TrailTest = new DL_TrailTest();
+			m_DL_TrailTest.Start(0);
+			return;
+		}
+		if (!m_DL_TrailTest)
+			return;
+		if (!m_DL_TrailTest.Done())
+		{
+			m_DL_TrailTest.Update(Math.Min(dt, 0.05));
+			return;
+		}
+		m_DL_TrailTestN++;
+		if (m_DL_TrailTestN < 2)
+		{
+			m_DL_TrailTest = new DL_TrailTest();
+			m_DL_TrailTest.Start(m_DL_TrailTestN);
+			return;
+		}
+		m_DL_TrailTest = null;
+		DL_Log.Info("trail test: done, quitting");
+		RequestExit(0);
+	}
+
+	protected void DL_FindTest(float dt)
+	{
+		string arg;
+		// -dlTrailAuto: back in the main menu after the server (the trip went, or the test server shut down): quit
+		if (!IsDedicatedServer() && DL_TrailView.s_AutoInGame && CommandlineGetParam("dlTrailAuto", arg) && GetMissionState() == DayZGame.MISSION_STATE_MAINMENU)
+		{
+			m_DL_FindTestT += Math.Min(dt, 0.05);
+			if (m_DL_FindTestT > 12)
+			{
+				DL_TrailView.s_AutoInGame = false;
+				DL_Log.Info("trail auto: back in the main menu, quitting");
+				RequestExit(0);
+			}
+			return;
+		}
+		if (!IsDedicatedServer() && CommandlineGetParam("dlTrailTest", arg) && GetMissionState() == DayZGame.MISSION_STATE_MAINMENU)
+		{
+			DL_TrailTestTick(dt);
+			return;
+		}
+		if (IsDedicatedServer() || !CommandlineGetParam("dlFindTest", arg) || GetMissionState() != DayZGame.MISSION_STATE_MAINMENU)
+			return;
+		m_DL_FindTestT += Math.Min(dt, 0.05);
+		if (m_DL_FindTestN < 0)
+		{
+			if (m_DL_FindTestT < 20)
+				return;                      // the menu settles first
+			m_DL_FindTestN = 0;
+			m_DL_FindTest = new DL_FilmPlayer();
+			m_DL_FindTest.Play(DL_FilmPlayer.FindDemo(0));
+			DL_Log.Info("find test: film 0 started");
+			return;
+		}
+		if (!m_DL_FindTest)
+			return;
+		if (m_DL_FindTest.IsPlaying())
+		{
+			m_DL_FindTest.Update(Math.Min(dt, 0.05));
+			return;
+		}
+		m_DL_FindTestN++;
+		if (m_DL_FindTestN < 4)
+		{
+			m_DL_FindTest.Play(DL_FilmPlayer.FindDemo(m_DL_FindTestN));
+			DL_Log.Info("find test: film " + m_DL_FindTestN.ToString() + " started");
+			return;
+		}
+		m_DL_FindTest = null;
+		DL_Log.Info("find test: done, quitting");
+		RequestExit(0);
+	}
+#endif
+
 	protected string m_DL_NoticeCaption;
 	protected string m_DL_Notice;    // shown as a dialog in the main menu after a RPC_KICK
 

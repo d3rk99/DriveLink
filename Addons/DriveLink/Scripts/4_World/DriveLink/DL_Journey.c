@@ -59,6 +59,11 @@ class DL_Journey
 	static const float SWIM_SPEED_X = 0.5;    // at half the walking speed
 	int seconds;              // on the road (travel time on), else 0
 	ref DL_Film film = new DL_Film(); // the same road as scenes, for the arrival film
+	// the road only gives food / water once the party runs low: under this share of what it set out with (at least
+	// of a full stat bar each), so a well-stocked trip isn't stopped at every well
+	static const float FIND_BELOW = 0.3;
+	protected float m_FoodStart = -1;
+	protected float m_WaterStart = -1;
 
 	string Story()
 	{
@@ -416,8 +421,46 @@ class DL_Journey
 	// ---------------- what the road gives ----------------
 	static const string FOUND_FOOD = "BakedBeansCan,SpaghettiCan,SardinesCan,TacticalBaconCan,PeachesCan,Crackers,SaltySticks,Chips,Rice,Apple,Pear,Plum";
 
+	// food / water the living party has: bars, stomachs, what they carry, every trunk still with them (stat units)
+	protected void Supplies(out float food, out float water)
+	{
+		food = 0;
+		water = 0;
+		float fl;
+		float wl;
+		float cl;
+		foreach (DL_Traveller st : crew)
+		{
+			if (st.dead)
+				continue;
+			DL_TravelCost.Count(st.d, null, fl, wl, cl);
+			food += fl;
+			water += wl;
+		}
+		DL_PlayerData nobody = new DL_PlayerData();
+		nobody.energy = 0;
+		nobody.water = 0;
+		foreach (DL_CarData tr : Trunks(-1))
+		{
+			DL_TravelCost.Count(nobody, tr, fl, wl, cl);
+			food += fl;
+			water += wl;
+		}
+	}
+
 	protected void Finds(DL_TravelRules t, float f, float at)
 	{
+		float foodNow;
+		float waterNow;
+		Supplies(foodNow, waterNow);
+		if (m_FoodStart < 0)
+		{
+			m_FoodStart = foodNow;
+			m_WaterStart = waterNow;
+		}
+		int alive = Alive();
+		bool lowFood = foodNow < FIND_BELOW * Math.Max(m_FoodStart, alive * PlayerConstants.SL_ENERGY_MAX);
+		bool lowWater = waterNow < FIND_BELOW * Math.Max(m_WaterStart, alive * PlayerConstants.SL_WATER_MAX);
 		DL_Traveller finder = AnyAlive();
 		string name = "";
 		if (finder)
@@ -440,7 +483,7 @@ class DL_Journey
 			story.Insert(Cap(place) + " " + Math.Round(at).ToString() + " km in: " + what + " filled up.");
 			film.Add("find", at, name, "gas", -1, Driving());   // donor = how many cars are filled (film length)
 		}
-		if (Roll(t.findWaterPct * f))
+		if (lowWater && Roll(t.findWaterPct * f))
 		{
 			int bottles = FillBottles();
 			foreach (DL_Traveller wt : crew)
@@ -454,7 +497,7 @@ class DL_Journey
 			story.Insert(Cap(src) + " " + Math.Round(at).ToString() + " km in: everyone drank, " + bottles.ToString() + " bottle(s) filled.");
 			film.Add("find", at, name, "water");
 		}
-		if (Roll(t.findFoodPct * f))
+		if (lowFood && Roll(t.findFoodPct * f))
 		{
 			int n = FindFood();
 			if (n > 0)
@@ -723,7 +766,82 @@ class DL_Journey
 		}
 		DL_TravelCost.ChargeCar(v.car, v.live, cp, drvD);
 		if (weakened)
+		{
+			if (!EngineHolds(v, done, at))
+				return;
 			FlatTyre(t, g, v, at);
+		}
+	}
+
+	// the engine's health zone (fraction of its max), -1 = it has none
+	protected float EngineFrac(DL_JVehicle v, out DL_Zone_Health zone, out float mx)
+	{
+		zone = null;
+		mx = 0;
+		if (!v.live)
+			return -1;
+		mx = v.live.GetMaxHealth("Engine", "Health");
+		if (mx <= 0)
+			return -1;
+		foreach (DL_Zone_Health zh : v.car.zones)
+		{
+			if (!zh)
+				continue;
+			string zn = zh.zone;
+			zn.ToLower();
+			if (zn == "engine")
+			{
+				zone = zh;
+				return zh.health / mx;
+			}
+		}
+		return -1;
+	}
+
+	static const float ENGINE_GIVES_OUT = 0.1;   // worn down to this: it breaks down on the road
+	static const float ENGINE_PATCHED = 0.6;     // a blowtorch brings it back to this
+
+	// worn out on the road (Travel rules: wearEnginePct per 10 km): a blowtorch anyone carries (or a trunk) patches it
+	// up and they drive on; without one the vehicle stays. false = it was left behind.
+	protected bool EngineHolds(DL_JVehicle v, float done, float at)
+	{
+		DL_Zone_Health ez;
+		float emx;
+		float ef = EngineFrac(v, ez, emx);
+		if (ef < 0 || ef > ENGINE_GIVES_OUT)
+			return true;
+		DL_Traveller fixer = AnyIn(v.idx);
+		if (!fixer)
+			fixer = AnyAlive();
+		string fname = "";
+		if (fixer)
+			fname = fixer.name;
+		string where = Math.Round(at).ToString() + " km in";
+		if (HasItem("Blowtorch"))
+		{
+			ez.health = ENGINE_PATCHED * emx;
+			story.Insert(Cap(CarOf(v)) + "'s engine was giving out " + where + ": " + Who(fixer) + " patched it up with the blowtorch.");
+			film.Add("flat", done, fname, "engine", v.idx);
+			return true;
+		}
+		film.Add("flat", done, fname, "enginedead", v.idx);
+		Abandon(v, at, "The engine of " + CarOf(v) + " gave out " + where + " and nobody had a blowtorch: left it behind.");
+		return false;
+	}
+
+	// anyone living, or a trunk still with them, has an item of this type (not ruined)
+	protected bool HasItem(string type)
+	{
+		array<ref array<ref DL_ItemData>> all = AllItems();
+		foreach (array<ref DL_ItemData> list : all)
+		{
+			foreach (DL_ItemData it : list)
+			{
+				if (it && it.type == type && it.health != 0)
+					return true;
+			}
+		}
+		return false;
 	}
 
 	protected static string Cap(string s)
@@ -1120,6 +1238,132 @@ class DL_Journey
 	// ---------------- into the snapshots ----------------
 
 	// who carries each car, crew counts, seats and the convoy order now that the road has been played
+	// The interactive trail (DL_Trail) changed the party after the road was played: who died, who turned back, who
+	// was hurt or fed, what was used up or taken, which cars stay behind and who sits where now. The snapshots are
+	// set again from that (Finish). Turned back = out of the journey (he stays on this server).
+	void AfterTrail(DL_TrailState s, float km)
+	{
+		for (int i = crew.Count() - 1; i >= 0; i--)
+		{
+			DL_Traveller t = crew[i];
+			DL_TrailMember m = s.Member(t.sid);
+			if (!m)
+				continue;
+			if (m.gone)
+			{
+				crew.RemoveOrdered(i);
+				continue;
+			}
+			if (m.dead)
+				t.dead = true;
+			if (t.dead)
+				continue;
+			if (m.health < 100)
+			{
+				t.d.health = Math.Max(1, Math.Min(t.d.health, t.d.health - (100 - m.health)));
+				t.d.blood = Math.Max(2500, t.d.blood - (100 - m.health) * 15);
+			}
+			t.d.energy = Math.Max(0, t.d.energy + m.food);
+			t.d.water = Math.Max(0, t.d.water + m.water);
+			foreach (string u : m.used)
+				RemoveItem(t.d.items, u);
+			for (int l = 0; l < m.lost; l++)
+				LoseItem(t.d.items);
+			if (m.car != t.veh)
+			{
+				t.veh = m.car;
+				t.seat = -1;
+			}
+		}
+		foreach (DL_TrailCar c : s.cars)
+		{
+			DL_JVehicle v = Veh(c.idx);
+			if (!v)
+				continue;
+			if (c.lost)
+				v.lost = true;
+			if (v.car)
+			{
+				foreach (string cu : c.used)
+					RemoveItem(v.car.items, cu);
+				if (c.fuelLost > 0 && v.car.fluids.Count() > CarFluid.FUEL)
+					v.car.fluids[CarFluid.FUEL] = Math.Max(0, v.car.fluids[CarFluid.FUEL] - c.fuelLost);
+			}
+		}
+		// a seat for whoever was moved into a car (none free: he walks), nobody left in a car that stays behind
+		foreach (DL_Traveller st : crew)
+		{
+			if (st.dead || st.veh < 0)
+				continue;
+			DL_JVehicle sv = Veh(st.veh);
+			if (!sv || sv.lost)
+			{
+				st.veh = -1;
+				st.seat = -1;
+				continue;
+			}
+			if (st.seat < 0)
+			{
+				st.seat = FreeSeat(sv);
+				if (st.seat < 0)
+					st.veh = -1;
+			}
+		}
+		if (vehicles.Count() > 0)
+		{
+			carLost = true;
+			foreach (DL_JVehicle lv : vehicles)
+			{
+				if (!lv.lost)
+					carLost = false;
+			}
+		}
+		foreach (string line : s.story)
+			story.Insert(line);
+		Finish(km);
+	}
+
+	// an item and everything in it, off a snapshot's list (the first of that type)
+	static void RemoveItem(array<ref DL_ItemData> items, string type)
+	{
+		for (int i = 0; i < items.Count(); i++)
+		{
+			if (items[i].type == type)
+			{
+				RemoveTree(items, items[i].id);
+				return;
+			}
+		}
+	}
+
+	protected static void RemoveTree(array<ref DL_ItemData> items, int id)
+	{
+		for (int i = items.Count() - 1; i >= 0; i--)
+		{
+			if (items[i].parent == id && items[i].id != id)
+				RemoveTree(items, items[i].id);
+		}
+		for (int k = items.Count() - 1; k >= 0; k--)
+		{
+			if (items[k].id == id)
+				items.RemoveOrdered(k);
+		}
+	}
+
+	// a toll, a thief, the river: something carried in a bag or pocket (not worn), with what is in it
+	static void LoseItem(array<ref DL_ItemData> items)
+	{
+		array<int> loose = new array<int>;
+		foreach (DL_ItemData it : items)
+		{
+			if (it.slot == DL_Const.SLOT_CARGO && it.parent != 0)
+				loose.Insert(it.id);
+		}
+		if (loose.Count() == 0)
+			return;
+		RemoveTree(items, loose[Math.RandomInt(0, loose.Count())]);
+	}
+
 	protected void Finish(float km)
 	{
 		foreach (DL_JVehicle v : vehicles)

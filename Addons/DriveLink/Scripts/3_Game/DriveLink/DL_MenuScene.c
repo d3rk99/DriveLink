@@ -27,12 +27,16 @@ class DL_MenuMember
 class DL_MenuScene
 {
 	static const string FILE = "$profile:DriveLink/menuscene.json";
+	static bool s_Fresh;      // a scene came in during this game session (MissionGameplay: an older one is stale)
 	string target;            // where the trip goes
 	int seconds;              // on the road (from the server)
 	int until;                // client: DL_MenuScene.Now() when the trip is over
 	int you = -1;             // index of the receiving player in members
 	ref array<ref DL_MenuVehicle> vehicles = new array<ref DL_MenuVehicle>;
 	ref array<ref DL_MenuMember> members = new array<ref DL_MenuMember>;
+	// the interactive trail's summary ("You made it", delays, who was hurt, what was lost), under the banner
+	string title;
+	ref array<string> lines = new array<string>;
 
 	// seconds since 2000-01-01 UTC, from the PC's clock (enough to count a trip down across game restarts)
 	static int Now()
@@ -70,6 +74,7 @@ class DL_MenuScene
 
 	void Save()
 	{
+		s_Fresh = true;
 		MakeDirectory("$profile:DriveLink");
 		string err;
 		if (!JsonFileLoader<DL_MenuScene>.SaveFile(FILE, this, err))

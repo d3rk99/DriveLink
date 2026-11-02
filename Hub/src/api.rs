@@ -113,6 +113,7 @@ pub fn routes(h: Shared) -> Router {
         .route("/api/spots", post(spots))
         .route("/api/cars", post(cars))
         .route("/api/odds", post(odds))
+        .route("/api/precheck", post(precheck))
         .route("/health", get(health))
         .merge(crate::admin::routes(h.clone()))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY + 1))
@@ -436,8 +437,55 @@ async fn odds(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body: 
     };
     let travel = h.cfg().server(&sid).map(|s| s.travel.clone()).unwrap_or_default();
     let odds = crate::odds::survival(&travel, &trip);
-    crate::logf!("odds on {sid}: {} km by {}, {} people -> {odds:?} %", trip.km, if trip.kind.is_empty() { "foot" } else { &trip.kind }, trip.people.len());
-    reply(StatusCode::OK, json!({"ok": true, "odds": odds}))
+    let vehicle_odds = crate::odds::vehicle_odds(&travel, &trip);
+    crate::logf!("odds on {sid}: {} km by {}, {} people -> {odds:?} %, vehicles {vehicle_odds:?} %", trip.km, if trip.kind.is_empty() { "foot" } else { &trip.kind }, trip.people.len());
+    reply(StatusCode::OK, json!({"ok": true, "odds": odds, "vehicleOdds": vehicle_odds}))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrecheckReq {
+    #[serde(default)]
+    steam_ids: Vec<String>,
+    #[serde(default)]
+    to: String,
+}
+
+/// The interactive trail asks before the film plays whether /api/depart would take each of them (nothing is
+/// written): the target is a known other server and this server owns every one of them.
+async fn precheck(State(h): State<Shared>, ConnectInfo(a): Addr, Query(q): Q, body: Bytes) -> Response {
+    let from = match check(&h, "/api/precheck", &a, &q, &body) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let r: PrecheckReq = match parse("/api/precheck", &body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if h.cfg().server(&r.to).is_none() || r.to == from {
+        crate::logf!("precheck on {from}: target {:?} unknown or this server", r.to);
+        return reply(StatusCode::OK, json!({"ok": false, "error": format!("the hub has no other server '{}'", r.to), "refused": r.steam_ids}));
+    }
+    let db = h.db.lock().unwrap();
+    let mut refused: Vec<String> = Vec::new();
+    let mut why = String::new();
+    for sid in &r.steam_ids {
+        let owner: Option<Option<String>> = match db
+            .query_row("SELECT owner_server FROM characters WHERE steam_id=?1", params![sid], |row| row.get(0))
+            .optional()
+        {
+            Ok(o) => o,
+            Err(e) => return db_error(e),
+        };
+        if let Some(cur) = &owner {
+            if cur.as_deref() != Some(from.as_str()) {
+                why = format!("a character is owned by {}", cur.clone().unwrap_or_else(|| "nobody (in transit)".into()));
+                refused.push(sid.clone());
+            }
+        }
+    }
+    crate::logf!("precheck on {from} -> {}: {} people, {} refused", r.to, r.steam_ids.len(), refused.len());
+    reply(StatusCode::OK, json!({"ok": refused.is_empty(), "error": why, "refused": refused}))
 }
 
 #[derive(Deserialize)]

@@ -9,7 +9,7 @@ and can cost more than that.
 
 **Status: public test.** Back up your servers before trying it.
 
-Current source baseline: mod **0.5**, Hub **0.5.1**, Windows companion **0.4.8-rc3**. Both the game mod and
+Current source baseline: mod **0.5**, Hub **0.5.2**, Windows companion **0.4.8-rc3**. Both the game mod and
 Hub are maintained in this repository. Windows helper/agent/setup/updater source and build instructions are
 in [Companion](Companion/README.md); its release addon is [Addons/DriveLinkRestart](Addons/DriveLinkRestart).
 
@@ -82,13 +82,40 @@ An administrator can choose **Keep client** or **Restart** for an individual des
 are directional and bypass the automatic comparison; return to Automatic to remove one. Explicit legacy
 `routes.json` entries are a fallback for an older Hub, not the configuration method for an updated network.
 
-### Optional arrival staging
+### Staging area (Hub 0.5.2)
 
-In the Map editor, an arrival can have a separate staging position and direction for land vehicles and boats.
-Choose an empty area with suitable terrain or water and enough space for the convoy. The mod prepares the
-crew and vehicles there, then moves the ready arrival to its configured destination. Existing arrival points
-keep staging disabled unless the owner enables it. Staging needs a supporting DriveLink mod on the servers
-and clients; the Hub alone cannot change vehicle behavior.
+On the **Map** page each server has one **Staging area**: where travelling groups wait out of sight. Groups
+leaving wait there while their trip plays; arriving cars and bikes are put together there before they go to their
+arrival point (tick "Put arriving vehicles together at the staging area first" on that arrival point). Groups using
+it at the same time are set side by side.
+
+- Pick a spot players can't reach. **Off the edge of the map is fine**: the server stands people and vehicles on the
+  ground there (tested on Chernarus and Livonia).
+- It must be **dry land**. Off a coast the ground is the sea floor: a spot under water is refused (the server logs a
+  warning) and groups then wait where they stand, hidden and unhurt.
+- Boats arrive straight at their arrival point.
+- No staging area: groups wait where they stand. An older `trail.stagingPos` in config.json still works if the hub
+  has none.
+
+## Road events (interactive trail)
+
+With `trail.filmMode` `"interactive"` (the default) a trip plays on the server it leaves from before anyone moves:
+
+1. **Ready-up.** Everyone in the zone sees the same table: health, food, water, fuel, spares, and the hub's survival
+   odds. All ready before the clock runs out, or nobody goes; **Not ready** calls the trip off.
+2. **The film.** The road plays as a film with **event cards**: river crossing, roadblock, horde, fork, radiator,
+   deer, lake, stranger, wounded survivor, helicopter crash, mud, fever, night, blizzard, gas zone. The party votes;
+   what they carry (compass, rope, epoxy, rifle, matches, gas mask...) opens choices and changes the odds. Anyone
+   can turn back alone; the party can turn back together.
+3. **The result** goes onto the real characters before they leave: used items, wounds, lost cars, deaths, and the
+   trip's time on the hub.
+
+Players find a **DriveLink travel guide** in the pause menu (under Options) and on the ready-up table: how trips
+work and what to bring.
+
+Settings (config.json, section `trail`, written on first start): `filmMode` (`interactive` | `watch` | `off`),
+`readySeconds`, `voteSeconds`, `maxChoices`, `instantRiskPerHour`. Cards: `<profiles>\DriveLink\cards.json`
+(written on first use; `"off": true` turns one off).
 
 ## Settings
 
@@ -175,4 +202,5 @@ to this Hub but do not consume its automatic helper policy.
 - DriveLink by Derk.
 - Road film art in part from **MiniDayZ, (c) Bohemia Interactive, used with permission**; the rest of the film's
   art (roads, props, sky, the M1025, bikes, boats, the gas station lot) is DriveLink's own.
+- The travel guide's item pictures are the DayZ Wiki's item images (dayz.fandom.com).
 - DayZ (c) Bohemia Interactive.

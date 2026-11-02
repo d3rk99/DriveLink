@@ -26,6 +26,7 @@ class DL_FilmEvent
 	string detail;
 	int car = -1;
 	int donor = -1;
+	int times = 1;                                // find: how many of them this one scene stands for (Condense)
 }
 
 class DL_Film
@@ -73,6 +74,12 @@ class DL_Film
 			return 8;
 		if (e.kind == "move")
 			return 4;
+		if (e.kind == "note")
+			return 5;                                 // the trail: a choice's outcome, read while they roll on
+		if (e.kind == "act")
+			return 9;                                 // the trail: the outcome played out (DL_FilmPlayer.SceneAct)
+		if (e.kind == "card")
+			return 0;                                 // the trail: stands while the party votes
 		if (e.kind == "find" && e.detail == "gas")
 		{
 			// it comes up the road, a can from the pumps into every car (donor = how many cars), back in
@@ -80,18 +87,104 @@ class DL_Film
 			return 13 + 3.5 * (fillN - 1);
 		}
 		if (e.kind == "find" && e.detail == "water")
-			return 9;                             // the pump comes up the road, they stop beside it
+			return 15;                             // the pump comes up the road, they stop, one walks over and back
 		if (e.kind == "find")
-			return 5;
+			return 14;                            // food: the same, to a wreck, crate, bush or tree
 		return 3;                                 // ration, died
 	}
 
 	float Duration()
 	{
+		return Math.Min(Length(), MAX_SECONDS);
+	}
+
+	// every scene played in full, seconds
+	float Length()
+	{
 		float d = 2 + END_SECONDS;                // fade in + the crew walking off at the end
 		foreach (DL_FilmEvent e : events)
 			d += SceneSeconds(e);
-		return Math.Min(d, MAX_SECONDS);
+		return d;
+	}
+
+	// A long road finds the same things over and over. Between two events that matter (a flat, fuel, an attack, a
+	// death, someone changing car, rationing) the finds of each kind become one scene that stands for all of them
+	// (times). Still longer than MAX_SECONDS: the finds that stand for the fewest go, later ones first, but one of
+	// each kind (gas, water, food) stays with the count of all of them; the events that matter always stay. The km of the road stay the same (the legs around a removed find join up).
+	void Condense(float maxSeconds = MAX_SECONDS)
+	{
+		array<ref DL_FilmEvent> kept = new array<ref DL_FilmEvent>;
+		map<string, ref DL_FilmEvent> stretch = new map<string, ref DL_FilmEvent>;  // this stretch's find of each kind
+		foreach (DL_FilmEvent e : events)
+		{
+			if (e.kind == "find")
+			{
+				DL_FilmEvent had;
+				if (stretch.Find(e.detail, had))
+				{
+					had.times = had.times + e.times;
+					had.donor = Math.Max(had.donor, e.donor);   // gas: the most cars filled at one
+					continue;
+				}
+				stretch.Set(e.detail, e);
+			}
+			else if (!IsLeg(e))
+				stretch.Clear();
+			Keep(kept, e);
+		}
+		while (true)
+		{
+			float len = 2 + END_SECONDS;
+			map<string, int> kinds = new map<string, int>;   // finds left of each kind: the last one of a kind stays
+			foreach (DL_FilmEvent c : kept)
+			{
+				if (c.kind == "find")
+					kinds.Set(c.detail, kinds.Get(c.detail) + 1);
+			}
+			int drop = -1;
+			for (int i = 0; i < kept.Count(); i++)
+			{
+				len += SceneSeconds(kept[i]);
+				if (kept[i].kind == "find" && kinds.Get(kept[i].detail) > 1 && (drop < 0 || kept[i].times <= kept[drop].times))
+					drop = i;
+			}
+			if (len <= maxSeconds || drop < 0)
+				break;
+			DL_FilmEvent gone = kept[drop];
+			kept.RemoveOrdered(drop);
+			DL_FilmEvent heir;                            // the biggest one left of its kind counts it in
+			foreach (DL_FilmEvent h : kept)
+			{
+				if (h.kind == "find" && h.detail == gone.detail && (!heir || h.times > heir.times))
+					heir = h;
+			}
+			if (heir)
+			{
+				heir.times = heir.times + gone.times;
+				heir.donor = Math.Max(heir.donor, gone.donor);
+			}
+			array<ref DL_FilmEvent> joined = new array<ref DL_FilmEvent>;
+			foreach (DL_FilmEvent k : kept)
+				Keep(joined, k);
+			kept = joined;
+		}
+		events = kept;
+	}
+
+	protected static bool IsLeg(DL_FilmEvent e)
+	{
+		return e.kind == "drive" || e.kind == "walk" || e.kind == "swim";
+	}
+
+	// appended, a leg joining the one before it when they are the same kind (as Add does)
+	protected static void Keep(array<ref DL_FilmEvent> list, DL_FilmEvent e)
+	{
+		if (IsLeg(e) && list.Count() > 0 && list[list.Count() - 1].kind == e.kind)
+		{
+			list[list.Count() - 1].km = list[list.Count() - 1].km + e.km;
+			return;
+		}
+		list.Insert(e);
 	}
 
 	static string BiomeOfWorld(string world)

@@ -1,0 +1,12 @@
+PanelWidgetClass DL_TrailPanel {
+ ignorepointer 1
+ color 0 0 0 0.55
+ position 0 0
+ size 100 100
+ hexactpos 1
+ vexactpos 1
+ hexactsize 1
+ vexactsize 1
+ priority 900
+ style rover_sim_colorable
+}

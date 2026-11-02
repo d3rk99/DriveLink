@@ -39,6 +39,7 @@ class DL_Layout
 	ref DL_TravelRules travel; // this server's travel rules (hub Servers page)
 	ref array<ref DL_Zone> zones;
 	ref array<ref DL_ArrivalPoint> arrivals;
+	vector staging;           // the staging area (hub Map page), 0 0 0 = none; an older hub sends none
 }
 
 class DL_HelloResp
@@ -128,12 +129,42 @@ class DL_OddsReq
 	float needFuel;
 	bool needSpare;           // the trip needs a spare wheel or a tyre repair kit (refuse mode rule)
 	bool spareOk;             // ... and they have one, or need none
+	ref array<ref DL_OddsVehicle> vehicles = new array<ref DL_OddsVehicle>; // each vehicle of the party
+}
+
+// one vehicle of the party, for its chance to make it all the way (Hub/src/odds.rs vehicle_odds)
+class DL_OddsVehicle
+{
+	string name;
+	float fuel;               // litres: its tank + its share of the canisters
+	float needFuel;
+	bool spareOk;
+	float engine = -1;        // engine health 0..1, -1 = unknown
+	bool torch;               // the party carries a blowtorch (a worn-out engine is patched up on the road)
+	int odds = -1;            // filled from the hub's answer
+}
+
+// the interactive trail, before the film: would /api/depart take all of them? (an older hub has no /api/precheck)
+class DL_PrecheckReq
+{
+	string serverId;
+	string key;
+	string to;
+	ref array<string> steamIds = new array<string>;
+}
+
+class DL_PrecheckResp
+{
+	bool ok;
+	string error;
+	ref array<string> refused;
 }
 
 class DL_OddsResp
 {
 	bool ok;
 	ref array<int> odds;
+	ref array<int> vehicleOdds;
 }
 
 class DL_ShortInfo
@@ -148,6 +179,7 @@ class DL_ShortInfo
 	bool spareOk;
 	int you = -1;             // index of the receiving player in people
 	bool canGo;               // he leads the trip and the server allows travelling anyway
+	ref array<ref DL_OddsVehicle> vehicles; // each vehicle and its chance to make it
 	string leader;            // who decides (the driver / the walker)
 	string tail;              // a last line (e.g. "The others went on.")
 }

@@ -265,8 +265,131 @@ class DL_TravelCost
 				q.needSpare = true;
 				q.spareOk = HasSpareOrKit(car, cd, snaps);
 			}
+			DL_OddsVehicle ov = new DL_OddsVehicle();
+			ov.name = DL_Journey.CarName(cd);
+			ov.fuel = q.fuel;
+			ov.needFuel = q.needFuel;
+			ov.spareOk = HasSpareOrKit(car, cd, snaps);
+			ov.engine = EngineFrac(car, cd);
+			ov.torch = Carries(snaps, cd, "Blowtorch");
+			q.vehicles.Insert(ov);
 		}
 		return q;
+	}
+
+	// engine health 0..1 off the car's snapshot, -1 = it has none
+	static float EngineFrac(Transport car, DL_CarData cd)
+	{
+		if (!car || !cd)
+			return -1;
+		float mx = car.GetMaxHealth("Engine", "Health");
+		if (mx <= 0)
+			return -1;
+		foreach (DL_Zone_Health zh : cd.zones)
+		{
+			if (!zh)
+				continue;
+			string zn = zh.zone;
+			zn.ToLower();
+			if (zn == "engine")
+				return Math.Clamp(zh.health / mx, 0, 1);
+		}
+		return -1;
+	}
+
+	// someone (or the trunk) has an item of this type, not ruined
+	static bool Carries(array<ref DL_PlayerData> snaps, DL_CarData cd, string type)
+	{
+		foreach (DL_PlayerData d : snaps)
+		{
+			foreach (DL_ItemData it : d.items)
+			{
+				if (it && it.type == type && it.health != 0)
+					return true;
+			}
+		}
+		if (cd)
+		{
+			foreach (DL_ItemData ct : cd.items)
+			{
+				if (ct && ct.type == type && ct.health != 0)
+					return true;
+			}
+		}
+		return false;
+	}
+
+	// A group or convoy pays as one: everyone's food, water and the vehicles' fuel (tanks + every canister) against
+	// what all of them need, with everyone's gear and every trunk (the road shares them out: DL_Journey). One
+	// request with every person and every vehicle (for the dialog and the hub's odds).
+	static DL_OddsReq PartySupplies(array<ref DL_PartyUnit> units, array<ref DL_TravelPrice> prices, DL_Snapshot snap, DL_CarSnapshot carSnap)
+	{
+		DL_OddsReq all = new DL_OddsReq();
+		all.spareOk = true;
+		for (int u = 0; u < units.Count(); u++)
+		{
+			DL_PartyUnit pu = units[u];
+			DL_TravelPrice pp = prices[u];
+			if (!pp)
+				continue;
+			DL_OddsReq one = Supplies(pp, pu.crew, pu.car, snap, carSnap);
+			all.km = one.km;
+			foreach (DL_OddsPerson op : one.people)
+				all.people.Insert(op);
+			all.fuel += one.fuel;
+			all.needFuel += one.needFuel;
+			if (one.needSpare)
+				all.needSpare = true;
+			if (!one.spareOk)
+				all.spareOk = false;
+			foreach (DL_OddsVehicle ov : one.vehicles)
+				all.vehicles.Insert(ov);
+		}
+		// fuel is shared in a convoy (ShareFuel): each vehicle counts on its part of the whole
+		if (all.needFuel > 0)
+		{
+			foreach (DL_OddsVehicle sv : all.vehicles)
+				sv.fuel = Math.Floor(all.fuel * sv.needFuel / all.needFuel);
+		}
+		return all;
+	}
+
+	// "" = the party as a whole has enough; else what is missing (totals)
+	static string PartyShortfall(DL_OddsReq all)
+	{
+		float food = 0;
+		float needFood = 0;
+		float water = 0;
+		float needWater = 0;
+		foreach (DL_OddsPerson op : all.people)
+		{
+			food += op.food;
+			needFood += op.needFood;
+			water += op.water;
+			needWater += op.needWater;
+		}
+		string m = "";
+		if (food < needFood)
+			m += "food " + Kcal(food) + " of " + Kcal(needFood);
+		if (water < needWater)
+		{
+			if (m != "")
+				m += ", ";
+			m += "water " + Ml(water) + " of " + Ml(needWater);
+		}
+		if (all.fuel < all.needFuel)
+		{
+			if (m != "")
+				m += ", ";
+			m += "fuel " + Math.Floor(all.fuel).ToString() + " L of " + Math.Ceil(all.needFuel).ToString() + " L";
+		}
+		if (all.needSpare && !all.spareOk)
+		{
+			if (m != "")
+				m += ", ";
+			m += "a spare wheel or tyre repair kit for every vehicle";
+		}
+		return m;
 	}
 
 	// ---------------- spare wheel / tyre repair kit ----------------

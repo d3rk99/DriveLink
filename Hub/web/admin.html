@@ -76,7 +76,7 @@
 <div id="app">
   <div id="side">
     <h1>Map</h1>
-    <div class="sub">Leaving zones and arrival points. Changes are saved at once and reach the DayZ server within ~30 s. Heights come from the terrain.</div>
+    <div class="sub">Leaving zones, arrival points and the staging area. Changes are saved at once and reach the DayZ server within ~30 s. Heights come from the terrain.</div>
     <div class="tabs" id="tabs"></div>
     <div class="box" id="mapbox"></div>
     <div class="tools">
@@ -86,6 +86,7 @@
     </div>
     <div class="hint" id="toolHint">Pick a tool, or click a zone / point on the map to edit it.</div>
     <div class="box" id="edit" style="display:none"></div>
+    <div class="box"><h2>Staging area</h2><div id="slist"></div></div>
     <div class="box"><h2>Leaving zones</h2><div id="zlist"></div></div>
     <div class="box"><h2>Arrival points</h2><div id="alist"></div></div>
     <div class="box"><h2>Travelled cars</h2>
@@ -352,6 +353,7 @@ function drawLayout() {
     }
   });
   L1.arrivals.forEach((a, i) => { drawCarSpots(a); drawBoatSpot(a); drawAirSpot(a); });
+  drawStagingArea();
   L1.arrivals.forEach((a, i) => {
     const on = sel && sel.kind === "arr" && sel.i === i;
     const ll = [a.pos[2], a.pos[0]];
@@ -415,15 +417,10 @@ function drawBoatSpot(a) {
 }
 
 function drawStaging(a) {
-  if (!a.stagingEnabled) return;
-  for (const [point, yaw, label] of [[a.stagingPos, a.stagingYaw || 0, "vehicle assembly"], [a.stagingBoatPos, a.stagingBoatYaw || 0, "boat assembly"]]) {
-    if (!point || (!point[0] && !point[2])) continue;
-    L.marker([point[2], point[0]], { icon: arrowIcon(yaw, "#cc91ff") }).addTo(layer)
-      .bindTooltip(`${esc(a.name)}: ${label}`, { permanent: true, direction: "right", className: "lbl" });
-    L.polyline([[point[2], point[0]], [a.pos[2], a.pos[0]]], { color: "#cc91ff", weight: 1, dashArray: "6 6", interactive: false }).addTo(layer);
-    const angle = yaw * Math.PI / 180, spacing = a.stagingSpacing || 25;
-    for (let k = 0; k < 4; k++) L.circle([point[2] - Math.cos(angle) * spacing * k, point[0] - Math.sin(angle) * spacing * k], { radius: 5, color: "#cc91ff", weight: 1, fillOpacity: .1, interactive: false }).addTo(layer);
-  }
+  // an arrival that puts its vehicles together at the staging area first: a dashed line from there to here
+  const area = stagingOf(srv());
+  if (!a.stagingEnabled || !area) return;
+  L.polyline([[area[2], area[0]], [a.pos[2], a.pos[0]]], { color: "#cc91ff", weight: 1, dashArray: "6 6", interactive: false }).addTo(layer);
 }
 
 // where a plane arriving here comes in (only drawn when pinned): a plane shape along its heading, its height
@@ -439,6 +436,23 @@ function drawAirSpot(a) {
   L.polyline([[a.pos[2], a.pos[0]], [ap[2], ap[0]]], { color: "#6fb7ff", weight: 1, dashArray: "2 4", interactive: false }).addTo(layer);
 }
 
+// the staging area: one spot per server, [x, 0, z] ([0, 0, 0] = none)
+const stagingOf = s => (s.layout.staging && (s.layout.staging[0] || s.layout.staging[2])) ? s.layout.staging : null;
+function mapSize(s) { const m = S.maps[s.map] || {}; return (m.meta && m.meta.size) || SIZES[s.map] || 15360; }
+function offMap(s, p) { const n = mapSize(s); return p[0] < 0 || p[2] < 0 || p[0] > n || p[2] > n; }
+const STAGING_HINT = `Where travelling groups wait out of sight on this server: groups leaving while their trip plays, and arriving vehicles while they are put together before they go to their arrival point. Pick a spot players can't reach. <b>Off the edge of the map is fine and safe</b>: the server stands people and vehicles on the ground there. It must be <b>dry land</b>, not sea: off a coast the ground is the sea floor, and nobody is moved to a spot under water. Groups that use it at the same time are set side by side, apart from each other.`;
+function drawStagingArea() {
+  const s = srv(), p = stagingOf(s);
+  if (!p) return;
+  const on = sel && sel.kind === "stage";
+  const icon = L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11], html: `<div style="width:16px;height:16px;margin:3px;background:#cc91ff;border:2px solid #000;transform:rotate(45deg)"></div>` });
+  const m = L.marker([p[2], p[0]], { icon, draggable: on, zIndexOffset: 600 }).addTo(layer);
+  m.bindTooltip(`Staging area${offMap(s, p) ? " (off the map)" : ""}`, { permanent: true, direction: "right", offset: [12, 0], className: "lbl" });
+  L.circle([p[2], p[0]], { radius: 150, color: "#cc91ff", weight: 1, dashArray: "6 6", fillOpacity: .06, interactive: false }).addTo(layer);
+  m.on("click", ev => { if (tool) return; L.DomEvent.stop(ev); sel = { kind: "stage" }; drawLayout(); renderLists(); renderEdit(); });
+  m.on("dragend", e => { const q = e.target.getLatLng(); s.layout.staging = [Math.round(q.lng), 0, Math.round(q.lat)]; save(); renderEdit(); drawLayout(); renderLists(); });
+}
+
 function renderLists() {
   const L1 = L_of(srv());
   $("zlist").innerHTML = L1.zones.map((z, i) => `<div class="item ${sel && sel.kind === "zone" && sel.i === i ? "sel" : ""}" data-k="zone" data-i="${i}"><span><span class="dot" style="background:var(--zone)"></span>${esc(z.name)}</span><span class="hint">${z.air ? "✈ " : ""}${z.shape === "rect" ? `${Math.round(z.width || 0)} x ${Math.round(z.depth || 0)} m` : `r ${Math.round(z.radius)} m`} → ${esc(z.to)}${z.distanceKm ? `, ${Math.round(z.distanceKm)} km` : ""}</span></div>`).join("") || `<div class="hint">none yet</div>`;
@@ -451,6 +465,13 @@ function renderLists() {
     map.setView([p[2], p[0]], Math.max(map.getZoom(), -1));
     drawLayout(); renderLists(); renderEdit();
   });
+  const st = stagingOf(srv());
+  $("slist").innerHTML = `<div class="item ${sel && sel.kind === "stage" ? "sel" : ""}" id="stageItem"><span><span class="dot" style="background:#cc91ff"></span>${st ? `x ${Math.round(st[0])} · z ${Math.round(st[2])}` : "Not set"}</span><span class="hint">${st ? (offMap(srv(), st) ? "off the map" : "on the map") : "click to set"}</span></div>`;
+  $("stageItem").onclick = () => {
+    sel = { kind: "stage" };
+    if (st) map.setView([st[2], st[0]], Math.max(map.getZoom(), -2));
+    drawLayout(); renderLists(); renderEdit();
+  };
 }
 
 function renderEdit() {
@@ -458,6 +479,21 @@ function renderEdit() {
   if (!sel) { box.style.display = "none"; return; }
   const L1 = L_of(srv());
   box.style.display = "";
+  if (sel.kind === "stage") {
+    const s = srv(), p = stagingOf(s) || [0, 0, 0];
+    box.innerHTML = `<h2>Staging area</h2>
+      <div class="hint">${STAGING_HINT}</div>
+      <div class="row"><div><label>x</label><input id="gX" type="number" value="${Math.round(p[0])}"></div><div><label>z</label><input id="gZ" type="number" value="${Math.round(p[2])}"></div></div>
+      <div class="hint">The map is ${mapSize(s)} m across (x and z from 0 to ${mapSize(s)}). Below 0 or above that is off the map.${stagingOf(s) && offMap(s, p) ? " This spot is off the map." : ""}</div>
+      <button id="gPick">Pick on the map</button> ${stagingOf(s) ? `<button id="gClear" class="danger">Remove</button>` : ""}
+      <div class="hint" style="margin-top:8px">With no staging area, groups wait where they stand (hidden and unhurt) and arriving vehicles are put together at their arrival point.</div>`;
+    const setG = (x, z) => { s.layout.staging = [x, 0, z]; changed(true); renderEdit(); };
+    $("gX").onchange = () => setG(+$("gX").value || 0, +$("gZ").value || 0);
+    $("gZ").onchange = () => setG(+$("gX").value || 0, +$("gZ").value || 0);
+    $("gPick").onclick = () => { setStatus("Click the staging area: dry land players can't reach (off the map edge is fine)"); map.dragging.enable(); map.once("click", ev => { setG(Math.round(ev.latlng.lng), Math.round(ev.latlng.lat)); setStatus(""); }); };
+    if ($("gClear")) $("gClear").onclick = () => setG(0, 0);
+    return;
+  }
   if (sel.kind === "zone") {
     const z = L1.zones[sel.i];
     if (!z) { sel = null; return renderEdit(); }
@@ -521,24 +557,13 @@ function renderEdit() {
       $("pPick").onclick = () => { setStatus("Click where the plane should come in"); map.once("click", ev => { setAir(Math.round(ev.latlng.lng), Math.round(ev.latlng.lat)); setStatus(""); }); };
       if ($("pClear")) $("pClear").onclick = () => setAir(0, 0);
     }
-    const stage = a.stagingPos || [0, 0, 0], stageBoat = a.stagingBoatPos || [0, 0, 0];
+    const area = stagingOf(srv());
     box.insertAdjacentHTML("beforeend", `<h2 style="margin-top:12px">Arrival staging</h2>
-      <label><input id="sEnabled" type="checkbox" ${a.stagingEnabled ? "checked" : ""}> Assemble vehicles away from the final arrival</label>
-      <div class="hint">Requires the updated Hub and DriveLink mod. Choose quiet, flat ground at least 100 m from the destination for cars/bikes. Boats can use a separate water staging point with dry land nearby. A vehicle kind without its own staging point uses the direct arrival. This is a real area of the map, not a private instance. Keep it clear of players and objects. Aircraft continue to use their in-flight arrival.</div>
-      <div class="row"><div><label>Ground staging x</label><input id="sX" type="number" value="${stage[0]}"></div><div><label>z</label><input id="sZ" type="number" value="${stage[2]}"></div><div><label>Facing</label><input id="sYaw" type="number" value="${Math.round(a.stagingYaw || 0)}"></div></div>
-      <button id="sPick">Pick ground staging on map</button>
-      <div class="row"><div><label>Boat staging x</label><input id="sbX" type="number" value="${stageBoat[0]}"></div><div><label>z</label><input id="sbZ" type="number" value="${stageBoat[2]}"></div><div><label>Facing</label><input id="sbYaw" type="number" value="${Math.round(a.stagingBoatYaw || 0)}"></div></div>
-      <button id="sbPick">Pick boat staging on water</button>
-      <div class="row"><div><label>Assembly spacing (15–100 m)</label><input id="sSpacing" type="number" min="15" max="100" value="${a.stagingSpacing || 25}"></div><div><label>Final convoy spacing (12–100 m)</label><input id="cSpacing" type="number" min="12" max="100" value="${a.convoySpacing || 20}"></div></div>
-      <div class="hint">People and vehicles remain visible during assembly. Once the crew and convoy are ready and the story completes, the server checks the final spots, moves everyone and briefly holds the vehicles before releasing control. Blocked arrivals remain held rather than spawning into an obstruction.</div>`);
+      <label><input id="sEnabled" type="checkbox" ${a.stagingEnabled ? "checked" : ""}> Put arriving vehicles together at the staging area first</label>
+      <div class="hint">${area ? `Cars and bikes arriving here are built and their crew seated at this server's <a href="#" id="sGo">staging area</a> (x ${Math.round(area[0])}, z ${Math.round(area[2])}), then moved here together.` : `<span class="badtxt">This server has no staging area yet:</span> set one in the Staging area box above. Until then vehicles arrive straight here.`} Boats arrive straight here.</div>
+      <div class="row"><div><label>Assembly spacing (15–100 m)</label><input id="sSpacing" type="number" min="15" max="100" value="${a.stagingSpacing || 25}"></div><div><label>Final convoy spacing (12–100 m)</label><input id="cSpacing" type="number" min="12" max="100" value="${a.convoySpacing || 20}"></div></div>`);
     $("sEnabled").onchange = e => { a.stagingEnabled = e.target.checked; changed(true); };
-    const setStage = (boat, x, z) => { a[boat ? "stagingBoatPos" : "stagingPos"] = [x, 0, z]; changed(true); renderEdit(); };
-    for (const [prefix, boat] of [["s", false], ["sb", true]]) {
-      $(prefix + "X").onchange = () => setStage(boat, +$(prefix + "X").value || 0, +$(prefix + "Z").value || 0);
-      $(prefix + "Z").onchange = () => setStage(boat, +$(prefix + "X").value || 0, +$(prefix + "Z").value || 0);
-      $(prefix + "Yaw").onchange = e => { a[boat ? "stagingBoatYaw" : "stagingYaw"] = ((+e.target.value % 360) + 360) % 360; changed(true); };
-      $(prefix + "Pick").onclick = () => { setStatus(boat ? "Click a quiet water staging point" : "Click a quiet, flat ground staging point"); map.once("click", ev => { setStage(boat, Math.round(ev.latlng.lng), Math.round(ev.latlng.lat)); setStatus(""); }); };
-    }
+    if ($("sGo")) $("sGo").onclick = ev => { ev.preventDefault(); sel = { kind: "stage" }; map.setView([area[2], area[0]], Math.max(map.getZoom(), -2)); drawLayout(); renderLists(); renderEdit(); };
     $("sSpacing").onchange = e => { a.stagingSpacing = Math.max(15, Math.min(100, +e.target.value || 25)); changed(true); };
     $("cSpacing").onchange = e => { a.convoySpacing = Math.max(12, Math.min(100, +e.target.value || 20)); changed(true); };
     const setBoat = (x, z) => { a.boatPos = [x, 0, z]; changed(true); renderEdit(); };
@@ -584,7 +609,7 @@ function save() {
     }
     try {
       for (const t of list) {
-        const r = await fetch(`/admin/api/layout/${encodeURIComponent(t.id)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map: t.map, zones: t.layout.zones, arrivals: t.layout.arrivals }) });
+        const r = await fetch(`/admin/api/layout/${encodeURIComponent(t.id)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map: t.map, zones: t.layout.zones, arrivals: t.layout.arrivals, staging: t.layout.staging || [0, 0, 0] }) });
         if (!r.ok) throw new Error(await r.text());
         t.layout.rev = (await r.json()).rev;
       }

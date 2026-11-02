@@ -11,6 +11,7 @@ import anim_humvee # Tools/anim_humvee.py: the M1025 (Offroad_02)
 import anim_sky      # Tools/anim_sky.py: plane trips - the ground far below, the sea, clouds, a stand-in plane
 import anim_station  # Tools/anim_station.py: the gas station lot + canopy roof (MiniDayZ buildings)
 import anim_bikes  # Tools/anim_bikes.py: the dirt bike (Motorbike_02), the moped (Motorbike_01), the boat wake
+import anim_trail  # Tools/anim_trail.py: the trail cards' things (deer, barrier, campfire, steam, the river)
 from PIL import Image, ImageDraw
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -579,6 +580,9 @@ def main():
     pngs = []
     own = [('ground_%s_ca' % b, (lambda b=b: ground_tile(b))) for b in BIOMES] + [('props_ca', props_atlas), ('ground_water_ca', water_tile)]
     own += [('sky_%s_ca' % b, (lambda b=b: anim_sky.ground(b))) for b in BIOMES] + [('sky_sea_ca', anim_sky.sea), ('clouds_ca', anim_sky.clouds)]
+    own += [('trail_ca', anim_trail.atlas), ('river_ca', anim_trail.river), ('trail2_ca', anim_trail.atlas2),
+            ('crossroad_ca', anim_trail.crossroad), ('lake_ca', anim_trail.lake), ('snow_ca', anim_trail.snow),
+            ('heli_ca', anim_trail.heli_wreck), ('deer_ca', anim_trail.deer_sheet)]
     for name, fn in own:
         p = os.path.join(OWN_SRC, name + '.png')
         fn().save(p)

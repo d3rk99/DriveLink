@@ -99,6 +99,10 @@ modded class CarScript
 		SetBrake(m_DL_MenuBrake);
 		SetHandbrake(0);
 		SetBrakesActivateWithoutDriver(false);
+		// an automatic (the Humvee): its selector is P R N D, not gears; it drives in D and changes gear itself.
+		// Moved up a notch at a time like the player's shift key (a manual's "first gear" left it in N or R).
+		if (GearboxGetType() == CarGearboxType.AUTOMATIC && GearboxGetMode() != CarAutomaticGearboxMode.D)
+			ShiftUp();
 	}
 }
 
@@ -311,6 +315,8 @@ class DL_V
 			m.SetBrake(0);
 		}
 		EngineStart(t);
-		ShiftTo(t, NeutralGear(t) + 1);
+		if (Manual(t) || !c)
+			ShiftTo(t, NeutralGear(t) + 1);
+		// an automatic car: into D from OnInput (CarScript, above)
 	}
 }

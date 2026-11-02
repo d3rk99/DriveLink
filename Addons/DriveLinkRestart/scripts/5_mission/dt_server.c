@@ -83,7 +83,7 @@ modded class MissionServer
     }
     void DT_ApproveCrew(PlayerBase leader,string target,bool restart)
     {
-        DT_ApprovedPolicy approval=new DT_ApprovedPolicy();approval.target=target;approval.restart=restart;approval.expires=m_DT_Time+300;
+        DT_ApprovedPolicy approval=new DT_ApprovedPolicy();approval.target=target;approval.restart=restart;approval.expires=m_DT_Time+900;
         array<PlayerBase> members=DL_CrewOf(leader);
         foreach(PlayerBase member:members)if(member&&member.GetIdentity())m_DT_Approved.Set(member.GetIdentity().GetPlainId(),approval);
     }
@@ -233,6 +233,26 @@ modded class MissionServer
         }
         else foreach(string waiting:party.leaders)m_DL_MustLeaveZone.Set(waiting,true);
     }
+    // the interactive trail: the same hold as a departure, before the film starts (the approval outlasts the film)
+    override protected void DL_TrailGo(DL_Party party)
+    {
+        if(!party)return;
+        party.trail=true;
+        if(m_DT_Cancelled.Contains(party))return;
+        bool ready=true;
+        foreach(string sid:party.leaders)if(!DT_Ensure(DL_FindPlayer(sid),party.zone,party))ready=false;
+        if(!ready){foreach(string waiting:party.leaders)m_DL_MustLeaveZone.Set(waiting,true);return;}
+        foreach(string leader:party.leaders)
+        {
+            m_DT_Pending.Remove(leader);
+            array<PlayerBase> crew=DL_CrewOf(DL_FindPlayer(leader));
+            foreach(PlayerBase member:crew)if(member&&member.GetIdentity())
+            {
+                string memberSid=member.GetIdentity().GetPlainId();DT_RestoreSetup(memberSid);m_DL_MustLeaveZone.Remove(memberSid);
+            }
+        }
+        Print("[DT] PARTY_READY; the trail starts");super.DL_TrailGo(party);
+    }
     override protected void DL_Depart(PlayerBase pb,DL_Zone z)
     {
         if(!DT_Ensure(pb,z))return;
@@ -303,7 +323,8 @@ modded class MissionServer
                 if(member&&DL_ZoneFor(member)==p.zone&&m_DT_Warm.Find(memberSid,warm)&&m_DT_Time>=warm.protectAt)DT_ProtectSetup(memberSid,member,p.zone);
                 else DT_RestoreSetup(memberSid);
             }
-            if(p.party)DL_DepartParty(p.party);
+            if(p.party&&p.party.trail)DL_TrailGo(p.party);
+            else if(p.party)DL_DepartParty(p.party);
             else if(DT_Ensure(player,p.zone))DL_Depart(player,p.zone);
         }
         // Restore even if a crew member disconnects or leaves independently.

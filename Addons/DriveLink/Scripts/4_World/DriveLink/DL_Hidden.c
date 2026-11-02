@@ -41,7 +41,11 @@ modded class PlayerBase
 		m_DL_Hidden = on;
 		SetSynchDirty();
 		if (on)
+		{
+			// hidden again (the trail keeps it up): the safety timer starts over
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SetHidden, DL_Hide.SAFETY_MS, false, false);
+		}
 		else
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
 	}
@@ -86,7 +90,11 @@ modded class CarScript
 		m_DL_Hidden = on;
 		SetSynchDirty();
 		if (on)
+		{
+			// hidden again (the trail keeps it up): the safety timer starts over
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SetHidden, DL_Hide.SAFETY_MS, false, false);
+		}
 		else
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
 	}
@@ -131,7 +139,11 @@ modded class MotorbikeScript
 		m_DL_Hidden = on;
 		SetSynchDirty();
 		if (on)
+		{
+			// hidden again (the trail keeps it up): the safety timer starts over
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SetHidden, DL_Hide.SAFETY_MS, false, false);
+		}
 		else
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
 	}
@@ -176,7 +188,11 @@ modded class BoatScript
 		m_DL_Hidden = on;
 		SetSynchDirty();
 		if (on)
+		{
+			// hidden again (the trail keeps it up): the safety timer starts over
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_SetHidden, DL_Hide.SAFETY_MS, false, false);
+		}
 		else
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Remove(DL_SetHidden);
 	}

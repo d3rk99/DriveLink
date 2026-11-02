@@ -70,6 +70,12 @@ class DL_Sprite
 		m_Clip.SetPos(x, y);
 	}
 
+	// turned about its centre (degrees; the progress bar's vehicle, side on)
+	void Rotate(float deg)
+	{
+		m_Clip.SetRotation(0, 0, deg);
+	}
+
 	void Show(bool on)
 	{
 		m_Clip.Show(on);

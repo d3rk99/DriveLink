@@ -156,7 +156,7 @@ async fn state(State(h): State<Shared>) -> Response {
             .filter(|m| !m.is_empty())
             .or_else(|| Some(s.world.clone()).filter(|w| !w.is_empty()))
             .unwrap_or_else(|| guess_map(&s.id, &s.name).to_string());
-        let layout = l.map(|l| crate::layout::to_json(&l)).unwrap_or(json!({"rev": 0, "zones": [], "arrivals": []}));
+        let layout = l.map(|l| crate::layout::to_json(&l)).unwrap_or(json!({"rev": 0, "zones": [], "arrivals": [], "staging": [0, 0, 0]}));
         // seconds since its last request (servers ask for their layout every 30 s)
         let ago: Option<i64> = db
             .query_row("SELECT CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', last_seen) AS INTEGER) FROM servers WHERE id=?1", [&s.id], |r| r.get(0))
@@ -214,8 +214,9 @@ async fn save_layout(State(h): State<Shared>, Path(server): Path<String>, body: 
     let zones = crate::layout::clean_zones(&v["zones"]);
     let arrivals = crate::layout::clean_arrivals(&v["arrivals"]);
     let map = v.get("map").and_then(Value::as_str);
+    let staging = v.get("staging").map(|s| crate::layout::clean_staging(s).to_string());
     let db = h.db.lock().unwrap();
-    match crate::layout::save(&db, &server, &zones.to_string(), &arrivals.to_string(), map) {
+    match crate::layout::save(&db, &server, &zones.to_string(), &arrivals.to_string(), map, staging.as_deref()) {
         Ok(rev) => {
             crate::logf!("map editor: layout of {server} saved, rev {rev} ({} zones, {} arrival points)", zones.as_array().map(|a| a.len()).unwrap_or(0), arrivals.as_array().map(|a| a.len()).unwrap_or(0));
             Json(json!({"ok": true, "rev": rev}))

@@ -32,7 +32,67 @@ pub struct Trip {
     pub fuel: f64, // litres in the tank + gasoline canisters
     pub need_fuel: f64,
     /// the trip needs a spare wheel / tyre repair kit and has one (or needs none)
+    #[serde(deserialize_with = "bool_or_number")]
     pub spare_ok: bool,
+    /// each vehicle of the party (a convoy has several): its own chance to make it all the way
+    pub vehicles: Vec<Vehicle>,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Vehicle {
+    pub name: String,
+    pub fuel: f64, // litres it can count on: its tank + its share of the party's canisters
+    pub need_fuel: f64,
+    #[serde(deserialize_with = "bool_or_number")]
+    pub spare_ok: bool,
+    /// engine health 0..1 (-1 = unknown / none)
+    pub engine: f64,
+    /// the party carries a blowtorch: a worn-out engine is patched up on the road (DL_Journey.EngineHolds)
+    #[serde(deserialize_with = "bool_or_number")]
+    pub torch: bool,
+}
+
+/// engine health at which it gives out on the road (DL_Journey.ENGINE_GIVES_OUT)
+const ENGINE_GIVES_OUT: f64 = 0.1;
+
+/// each vehicle's chance (0..100) to arrive: not left for want of fuel, a flat with no spare, or a worn-out engine
+pub fn vehicle_odds(t: &TravelRules, trip: &Trip) -> Vec<u32> {
+    let km = trip.km.max(0.0);
+    let ev = t.event_km.max(1.0);
+    let legs = km / ev;
+    trip.vehicles
+        .iter()
+        .map(|v| {
+            let mut keep = 1.0;
+            if v.need_fuel > 0.0 && v.fuel < v.need_fuel {
+                let reach = (v.fuel / v.need_fuel).clamp(0.0, 1.0);
+                let find_gas = 1.0 - (1.0 - pct(t.find_gas_pct)).powf(km * reach / ev);
+                keep *= 1.0 - (1.0 - pct(t.luck_gas_pct)) * (1.0 - find_gas);
+            }
+            if trip.kind == "land" && !v.spare_ok {
+                keep *= (1.0 - pct(t.flat_pct)).powf(legs);
+            }
+            if v.engine >= 0.0 && !v.torch {
+                let left = v.engine - t.wear_engine_pct / 100.0 * km / 10.0;
+                if left <= ENGINE_GIVES_OUT {
+                    keep = 0.0;
+                }
+            }
+            (keep * 100.0).round().clamp(0.0, 100.0) as u32
+        })
+        .collect()
+}
+
+/// DayZ script's JSON writer gives a bool as 1 / 0 (a test server's odds came back "unknown": the hub refused
+/// `"spareOk":1`); true / false are taken too
+fn bool_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Bool(b) => Ok(b),
+        serde_json::Value::Number(n) => Ok(n.as_f64().unwrap_or(0.0) != 0.0),
+        serde_json::Value::Null => Ok(false),
+        other => Err(serde::de::Error::custom(format!("expected a bool or 1/0, got {other}"))),
+    }
 }
 
 const WATER_FIND_ML: f64 = 1500.0; // a well: everyone drinks (DL_Journey.Finds)
@@ -112,7 +172,25 @@ pub fn survival(t: &TravelRules, trip: &Trip) -> Vec<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spare_ok_from_dayz_json() {
+        let t: Trip = serde_json::from_str(r#"{"km":10,"kind":"land","spareOk":1}"#).unwrap();
+        assert!(t.spare_ok);
+        let t: Trip = serde_json::from_str(r#"{"km":10,"kind":"land","spareOk":0}"#).unwrap();
+        assert!(!t.spare_ok);
+        let t: Trip = serde_json::from_str(r#"{"km":10,"kind":"land","spareOk":true}"#).unwrap();
+        assert!(t.spare_ok);
+    }
+
     use super::*;
+
+    #[test]
+    fn a_worn_engine_needs_a_blowtorch() {
+        let t = TravelRules { wear_engine_pct: 2.0, ..rules() };
+        let v = Vehicle { name: "car".into(), fuel: 100.0, need_fuel: 10.0, spare_ok: true, engine: 0.3, torch: false };
+        let trip = Trip { km: 200.0, kind: "land".into(), vehicles: vec![v.clone(), Vehicle { torch: true, ..v }], ..Default::default() };
+        assert_eq!(vehicle_odds(&t, &trip), vec![0, 100]);
+    }
 
     fn rules() -> TravelRules {
         TravelRules { mode: "weakened".into(), ..Default::default() }
@@ -123,7 +201,7 @@ mod tests {
 
     #[test]
     fn fed_and_fuelled_in_a_car_with_a_spare_is_safe() {
-        let trip = Trip { km: 20.0, kind: "land".into(), people: vec![person(100.0, 5000.0, 5000.0)], fuel: 40.0, need_fuel: 10.0, spare_ok: true };
+        let trip = Trip { km: 20.0, kind: "land".into(), people: vec![person(100.0, 5000.0, 5000.0)], fuel: 40.0, need_fuel: 10.0, spare_ok: true, vehicles: vec![] };
         assert_eq!(survival(&rules(), &trip), vec![100]);
     }
 
@@ -150,9 +228,9 @@ mod tests {
     #[test]
     fn out_of_fuel_means_walking() {
         let t = rules();
-        let full = Trip { km: 50.0, kind: "land".into(), people: vec![person(100.0, 1e6, 1e6)], fuel: 20.0, need_fuel: 10.0, spare_ok: true };
+        let full = Trip { km: 50.0, kind: "land".into(), people: vec![person(100.0, 1e6, 1e6)], fuel: 20.0, need_fuel: 10.0, spare_ok: true, vehicles: vec![] };
         let dry = Trip { fuel: 0.0, ..full };
-        let full_k = walked_km(&t, &Trip { fuel: 20.0, km: 50.0, kind: "land".into(), need_fuel: 10.0, spare_ok: true, people: vec![] });
+        let full_k = walked_km(&t, &Trip { fuel: 20.0, km: 50.0, kind: "land".into(), need_fuel: 10.0, spare_ok: true, people: vec![], vehicles: vec![] });
         assert_eq!(full_k, 0.0);
         assert!(walked_km(&t, &dry) > 20.0);
         assert!(survival(&t, &dry)[0] < 100);
