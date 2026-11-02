@@ -2,6 +2,7 @@
 modded class MissionGameplay
 {
  protected bool m_DL_ZenInstalled;
+ protected float m_DL_PlainLoginT;   // an "owner" redirect that was a plain login: no DriveLink arrival came
  override void OnMissionStart()
  {
   super.OnMissionStart();
@@ -20,6 +21,16 @@ modded class MissionGameplay
   if (!m_DL_ZenInstalled || GetGame().IsDedicatedServer())
    return;
   PlayerBase player = PlayerBase.Cast(GetGame().GetPlayer());
+  if (GetDayZGame().DL_IsTransferLogin() && player && !player.DL_IsTransferArrival())
+  {
+   // expected an arrival but none came within 45 s of being in game: a plain login, give the gestures back
+   m_DL_PlainLoginT += timeslice;
+   if (m_DL_PlainLoginT > 45)
+   {
+    GetDayZGame().DL_ClearTransferLogin();
+    DL_Log.Info("Zen arrival integration: no DriveLink arrival came, a plain login");
+   }
+  }
   if (!GetDayZGame().DL_IsTransferLogin() && (!player || !player.DL_IsTransferArrival()))
    return;
   Class zenClient;

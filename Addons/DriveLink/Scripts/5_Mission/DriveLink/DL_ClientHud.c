@@ -7,6 +7,28 @@
 // frame while the player is alive (missiongameplay.c:483-497).
 modded class MissionGameplay
 {
+#ifdef DL_DEV
+	void DL_AutoArriveReport()
+	{
+		PlayerBase me = PlayerBase.Cast(g_Game.GetPlayer());
+		if (!me)
+			return;
+		string emote = "none";
+		if (me.GetEmoteManager() && me.GetEmoteManager().IsEmotePlaying())
+			emote = "playing";
+		string veh = "no";
+		if (me.IsInVehicle())
+			veh = "yes";
+		DL_Log.Info("AUTO ARRIVE: in vehicle " + veh + ", emote " + emote + ", at " + me.GetPosition().ToString());
+	}
+
+	void DL_AutoArriveQuit()
+	{
+		DL_Log.Info("AUTO ARRIVE: done, quitting");
+		g_Game.RequestExit(0);
+	}
+#endif
+
 	protected Widget m_DL_WaitRoot;
 	protected TextWidget m_DL_WaitText;
 	protected ref array<TextWidget> m_DL_StoryLines = new array<TextWidget>;
@@ -150,6 +172,18 @@ modded class MissionGameplay
 			{
 				m_DL_WaitWanted = false;
 				GetDayZGame().DL_ClearTransferLogin();
+#ifdef DL_DEV
+				string arriveArg;
+				if (g_Game.CommandlineGetParam("dlTrailAutoArrive", arriveArg))
+				{
+					// -dlTrailAutoArrive (unattended tests): how the arrival ended, then quit
+					g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_AutoArriveReport, 8000, false);
+					g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_AutoArriveReport, 20000, false);
+					string quitArg;
+					if (g_Game.CommandlineGetParam("dlAutoArriveQuit", quitArg))
+						g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_AutoArriveQuit, 25000, false);
+				}
+#endif
 				if (engine && !m_DL_ArrivalEngineHandled)
 					m_DL_StartEngine = true;
 			}

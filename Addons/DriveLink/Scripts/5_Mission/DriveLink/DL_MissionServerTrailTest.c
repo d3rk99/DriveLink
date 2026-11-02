@@ -50,6 +50,16 @@ modded class MissionServer
 		PlayerBase pb = DL_FindPlayer(sid);
 		if (!pb || !pb.IsAlive())
 			return;
+		if (pb.GetEmoteManager() && pb.GetEmoteManager().IsEmotePlaying())
+		{
+			// a login gesture (Zen's wake-up on a plain login) still playing: the test player gets up as a player
+			// would, then he is seated
+			g_Game.GameScript.CallFunctionParams(pb, "ZenImmersiveLoginFinished", null, null);
+			pb.GetEmoteManager().ServerRequestEmoteCancel();
+			DL_Log.Info("TRAIL test: " + sid + " gets up from a login gesture");
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_TrailTestPlace, 3000, false, sid);
+			return;
+		}
 		foreach (DL_Zone z : m_DL_Cfg.zones)
 		{
 			if (z.air)
@@ -84,7 +94,14 @@ modded class MissionServer
 		{
 			pb.DL_SeatIn(car, 0);
 			DL_Log.Info("TRAIL test: " + sid + " at the wheel of " + car.GetType());
+			// the zone check may have seen him half seated (no driver yet: "step out first"); seated now, let it count
+			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(DL_TrailTestSeated, 4000, false, sid);
 		}
+	}
+
+	protected void DL_TrailTestSeated(string sid)
+	{
+		m_DL_MustLeaveZone.Remove(sid);
 	}
 
 	protected void DL_TrailTestExit()

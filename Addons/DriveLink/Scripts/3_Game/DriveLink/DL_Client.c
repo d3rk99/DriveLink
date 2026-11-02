@@ -165,7 +165,9 @@ modded class DayZGame
 	{
 		string arg;
 		// -dlTrailAuto: back in the main menu after the server (the trip went, or the test server shut down): quit
-		if (!IsDedicatedServer() && DL_TrailView.s_AutoInGame && CommandlineGetParam("dlTrailAuto", arg) && GetMissionState() == DayZGame.MISSION_STATE_MAINMENU)
+		// (-dlTrailAutoArrive: it goes on to the destination instead; DL_ClientHud quits after the arrival)
+		string arriveArg;
+		if (!IsDedicatedServer() && DL_TrailView.s_AutoInGame && CommandlineGetParam("dlTrailAuto", arg) && !CommandlineGetParam("dlTrailAutoArrive", arriveArg) && GetMissionState() == DayZGame.MISSION_STATE_MAINMENU)
 		{
 			m_DL_FindTestT += Math.Min(dt, 0.05);
 			if (m_DL_FindTestT > 12)
@@ -292,7 +294,10 @@ modded class DayZGame
 				return;
 			}
 			m_DL_Next = r.target;
-			m_DL_TransferLogin = r.reason == "zone";
+			// a DriveLink arrival next: through a zone, or sent on to where the character is (after the travel time, the
+			// first login goes to the last server and is sent on with "owner"); an "owner" login that turns out to be a
+			// plain login is cleared by DriveLink_ZenLogin after a while
+			m_DL_TransferLogin = r.reason == "zone" || r.reason == "owner";
 			m_DL_Next.lanHost = host; // the address we decided on; DL_Reconnect uses it
 			if (r.reason == "zone")
 				DL_Transition().Start(r.target.name);

@@ -667,6 +667,8 @@ class DL_TrailClient
 		float readyAfter = 6;
 		if (g_Game.CommandlineGetParam("dlGuideTest", gta))
 			readyAfter = 18;                   // the guide test (DL_ReadyMenu.GuideTest) goes first
+		if (g_Game.CommandlineGetParam("dlTrailAutoArrive", gta))
+			readyAfter = 30;                   // the server's test seats him in the vehicle first (DL_TrailTestPlace)
 		if (m_Ready && m_AutoStep == 0 && m_AutoT > readyAfter)
 		{
 			Send("ready|1");
@@ -687,6 +689,15 @@ class DL_TrailClient
 		if (m_AutoStep == 2 && m_Card && m_AutoT > 5)
 		{
 			int pick = Math.RandomInt(0, m_Card.choices.Count());
+			if (arg == "safe")
+			{
+				// -dlTrailAuto=safe: the first safe choice (a test that needs the vehicle to come through)
+				for (int sc = m_Card.choices.Count() - 1; sc >= 0; sc--)
+				{
+					if (m_Card.choices[sc].hint == "safe")
+						pick = sc;
+				}
+			}
 			Send("pick|" + pick.ToString());
 			Send("lock|1");
 			DL_Log.Info("trail auto: voted " + m_Card.choices[pick].label);
@@ -694,7 +705,8 @@ class DL_TrailClient
 		}
 		if (m_AutoStep == 3 && !m_Card)
 			m_AutoStep = 1;
-		if (m_EndClose > 0 && !m_AutoQuit)
+		string arriveArg;
+		if (m_EndClose > 0 && !m_AutoQuit && !g_Game.CommandlineGetParam("dlTrailAutoArrive", arriveArg))
 		{
 			m_AutoQuit = true;
 			m_AutoQuitIn = 15;
